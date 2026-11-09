@@ -4,233 +4,217 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/appthrust/appserver-go/appserver/httpx"
-	"github.com/appthrust/tracker/cmd/server/internal/store"
-	"github.com/stretchr/testify/require"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 
-	"fmt"
+	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/appserver-go/appserver/identity"
-	"github.com/appthrust/appserver-go/appserver/link"
 	"github.com/appthrust/appserver-go/appserver/pgstore/testutil"
-	platform "github.com/appthrust/appserver-go/appserver/platformclient"
+	"github.com/appthrust/appserver-go/appserver/platformclient"
+	"github.com/appthrust/tracker/cmd/server/internal/directory"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
-	"net/url"
+	"github.com/appthrust/tracker/cmd/server/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
 type harness struct {
-	t             *testing.T
-	server        *httptest.Server
-	failed        atomic.Bool
-	projectStatus atomic.Int32
+	t      *testing.T
+	server *httptest.Server
 }
 
 func token(subject string) string {
 	claims, _ := json.Marshal(map[string]string{"sub": subject, "email": subject + "@example.test", "name": subject})
 	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(claims) + "."
 }
-
-func newHarness(t *testing.T, directoryURL ...string) *harness {
-	t.Helper()
+func newHarness(t *testing.T) *harness {
 	database, _ := testutil.Database(t, store.Open)
-	h := &harness{t: t}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.failed.Load() {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-			t.Error("platform request missing bearer")
-			w.WriteHeader(http.StatusUnauthorized)
+		if r.URL.Path != "/api/v1/projects/pj-test/access" {
+			http.NotFound(w, r)
 			return
 		}
 		role := "Viewer"
 		if r.Header.Get("Authorization") == "Bearer "+token("admin") {
 			role = "Admin"
-		} else if r.Header.Get("Authorization") == "Bearer "+token("editor") {
-			role = "Editor"
 		}
-		switch r.URL.Path {
-		case "/api/v1/projects/pj-test/app-installations/tracker":
-			httpx.WriteJSON(w, 200, map[string]any{"id": "tracker", "links": []any{}})
-		case "/api/v1/projects/pj-test/access":
-			if status := int(h.projectStatus.Load()); status != 0 {
-				w.WriteHeader(status)
-				return
-			}
-			httpx.WriteJSON(w, 200, map[string]any{"member": true, "role": role})
-		case "/api/v1/projects/pj-test/source-connections":
-			httpx.WriteJSON(w, 200, map[string]any{"data": []any{map[string]string{"id": "pending", "status": "incomplete"}, map[string]string{"id": "github", "status": "ready"}}})
-		case "/api/v1/registry-connections":
-			httpx.WriteJSON(w, 200, map[string]any{"data": []any{map[string]string{"id": "registry", "status": "ready"}}})
-		default:
-			t.Errorf("unexpected platform route %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
+		httpx.WriteJSON(w, 200, map[string]any{"member": true, "role": role})
 	}))
 	t.Cleanup(upstream.Close)
 	issuer := testutil.NewOIDCIssuer(t)
 	auth, err := identity.New(identity.Trust{OIDCIssuer: issuer.Server.URL, OIDCCAPEM: issuer.CAPEM, OIDCAudiences: []string{"appthrust-platform-api"}})
 	require.NoError(t, err)
-	// Exercise a real signed bearer independently; subject-specific requests use the trust parser.
 	_, _, err = auth.Authenticate(t.Context(), issuer.Bearer(t))
 	require.NoError(t, err)
 	auth, err = identity.New(identity.Trust{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := platform.New(upstream.URL, "pj-test")
-	var links *link.Client
-	if len(directoryURL) > 0 {
-		links = link.NewClient(link.NewResolver(client, "tracker", func(key string) (string, bool) {
-			if key == "TRACKER_DIRECTORY_URL" {
-				return directoryURL[0], true
-			}
-			return "", false
-		}, map[string]link.Required{"directory": {URLEnv: "TRACKER_DIRECTORY_URL", PublicURLEnv: "TRACKER_DIRECTORY_PUBLIC_URL"}}), nil)
-	}
-	h.server = httptest.NewServer(New(database, auth, client, links, "https://directory.example.test"))
-	t.Cleanup(h.server.Close)
-	return h
+	require.NoError(t, err)
+	server := httptest.NewServer(New(database, auth, platformclient.New(upstream.URL, "pj-test"), directory.New(nil, ""), "pj-test"))
+	t.Cleanup(server.Close)
+	return &harness{t: t, server: server}
 }
-
 func call[T any](h *harness, subject, method, path string, body any, status int) T {
 	h.t.Helper()
 	var reader io.Reader
 	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			h.t.Fatal(err)
-		}
-		reader = bytes.NewReader(encoded)
+		data, err := json.Marshal(body)
+		require.NoError(h.t, err)
+		reader = bytes.NewReader(data)
 	}
 	r, err := http.NewRequest(method, h.server.URL+"/api/tracker/v1"+path, reader)
-	if err != nil {
-		h.t.Fatal(err)
-	}
+	require.NoError(h.t, err)
 	if subject != "" {
 		r.Header.Set("Authorization", "Bearer "+token(subject))
 	}
 	r.Header.Set("Content-Type", "application/json")
 	response, err := h.server.Client().Do(r)
-	if err != nil {
-		h.t.Fatal(err)
-	}
+	require.NoError(h.t, err)
 	defer response.Body.Close()
-	payload, err := io.ReadAll(response.Body)
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	if response.StatusCode != status {
-		h.t.Fatalf("%s %s (%s): HTTP %d, want %d: %s", method, path, subject, response.StatusCode, status, payload)
-	}
+	data, err := io.ReadAll(response.Body)
+	require.NoError(h.t, err)
+	require.Equal(h.t, status, response.StatusCode, "%s %s: %s", method, path, data)
 	var result T
 	if status != 204 {
-		if err := json.Unmarshal(payload, &result); err != nil {
-			h.t.Fatalf("decode %s: %v", payload, err)
-		}
+		require.NoError(h.t, json.Unmarshal(data, &result))
 	}
 	return result
 }
+func TestIssueLifecycleAndAuthorization(t *testing.T) {
+	h := newHarness(t)
+	call[any](h, "", "GET", "/openapi.json", nil, 200)
+	call[any](h, "", "GET", "/workspace", nil, 401)
+	me := call[meResponse](h, "admin", "GET", "/me", nil, 200)
+	require.True(t, me.IsAdmin)
+	workspace := call[domain.Workspace](h, "viewer", "GET", "/workspace", nil, 200)
+	require.Equal(t, "APT", workspace.Key)
+	call[any](h, "viewer", "PATCH", "/workspace", map[string]string{"key": "NEW"}, 403)
+	call[any](h, "viewer", "POST", "/issues", map[string]string{"title": "Bug", "type": "bug"}, 400)
+	issue := call[domain.Issue](h, "viewer", "POST", "/issues", map[string]any{"title": "Bug", "type": "bug", "report": map[string]string{"environment": "local", "surface": "apth"}}, 201)
+	require.Equal(t, "APT-1", issue.Identifier)
+	require.NotNil(t, issue.LabelIDs)
+	got := call[domain.Issue](h, "reader", "GET", "/issues/apt-1", nil, 200)
+	require.Equal(t, issue.ID, got.ID)
+	comment := call[domain.Comment](h, "viewer", "POST", "/issues/"+issue.ID+"/comments", map[string]string{"body": "Investigating"}, 201)
+	call[any](h, "admin", "PATCH", "/comments/"+comment.ID, map[string]string{"body": "Other author"}, 403)
+	call[domain.Comment](h, "viewer", "PATCH", "/comments/"+comment.ID, map[string]string{"body": "Edited"}, 200)
+	statuses := call[items[domain.Status]](h, "reader", "GET", "/statuses", nil, 200)
+	issue = call[domain.Issue](h, "reader", "PATCH", "/issues/"+issue.ID, map[string]string{"statusId": statuses.Items[4].ID}, 200)
+	require.NotNil(t, issue.CompletedAt)
+	timeline := call[items[domain.TimelineItem]](h, "reader", "GET", "/issues/"+issue.ID+"/timeline", nil, 200)
+	require.Len(t, timeline.Items, 3)
+	page := call[store.Page](h, "reader", "GET", "/issues?filter="+url.QueryEscape(`{"type":["bug"],"surface":["apth"]}`), nil, 200)
+	require.Len(t, page.Items, 1)
+	call[any](h, "viewer", "DELETE", "/issues/"+issue.ID, nil, 403)
+	call[any](h, "admin", "DELETE", "/comments/"+comment.ID, nil, 204)
+	call[any](h, "admin", "DELETE", "/issues/"+issue.ID, nil, 204)
+	call[any](h, "reader", "GET", "/issues/"+issue.ID, nil, 404)
+	people := call[peopleResponse](h, "reader", "GET", "/people", nil, 200)
+	require.Equal(t, "unavailable", people.Source)
+	require.Empty(t, people.Items)
+}
+func TestSettingsViewsAndValidation(t *testing.T) {
+	h := newHarness(t)
+	for _, route := range []string{"/statuses", "/labels"} {
+		call[any](h, "viewer", "POST", route, map[string]string{"name": "No", "color": "red"}, 403)
+	}
+	status := call[domain.Status](h, "admin", "POST", "/statuses", map[string]string{"name": "Verify", "category": "started"}, 201)
+	call[domain.Status](h, "admin", "PATCH", "/statuses/"+status.ID, map[string]string{"color": "blue"}, 200)
+	list := call[items[domain.Status]](h, "reader", "GET", "/statuses", nil, 200)
+	ids := []string{}
+	for _, s := range list.Items {
+		ids = append(ids, s.ID)
+	}
+	call[items[domain.Status]](h, "admin", "PUT", "/statuses/order", map[string]any{"ids": ids}, 200)
+	ids[0], ids[len(ids)-1] = ids[len(ids)-1], ids[0]
+	call[any](h, "admin", "PUT", "/statuses/order", map[string]any{"ids": ids}, 400)
+	call[any](h, "admin", "DELETE", "/statuses/"+list.Items[0].ID, nil, 409)
+	call[any](h, "admin", "DELETE", "/statuses/"+status.ID, nil, 204)
+	label := call[domain.Label](h, "admin", "POST", "/labels", map[string]string{"name": "ux", "color": "purple"}, 201)
+	call[domain.Label](h, "admin", "PATCH", "/labels/"+label.ID, map[string]string{"name": "design"}, 200)
+	call[any](h, "admin", "DELETE", "/labels/"+label.ID, nil, 204)
+	private := call[domain.View](h, "viewer", "POST", "/views", map[string]string{"name": "Mine"}, 201)
+	call[any](h, "viewer", "POST", "/views", map[string]any{"name": "Shared", "shared": true}, 403)
+	shared := call[domain.View](h, "admin", "POST", "/views", map[string]any{"name": "Bugs", "shared": true, "filter": map[string]any{"type": []string{"bug"}}}, 201)
+	views := call[items[domain.View]](h, "other", "GET", "/views", nil, 200)
+	require.Len(t, views.Items, 1)
+	call[any](h, "admin", "DELETE", "/views/"+private.ID, nil, 403)
+	call[any](h, "viewer", "PATCH", "/views/"+shared.ID, map[string]string{"name": "No"}, 403)
+	call[domain.View](h, "viewer", "PATCH", "/views/"+private.ID, map[string]string{"layout": "board"}, 200)
+	call[any](h, "viewer", "DELETE", "/views/"+private.ID, nil, 204)
+	for _, path := range []string{"/issues?limit=0", "/issues?limit=201", "/issues?sort=bad", "/issues?cursor=bad", "/issues?filter=" + url.QueryEscape(`{"unknown":true}`)} {
+		e := call[httpx.Error](h, "reader", "GET", path, nil, 400)
+		require.Equal(t, "invalid", e.Code)
+	}
+	for _, input := range []map[string]any{{"title": "x", "type": "task", "unknown": true}, {"title": strings.Repeat("x", 201), "type": "task"}, {"title": "x", "type": "task", "report": map[string]string{"environment": "local", "surface": "apth"}}} {
+		call[any](h, "reader", "POST", "/issues", input, 400)
+	}
+}
+func TestAttachmentRoundTrip(t *testing.T) {
+	h := newHarness(t)
+	issue := call[domain.Issue](h, "viewer", "POST", "/issues", map[string]string{"title": "Upload", "type": "task"}, 201)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreatePart(textproto.MIMEHeader{"Content-Disposition": {`form-data; name="file"; filename="note.txt"`}, "Content-Type": {"text/plain"}})
+	require.NoError(t, err)
+	_, err = part.Write([]byte("Hello Tracker"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	r, err := http.NewRequest("POST", h.server.URL+"/api/tracker/v1/issues/"+issue.ID+"/attachments", &body)
+	require.NoError(t, err)
+	r.Header.Set("Authorization", "Bearer "+token("viewer"))
+	r.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := h.server.Client().Do(r)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, 201, response.StatusCode)
+	var attachment domain.Attachment
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&attachment))
+	require.Equal(t, "viewer", attachment.Uploader.Name)
+	r, err = http.NewRequest("GET", h.server.URL+attachment.URL, nil)
+	require.NoError(t, err)
+	r.Header.Set("Authorization", "Bearer "+token("reader"))
+	download, err := h.server.Client().Do(r)
+	require.NoError(t, err)
+	defer download.Body.Close()
+	require.Equal(t, 200, download.StatusCode)
+	data, err := io.ReadAll(download.Body)
+	require.NoError(t, err)
+	require.Equal(t, "Hello Tracker", string(data))
+	require.Equal(t, "text/plain", download.Header.Get("Content-Type"))
+	require.Equal(t, "private, max-age=31536000, immutable", download.Header.Get("Cache-Control"))
+	call[any](h, "other", "DELETE", "/attachments/"+attachment.ID, nil, 403)
+	call[any](h, "viewer", "DELETE", "/attachments/"+attachment.ID, nil, 204)
+	call[any](h, "viewer", "GET", "/attachments/"+attachment.ID, nil, 404)
+}
+func TestOpenAPIRouteInventory(t *testing.T) {
+	var document struct {
+		OpenAPI string                    `json:"openapi"`
+		Paths   map[string]map[string]any `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(openapiDocument, &document))
+	require.Equal(t, "3.1.0", document.OpenAPI)
+	for path, methods := range map[string][]string{"/me": {"get"}, "/workspace": {"get", "patch"}, "/statuses": {"get", "post"}, "/statuses/{id}": {"patch", "delete"}, "/statuses/order": {"put"}, "/labels": {"get", "post"}, "/labels/{id}": {"patch", "delete"}, "/issues": {"get", "post"}, "/issues/{id}": {"get", "patch", "delete"}, "/issues/{id}/timeline": {"get"}, "/issues/{id}/comments": {"post"}, "/comments/{id}": {"patch", "delete"}, "/issues/{id}/attachments": {"post"}, "/attachments/{id}": {"get", "delete"}, "/views": {"get", "post"}, "/views/{id}": {"patch", "delete"}, "/people": {"get"}, "/openapi.json": {"get"}} {
+		for _, method := range methods {
+			require.Contains(t, document.Paths[path], method, "%s %s", method, path)
+		}
+	}
+	w := httptest.NewRecorder()
+	Unavailable().ServeHTTP(w, httptest.NewRequest("GET", "/api/tracker/v1/openapi.json", nil))
+	require.Equal(t, 200, w.Code)
+}
 
-func TestPublishingAuthorityAndSocial(t *testing.T) {
-	h := newHarness(t)
-	call[httpx.Error](h, "", "GET", "/me", nil, 401)
-	draft := call[domain.Article](h, "writer", "POST", "/articles", map[string]any{"title": " Draft ", "body": "# Hello"}, 201)
-	require.Equal(t, "Draft", draft.Title)
-	require.Nil(t, draft.PublishedAt)
-	call[httpx.Error](h, "other", "GET", "/articles/"+draft.ID, nil, 404)
-	call[httpx.Error](h, "other", "PUT", "/articles/"+draft.ID+"/like", nil, 404)
-	page := call[store.Page](h, "other", "GET", "/articles", nil, 200)
-	require.Empty(t, page.Items)
-	drafts := call[struct {
-		Items []domain.ArticleSummary `json:"items"`
-	}](h, "writer", "GET", "/drafts", nil, 200)
-	require.Len(t, drafts.Items, 1)
-	published := call[domain.Article](h, "writer", "PATCH", "/articles/"+draft.ID, map[string]string{"status": "published"}, 200)
-	require.NotNil(t, published.PublishedAt)
-	page = call[store.Page](h, "new-reader", "GET", "/articles", nil, 200)
-	require.Len(t, page.Items, 1)
-	require.False(t, page.Items[0].LikedByMe)
-	call[httpx.Error](h, "other", "PATCH", "/articles/"+draft.ID, map[string]string{"title": "Stolen"}, 403)
-	call[httpx.Error](h, "admin", "PATCH", "/articles/"+draft.ID, map[string]string{"title": "Stolen"}, 403)
-	for range 2 {
-		liked := call[struct {
-			LikeCount int  `json:"likeCount"`
-			LikedByMe bool `json:"likedByMe"`
-		}](h, "other", "PUT", "/articles/"+draft.ID+"/like", nil, 200)
-		require.Equal(t, 1, liked.LikeCount)
-		require.True(t, liked.LikedByMe)
-	}
-	article := call[domain.Article](h, "other", "GET", "/articles/"+draft.ID, nil, 200)
-	require.True(t, article.LikedByMe)
-	call[any](h, "other", "DELETE", "/articles/"+draft.ID+"/like", nil, 200)
-	call[any](h, "other", "DELETE", "/articles/"+draft.ID+"/like", nil, 200)
-	call[httpx.Error](h, "writer", "PUT", "/authors/"+draft.Author.ID+"/follow", nil, 400)
-	for range 2 {
-		call[any](h, "other", "PUT", "/authors/"+draft.Author.ID+"/follow", nil, 200)
-	}
-	page = call[store.Page](h, "other", "GET", "/articles?following=true", nil, 200)
-	require.Len(t, page.Items, 1)
-	profile := call[domain.AuthorProfile](h, "other", "GET", "/authors/"+draft.Author.ID, nil, 200)
-	require.True(t, profile.FollowedByMe)
-	require.Equal(t, 1, profile.FollowerCount)
-	call[httpx.Error](h, "other", "DELETE", "/articles/"+draft.ID, nil, 403)
-	call[any](h, "admin", "DELETE", "/articles/"+draft.ID, nil, 204)
-	call[httpx.Error](h, "writer", "GET", "/articles/"+draft.ID, nil, 404)
-}
-func TestTimelinePagingAndValidation(t *testing.T) {
-	h := newHarness(t)
-	for i := range 6 {
-		call[domain.Article](h, "writer", "POST", "/articles", map[string]any{"title": fmt.Sprint(i), "body": "Published", "publish": true}, 201)
-	}
-	seen := map[string]bool{}
-	path := "/articles?limit=2"
-	for pageIndex := range 3 {
-		page := call[store.Page](h, "reader", "GET", path, nil, 200)
-		require.Len(t, page.Items, 2)
-		for _, a := range page.Items {
-			require.False(t, seen[a.ID])
-			seen[a.ID] = true
-		}
-		if pageIndex < 2 {
-			require.NotNil(t, page.NextCursor)
-			path = "/articles?limit=2&cursor=" + url.QueryEscape(*page.NextCursor)
-		} else {
-			require.Nil(t, page.NextCursor)
-		}
-	}
-	for _, path := range []string{"/articles?limit=0", "/articles?limit=51", "/articles?limit=x", "/articles?cursor=bad"} {
-		call[httpx.Error](h, "reader", "GET", path, nil, 400)
-	}
-	for _, input := range []map[string]any{{"title": " ", "body": "a"}, {"title": strings.Repeat("あ", 121)}, {"title": "x", "body": strings.Repeat("a", 102401)}, {"title": "x", "body": " ", "publish": true}} {
-		call[httpx.Error](h, "writer", "POST", "/articles", input, 400)
-	}
-}
-func TestDirectoryRefreshAndAbsent(t *testing.T) {
-	directory := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer "+token("writer"), r.Header.Get("Authorization"))
-		require.Equal(t, "/api/directory/v1/me", r.URL.Path)
-		httpx.WriteJSON(w, 200, map[string]any{"person": map[string]string{"id": "p1", "displayName": "Dir Name"}})
-	}))
-	defer directory.Close()
-	h := newHarness(t, directory.URL)
-	me := call[meResponse](h, "writer", "GET", "/me", nil, 200)
-	require.True(t, me.Directory.Linked)
-	require.Equal(t, "Dir Name", me.Author.DisplayName)
-	require.Equal(t, "p1", *me.Author.DirectoryPersonID)
-	require.Equal(t, "https://directory.example.test", *me.Directory.PublicURL)
-	// A later mutation upserts the author from the claims again; the linked
-	// Directory name must not be overwritten by the claim name.
-	article := call[domain.Article](h, "writer", "POST", "/articles", map[string]any{"title": "after link", "body": "x", "publish": true}, 201)
-	require.Equal(t, "Dir Name", article.Author.DisplayName)
-	absent := newHarness(t, "")
-	me = call[meResponse](absent, "writer", "GET", "/me", nil, 200)
-	require.False(t, me.Directory.Linked)
-	require.Equal(t, "writer", me.Author.DisplayName)
+func TestProjectionPreservesIndividualSnapshots(t *testing.T) {
+	a := &API{directory: directory.New(nil, "")}
+	s := &request{r: httptest.NewRequest("GET", "/", nil)}
+	page := &store.Page{Items: []domain.IssueSummary{
+		{Reporter: domain.Person{Sub: "same", Name: "Earlier snapshot"}},
+		{Reporter: domain.Person{Sub: "same", Name: "Later snapshot"}},
+	}}
+	a.enrich(s, page)
+	require.Equal(t, "Earlier snapshot", page.Items[0].Reporter.Name)
+	require.Equal(t, "Later snapshot", page.Items[1].Reporter.Name)
 }

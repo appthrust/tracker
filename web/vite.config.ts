@@ -34,6 +34,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.TRACKER_PORT ?? 5238),
     strictPort: true,
-    proxy: { '/api': proxy, '/launcher': proxy },
+    // `^/config$`: only the exact runtime-config route, never an SPA path that starts with "config".
+    proxy: { '/api': proxy, '/launcher': proxy, '^/config$': proxy },
   },
 })

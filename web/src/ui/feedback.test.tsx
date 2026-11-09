@@ -8,19 +8,21 @@ import { ActionError, LoadFailed } from './feedback'
 const render = (node: ReactNode, language: 'ja' | 'en' = 'ja') => renderToStaticMarkup(<I18nProvider language={language}>{node}</I18nProvider>)
 
 describe('tracker error feedback', () => {
-  test('following yourself explains the 400 instead of a generic failure', () => {
-    const error = new TrackerApiError(400, { error: 'self_follow', message: 'You cannot follow yourself' })
+  test('a 409 conflict explains itself and keeps the server reason as a hint', () => {
+    const error = new TrackerApiError(409, { error: 'conflict', message: 'move the issues in this status first' })
     const html = render(<ActionError error={error} />)
     expect(html).toContain('role="alert"')
-    expect(html).toContain('自分自身はフォローできません。')
-    expect(html).not.toContain('You cannot follow yourself')
-    expect(render(<ActionError error={error} />, 'en')).toContain("You can&#x27;t follow yourself.")
+    expect(html).toContain('現在のデータと矛盾するため変更できません。')
+    expect(html).toContain('move the issues in this status first')
+    expect(render(<ActionError error={error} />, 'en')).toContain('This conflicts with the current data.')
   })
 
-  test('an invalid_request keeps the server detail under the localized summary; unknown errors stay generic', () => {
-    const invalid = render(<ActionError error={new TrackerApiError(400, { error: 'invalid_request', message: 'title must be at most 120 characters' })} />)
+  test('an invalid 400 lists the field issues under the localized summary; unknown errors stay generic', () => {
+    const invalid = render(
+      <ActionError error={new TrackerApiError(400, { error: 'invalid', message: 'invalid body', issues: [{ path: 'report.surface', message: 'surface must be one of dashboard, …' }] })} />
+    )
     expect(invalid).toContain('入力内容を確認してください。')
-    expect(invalid).toContain('title must be at most 120 characters')
+    expect(invalid).toContain('report.surface: surface must be one of dashboard, …')
     expect(render(<ActionError error={new Error('boom')} />)).toContain('操作を完了できませんでした')
   })
 

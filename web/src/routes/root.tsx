@@ -3,7 +3,7 @@ import { createRootRouteWithContext, notFound, Outlet, useRouter, type ErrorComp
 import { FileQuestion } from 'lucide-react'
 import { useEffect } from 'react'
 import { isTrackerError } from '../api/tracker'
-import { meQuery } from '../api/queries'
+import { labelsQuery, meQuery, statusesQuery, viewsQuery, workspaceQuery } from '../api/queries'
 import { useText } from '../i18n'
 import { Shell } from '../shell/shell'
 import { EmptyState, LinkButton, Loading, LoadFailed, useDocumentTitle } from '../ui'
@@ -11,7 +11,7 @@ import { paths } from './paths'
 
 export type RouterContext = { queryClient: QueryClient }
 
-/** Loader helper: an unknown (or someone else's draft) article or author renders the not-found page instead of an error. */
+/** Loader helper: an unknown issue or view renders the not-found page instead of an error. */
 export function notFoundOn404(error: unknown): never {
   if (isTrackerError(error, 'not_found')) throw notFound()
   throw error
@@ -74,8 +74,13 @@ function RootPending() {
 }
 
 export const rootRoute = createRootRouteWithContext<RouterContext>()({
-  // `GET /me` upserts the signed-in author (and links Directory) first; everything else reads after it.
-  beforeLoad: ({ context }) => context.queryClient.ensureQueryData(meQuery),
+  // `GET /me` first (it proves the session), then the reference data every screen reads (workspace is created lazily on first read).
+  beforeLoad: async ({ context }) => {
+    await context.queryClient.ensureQueryData(meQuery)
+    await context.queryClient.ensureQueryData(workspaceQuery)
+    const client = context.queryClient
+    await Promise.all([client.ensureQueryData(statusesQuery), client.ensureQueryData(labelsQuery), client.ensureQueryData(viewsQuery)])
+  },
   component: () => (
     <Shell>
       <Outlet />

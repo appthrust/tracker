@@ -60,6 +60,18 @@ type Sort = 'updated' | 'created' | 'priority' | 'number'   // updated/created: 
 type View = { id: string; name: string; owner: Person; shared: boolean; layout: 'list' | 'board'; filter: Filter; sort: Sort; position: number; createdAt: string; updatedAt: string }
 ```
 
+Timeline `Activity.from`/`to` payloads by `field`: `status` → status id;
+`labels` → label id[]; `assignee` → `Person | null`; `parent` → `IssueRef | null`;
+`blocks` → `IssueRef[]`; `title`/`type`/`priority`/`due` → raw value;
+`description`/`report` → old and new value; `attachment` → full `Attachment`
+(`to` = added, `from` = removed); `created`/`deleted` → `null`.
+
+There is no attachment list route: clients derive an issue's current
+attachments from `attachment` activities (added minus removed).
+Writes (`PATCH`/`DELETE /issues/{id}`, comments, attachments) take the ULID;
+the `KEY-n` form is accepted on reads only. Shared views are edited only by
+Admin. `PATCH /views/{id}` accepts `{ name?, layout?, filter?, sort?, shared?, position? }`.
+
 ## Routes
 
 | Method & path | Body → Response | Authz |

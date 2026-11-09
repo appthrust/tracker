@@ -1,10 +1,10 @@
 {
-  "openapi": "3.0.3",
+  "openapi": "3.1.0",
   "info": {
     "title": "Tracker API",
-    "version": "v1"
+    "version": "0.1.0",
+    "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID."
   },
-  "x-appthrust-definition": "tracker",
   "servers": [
     {
       "url": "/api/tracker/v1"
@@ -18,21 +18,72 @@
   "paths": {
     "/me": {
       "get": {
-        "operationId": "me",
-        "summary": "me",
+        "operationId": "getMe",
+        "summary": "getMe",
+        "description": "Authorization: any authenticated user. ",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MeResponse"
+                  "$ref": "#/components/schemas/Me"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -41,27 +92,154 @@
               }
             }
           }
-        },
-        "x-appthrust-link": true
+        }
       }
     },
-    "/articles": {
+    "/workspace": {
       "get": {
-        "operationId": "listArticles",
-        "summary": "listArticles",
+        "operationId": "getWorkspace",
+        "summary": "getWorkspace",
+        "description": "Authorization: any authenticated user. Lazily created with key APT and name equal to project ID. Seeds default statuses.",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ArticleList"
+                  "$ref": "#/components/schemas/Workspace"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchWorkspace",
+        "summary": "patchWorkspace",
+        "description": "Authorization: Admin. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -71,17 +249,1042 @@
             }
           }
         },
-        "x-appthrust-link": true,
-        "x-appthrust-result-path": "items",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9]{1,5}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/statuses": {
+      "get": {
+        "operationId": "listStatuss",
+        "summary": "listStatuss",
+        "description": "Authorization: any authenticated user. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Status"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createStatus",
+        "summary": "createStatus",
+        "description": "Authorization: Admin. ",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "minLength": 1
+                  },
+                  "category": {
+                    "$ref": "#/components/schemas/StatusCategory"
+                  },
+                  "color": {
+                    "$ref": "#/components/schemas/Color"
+                  }
+                },
+                "required": [
+                  "name",
+                  "category"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/statuses/{id}": {
+      "patch": {
+        "operationId": "patchStatus",
+        "summary": "patchStatus",
+        "description": "Authorization: Admin. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
         "parameters": [
           {
-            "name": "limit",
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "minLength": 1
+                  },
+                  "color": {
+                    "$ref": "#/components/schemas/Color"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteStatus",
+        "summary": "deleteStatus",
+        "description": "Authorization: Admin. Statuses in use or last in their category return conflict.",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ]
+      }
+    },
+    "/labels": {
+      "get": {
+        "operationId": "listLabels",
+        "summary": "listLabels",
+        "description": "Authorization: any authenticated user. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Label"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createLabel",
+        "summary": "createLabel",
+        "description": "Authorization: Admin. ",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Label"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "minLength": 1
+                  },
+                  "color": {
+                    "$ref": "#/components/schemas/Color"
+                  }
+                },
+                "required": [
+                  "name",
+                  "color"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/{id}": {
+      "patch": {
+        "operationId": "patchLabel",
+        "summary": "patchLabel",
+        "description": "Authorization: Admin. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Label"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "minLength": 1
+                  },
+                  "color": {
+                    "$ref": "#/components/schemas/Color"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteLabel",
+        "summary": "deleteLabel",
+        "description": "Authorization: Admin. ",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ]
+      }
+    },
+    "/statuses/order": {
+      "put": {
+        "operationId": "orderStatuses",
+        "summary": "orderStatuses",
+        "description": "Authorization: Admin. All status IDs exactly once in category-preserving order.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Status"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    }
+                  }
+                },
+                "required": [
+                  "ids"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/issues": {
+      "get": {
+        "operationId": "listIssues",
+        "summary": "listIssues",
+        "description": "Authorization: any authenticated user. Stable keyset pagination. updated/created descending; priority urgent to none then updated descending; number ascending. Filter arrays are OR within each dimension and dimensions are AND.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IssueSummary"
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Filter"
+                }
+              }
+            }
+          },
+          {
+            "name": "sort",
             "in": "query",
             "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 50,
-              "default": 20
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Sort"
+                }
+              ],
+              "default": "updated"
             }
           },
           {
@@ -92,37 +1295,84 @@
             }
           },
           {
-            "name": "author",
+            "name": "limit",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "following",
-            "in": "query",
-            "schema": {
-              "type": "boolean"
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
             }
           }
         ]
       },
       "post": {
-        "operationId": "createArticle",
-        "summary": "createArticle",
+        "operationId": "createIssue",
+        "summary": "createIssue",
+        "description": "Authorization: any authenticated user. report required iff bug; default priority none and first backlog status.",
         "responses": {
           "201": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Article"
+                  "$ref": "#/components/schemas/Issue"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -137,30 +1387,81 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateArticle"
+                "$ref": "#/components/schemas/IssueCreate"
               }
             }
           }
         }
       }
     },
-    "/drafts": {
+    "/issues/{id}": {
       "get": {
-        "operationId": "listDrafts",
-        "summary": "listDrafts",
+        "operationId": "getIssue",
+        "summary": "getIssue",
+        "description": "Authorization: any authenticated user. ",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DraftList"
+                  "$ref": "#/components/schemas/Issue"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -170,37 +1471,6 @@
             }
           }
         },
-        "x-appthrust-link": true,
-        "x-appthrust-result-path": "items"
-      }
-    },
-    "/articles/{id}": {
-      "get": {
-        "operationId": "getArticle",
-        "summary": "getArticle",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Article"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Request failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "x-appthrust-link": true,
         "parameters": [
           {
             "name": "id",
@@ -208,26 +1478,78 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
           }
         ]
       },
       "patch": {
-        "operationId": "patchArticle",
-        "summary": "patchArticle",
+        "operationId": "patchIssue",
+        "summary": "patchIssue",
+        "description": "Authorization: any authenticated user. Every changed field emits one Activity. Changing to bug requires a report; changing away clears it. Parent cycles are invalid. Moving into completed/canceled sets completedAt; leaving clears it.",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Article"
+                  "$ref": "#/components/schemas/Issue"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -244,7 +1566,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
           }
         ],
         "requestBody": {
@@ -252,21 +1575,72 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PatchArticle"
+                "$ref": "#/components/schemas/IssuePatch"
               }
             }
           }
         }
       },
       "delete": {
-        "operationId": "deleteArticle",
-        "summary": "deleteArticle",
+        "operationId": "deleteIssue",
+        "summary": "deleteIssue",
+        "description": "Authorization: Admin. Soft delete.",
         "responses": {
           "204": {
             "description": "Success"
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -283,28 +1657,92 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
           }
         ]
       }
     },
-    "/articles/{id}/like": {
-      "put": {
-        "operationId": "putLike",
-        "summary": "putLike",
+    "/issues/{id}/timeline": {
+      "get": {
+        "operationId": "getTimeline",
+        "summary": "getTimeline",
+        "description": "Authorization: any authenticated user. Activities and comments merged ascending by createdAt then ID.",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LikeResponse"
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TimelineItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -321,26 +1759,614 @@
             "required": true,
             "schema": {
               "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ]
+      }
+    },
+    "/issues/{id}/comments": {
+      "post": {
+        "operationId": "createComment",
+        "summary": "createComment",
+        "description": "Authorization: any authenticated user. ",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
             }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "description": "1 byte to 20 KiB UTF-8 Markdown"
+                  }
+                },
+                "required": [
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/comments/{id}": {
+      "patch": {
+        "operationId": "patchComment",
+        "summary": "patchComment",
+        "description": "Authorization: author. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "description": "1 byte to 20 KiB UTF-8 Markdown"
+                  }
+                },
+                "required": [
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteComment",
+        "summary": "deleteComment",
+        "description": "Authorization: author or Admin. ",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ]
+      }
+    },
+    "/issues/{id}/attachments": {
+      "post": {
+        "operationId": "createAttachment",
+        "summary": "createAttachment",
+        "description": "Authorization: any authenticated user. One multipart file, at most 2 MiB and 10 attachments per issue. Allowed: image/png, image/jpeg, image/webp, text/plain, application/json.",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attachments/{id}": {
+      "get": {
+        "operationId": "getAttachment",
+        "summary": "getAttachment",
+        "description": "Authorization: any authenticated user. Authenticated bytes with inline Content-Disposition and Cache-Control: private, max-age=31536000, immutable.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
           }
         ]
       },
       "delete": {
-        "operationId": "deleteLike",
-        "summary": "deleteLike",
+        "operationId": "deleteAttachment",
+        "summary": "deleteAttachment",
+        "description": "Authorization: uploader or Admin. ",
         "responses": {
-          "200": {
-            "description": "Success",
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LikeResponse"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -357,28 +2383,169 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
           }
         ]
       }
     },
-    "/authors/{id}": {
+    "/views": {
       "get": {
-        "operationId": "getAuthor",
-        "summary": "getAuthor",
+        "operationId": "listViews",
+        "summary": "listViews",
+        "description": "Authorization: any authenticated user. Shared union mine, ordered by position.",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthorProfile"
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/View"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createView",
+        "summary": "createView",
+        "description": "Authorization: any authenticated user. Private for any authenticated user; shared requires Admin. Maximum 50 per workspace. Defaults: list layout, empty filter, updated sort, shared false.",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/View"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -388,36 +2555,36 @@
             }
           }
         },
-        "x-appthrust-link": true,
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewCreate"
+              }
             }
           }
-        ]
+        }
       }
     },
-    "/authors/{id}/followers": {
-      "get": {
-        "operationId": "listFollowers",
-        "summary": "listFollowers",
+    "/views/{id}": {
+      "patch": {
+        "operationId": "patchView",
+        "summary": "patchView",
+        "description": "Authorization: owner for private views; Admin for shared views. ",
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthorList"
+                  "$ref": "#/components/schemas/View"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "400": {
+            "description": "Invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -425,39 +2592,9 @@
                 }
               }
             }
-          }
-        },
-        "x-appthrust-link": true,
-        "x-appthrust-result-path": "items",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/authors/{id}/following": {
-      "get": {
-        "operationId": "listFollowing",
-        "summary": "listFollowing",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthorList"
-                }
-              }
-            }
           },
-          "default": {
-            "description": "Request failed",
+          "401": {
+            "description": "Unauthenticated",
             "content": {
               "application/json": {
                 "schema": {
@@ -465,39 +2602,39 @@
                 }
               }
             }
-          }
-        },
-        "x-appthrust-link": true,
-        "x-appthrust-result-path": "items",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/authors/{id}/follow": {
-      "put": {
-        "operationId": "putFollow",
-        "summary": "putFollow",
-        "responses": {
-          "200": {
-            "description": "Success",
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FollowResponse"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -514,26 +2651,81 @@
             "required": true,
             "schema": {
               "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewPatch"
+              }
             }
           }
-        ]
+        }
       },
       "delete": {
-        "operationId": "deleteFollow",
-        "summary": "deleteFollow",
+        "operationId": "deleteView",
+        "summary": "deleteView",
+        "description": "Authorization: owner for private views; Admin for shared views. ",
         "responses": {
-          "200": {
-            "description": "Success",
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FollowResponse"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
           },
-          "default": {
-            "description": "Request failed",
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -550,9 +2742,199 @@
             "required": true,
             "schema": {
               "type": "string"
+            },
+            "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          }
+        ]
+      }
+    },
+    "/people": {
+      "get": {
+        "operationId": "listPeople",
+        "summary": "listPeople",
+        "description": "Authorization: any authenticated user. At most 20 people. Forwards caller Authorization verbatim; caches for 60 seconds per bearer/query. Missing/unavailable Directory returns empty items and source unavailable.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Person"
+                      }
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "directory",
+                        "unavailable"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
             }
           }
         ]
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "summary": "getOpenAPI",
+        "description": "Authorization: none. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     }
   },
@@ -565,56 +2947,369 @@
       }
     },
     "schemas": {
-      "Author": {
+      "Person": {
         "type": "object",
         "properties": {
-          "id": {
+          "sub": {
             "type": "string"
           },
-          "displayName": {
+          "name": {
+            "type": "string"
+          },
+          "avatarUrl": {
             "type": "string"
           },
           "email": {
             "type": "string"
           },
-          "directoryPersonId": {
-            "type": "string",
-            "nullable": true
+          "profileUrl": {
+            "type": "string"
           }
         },
         "required": [
-          "id",
-          "displayName",
-          "email",
-          "directoryPersonId"
-        ]
+          "sub",
+          "name"
+        ],
+        "additionalProperties": false
       },
-      "ArticleSummary": {
+      "Me": {
+        "type": "object",
+        "properties": {
+          "sub": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "profileUrl": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "Admin",
+              "Editor",
+              "Viewer"
+            ]
+          },
+          "isAdmin": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sub",
+          "name",
+          "role",
+          "isAdmin"
+        ],
+        "additionalProperties": false
+      },
+      "Workspace": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string"
           },
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9]{1,5}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1
+          },
+          "issueCount": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "name",
+          "issueCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "StatusCategory": {
+        "type": "string",
+        "enum": [
+          "backlog",
+          "unstarted",
+          "started",
+          "completed",
+          "canceled"
+        ]
+      },
+      "Color": {
+        "type": "string",
+        "enum": [
+          "gray",
+          "red",
+          "orange",
+          "yellow",
+          "green",
+          "teal",
+          "blue",
+          "indigo",
+          "purple",
+          "pink"
+        ]
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1
+          },
+          "category": {
+            "$ref": "#/components/schemas/StatusCategory"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "color": {
+            "$ref": "#/components/schemas/Color"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "category",
+          "position",
+          "color"
+        ],
+        "additionalProperties": false
+      },
+      "Label": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1
+          },
+          "color": {
+            "$ref": "#/components/schemas/Color"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color"
+        ],
+        "additionalProperties": false
+      },
+      "IssueType": {
+        "type": "string",
+        "enum": [
+          "bug",
+          "feature",
+          "task"
+        ]
+      },
+      "Priority": {
+        "type": "string",
+        "enum": [
+          "urgent",
+          "high",
+          "medium",
+          "low",
+          "none"
+        ]
+      },
+      "Surface": {
+        "type": "string",
+        "enum": [
+          "dashboard",
+          "platform-api",
+          "apth",
+          "builder-console",
+          "console-app",
+          "cluster",
+          "other"
+        ]
+      },
+      "Sort": {
+        "type": "string",
+        "enum": [
+          "updated",
+          "created",
+          "priority",
+          "number"
+        ]
+      },
+      "Report": {
+        "type": "object",
+        "properties": {
+          "environment": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1
+          },
+          "surface": {
+            "$ref": "#/components/schemas/Surface"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "steps": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "expected": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "actual": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "environment",
+          "surface"
+        ],
+        "additionalProperties": false
+      },
+      "IssueRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "identifier": {
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
-          "excerpt": {
+          "statusId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "id",
+          "identifier",
+          "title",
+          "statusId"
+        ],
+        "additionalProperties": false
+      },
+      "IssueSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "identifier": {
             "type": "string"
           },
-          "status": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
             "type": "string",
-            "enum": [
-              "draft",
-              "published"
+            "maxLength": 200,
+            "minLength": 1
+          },
+          "type": {
+            "$ref": "#/components/schemas/IssueType"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "statusId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "author": {
-            "$ref": "#/components/schemas/Author"
+          "reporter": {
+            "$ref": "#/components/schemas/Person"
           },
-          "publishedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+          "labelIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueOn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Report"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commentCount": {
+            "type": "integer"
+          },
+          "attachmentCount": {
+            "type": "integer"
           },
           "createdAt": {
             "type": "string",
@@ -624,52 +3319,125 @@
             "type": "string",
             "format": "date-time"
           },
-          "likeCount": {
-            "type": "integer"
-          },
-          "likedByMe": {
-            "type": "boolean"
+          "completedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "id",
+          "identifier",
+          "number",
           "title",
-          "excerpt",
-          "status",
-          "author",
-          "publishedAt",
+          "type",
+          "priority",
+          "statusId",
+          "assignee",
+          "reporter",
+          "labelIds",
+          "parent",
+          "dueOn",
+          "report",
+          "commentCount",
+          "attachmentCount",
           "createdAt",
           "updatedAt",
-          "likeCount",
-          "likedByMe"
-        ]
+          "completedAt"
+        ],
+        "additionalProperties": false
       },
-      "Article": {
+      "Issue": {
         "type": "object",
         "properties": {
           "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "identifier": {
             "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
           },
           "title": {
-            "type": "string"
-          },
-          "excerpt": {
-            "type": "string"
-          },
-          "status": {
             "type": "string",
-            "enum": [
-              "draft",
-              "published"
+            "maxLength": 200,
+            "minLength": 1
+          },
+          "type": {
+            "$ref": "#/components/schemas/IssueType"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "statusId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "author": {
-            "$ref": "#/components/schemas/Author"
+          "reporter": {
+            "$ref": "#/components/schemas/Person"
           },
-          "publishedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+          "labelIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueOn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Report"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commentCount": {
+            "type": "integer"
+          },
+          "attachmentCount": {
+            "type": "integer"
           },
           "createdAt": {
             "type": "string",
@@ -679,260 +3447,646 @@
             "type": "string",
             "format": "date-time"
           },
-          "likeCount": {
-            "type": "integer"
+          "completedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "likedByMe": {
-            "type": "boolean"
+          "description": {
+            "type": "string",
+            "description": "Markdown, at most 50 KiB UTF-8"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueRef"
+            }
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueRef"
+            }
+          },
+          "blockedBy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueRef"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "identifier",
+          "number",
+          "title",
+          "type",
+          "priority",
+          "statusId",
+          "assignee",
+          "reporter",
+          "labelIds",
+          "parent",
+          "dueOn",
+          "report",
+          "commentCount",
+          "attachmentCount",
+          "createdAt",
+          "updatedAt",
+          "completedAt",
+          "description",
+          "children",
+          "blocks",
+          "blockedBy"
+        ],
+        "additionalProperties": false
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "issueId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "author": {
+            "$ref": "#/components/schemas/Person"
           },
           "body": {
-            "type": "string"
+            "type": "string",
+            "description": "1 byte to 20 KiB UTF-8 Markdown"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "editedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "id",
-          "title",
-          "excerpt",
-          "status",
+          "issueId",
           "author",
-          "publishedAt",
+          "body",
           "createdAt",
-          "updatedAt",
-          "likeCount",
-          "likedByMe",
-          "body"
-        ]
+          "editedAt"
+        ],
+        "additionalProperties": false
       },
-      "AuthorProfile": {
+      "Attachment": {
         "type": "object",
         "properties": {
-          "author": {
-            "$ref": "#/components/schemas/Author"
-          },
-          "articleCount": {
-            "type": "integer"
-          },
-          "followerCount": {
-            "type": "integer"
-          },
-          "followingCount": {
-            "type": "integer"
-          },
-          "followedByMe": {
-            "type": "boolean"
-          },
-          "isMe": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "author",
-          "articleCount",
-          "followerCount",
-          "followingCount",
-          "followedByMe",
-          "isMe"
-        ]
-      },
-      "Counts": {
-        "type": "object",
-        "properties": {
-          "published": {
-            "type": "integer"
-          },
-          "drafts": {
-            "type": "integer"
-          },
-          "followers": {
-            "type": "integer"
-          },
-          "following": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "published",
-          "drafts",
-          "followers",
-          "following"
-        ]
-      },
-      "MeResponse": {
-        "type": "object",
-        "properties": {
-          "author": {
-            "$ref": "#/components/schemas/Author"
-          },
-          "roles": {
-            "type": "object",
-            "properties": {
-              "trackerAdmin": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "trackerAdmin"
-            ]
-          },
-          "directory": {
-            "type": "object",
-            "properties": {
-              "linked": {
-                "type": "boolean"
-              },
-              "publicUrl": {
-                "type": "string",
-                "nullable": true
-              }
-            },
-            "required": [
-              "linked",
-              "publicUrl"
-            ]
-          },
-          "counts": {
-            "$ref": "#/components/schemas/Counts"
-          }
-        },
-        "required": [
-          "author",
-          "roles",
-          "directory",
-          "counts"
-        ]
-      },
-      "ArticleList": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ArticleSummary"
-            }
-          },
-          "nextCursor": {
+          "id": {
             "type": "string",
-            "nullable": true
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "issueId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "filename": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1
+          },
+          "mediaType": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "text/plain",
+              "application/json"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2097152
+          },
+          "url": {
+            "type": "string"
+          },
+          "uploader": {
+            "$ref": "#/components/schemas/Person"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
-          "items",
-          "nextCursor"
-        ]
+          "id",
+          "issueId",
+          "filename",
+          "mediaType",
+          "size",
+          "url",
+          "uploader",
+          "createdAt"
+        ],
+        "additionalProperties": false
       },
-      "DraftList": {
+      "Activity": {
         "type": "object",
         "properties": {
-          "items": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "issueId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Person"
+          },
+          "field": {
+            "type": "string",
+            "enum": [
+              "created",
+              "title",
+              "description",
+              "type",
+              "priority",
+              "status",
+              "assignee",
+              "labels",
+              "parent",
+              "blocks",
+              "due",
+              "report",
+              "attachment",
+              "deleted"
+            ]
+          },
+          "from": {},
+          "to": {},
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "issueId",
+          "actor",
+          "field",
+          "from",
+          "to",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "TimelineItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "activity"
+              },
+              "activity": {
+                "$ref": "#/components/schemas/Activity"
+              }
+            },
+            "required": [
+              "kind",
+              "activity"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "comment"
+              },
+              "comment": {
+                "$ref": "#/components/schemas/Comment"
+              }
+            },
+            "required": [
+              "kind",
+              "comment"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Filter": {
+        "type": "object",
+        "properties": {
+          "status": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ArticleSummary"
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
             }
-          }
-        },
-        "required": [
-          "items"
-        ]
-      },
-      "AuthorList": {
-        "type": "object",
-        "properties": {
-          "items": {
+          },
+          "category": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Author"
+              "$ref": "#/components/schemas/StatusCategory"
             }
+          },
+          "assignee": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "label": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          "type": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueType"
+            }
+          },
+          "priority": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Priority"
+            }
+          },
+          "q": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "createdAfter": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            }
+          },
+          "surface": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Surface"
+            }
+          },
+          "parent": {
+            "type": "string"
           }
         },
-        "required": [
-          "items"
-        ]
+        "required": [],
+        "additionalProperties": false
       },
-      "LikeResponse": {
+      "View": {
         "type": "object",
         "properties": {
-          "likeCount": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Person"
+          },
+          "shared": {
+            "type": "boolean"
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "list",
+              "board"
+            ]
+          },
+          "filter": {
+            "$ref": "#/components/schemas/Filter"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/Sort"
+          },
+          "position": {
             "type": "integer"
           },
-          "likedByMe": {
-            "type": "boolean"
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
-          "likeCount",
-          "likedByMe"
-        ]
-      },
-      "FollowResponse": {
-        "type": "object",
-        "properties": {
-          "followerCount": {
-            "type": "integer"
-          },
-          "followedByMe": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "followerCount",
-          "followedByMe"
-        ]
+          "id",
+          "name",
+          "owner",
+          "shared",
+          "layout",
+          "filter",
+          "sort",
+          "position",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
       },
       "Error": {
         "type": "object",
         "properties": {
           "error": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "invalid",
+              "unauthenticated",
+              "forbidden",
+              "not_found",
+              "conflict",
+              "tracker_store_unavailable",
+              "identity_unavailable"
+            ]
           },
           "message": {
             "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
           "error",
           "message"
-        ]
+        ],
+        "additionalProperties": false
       },
-      "CreateArticle": {
+      "IssueCreate": {
         "type": "object",
         "properties": {
           "title": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 120
+            "maxLength": 200,
+            "minLength": 1
           },
-          "body": {
-            "type": "string"
+          "description": {
+            "type": "string",
+            "description": "Markdown, at most 50 KiB UTF-8"
           },
-          "publish": {
-            "type": "boolean"
+          "type": {
+            "$ref": "#/components/schemas/IssueType"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "statusId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "assigneeSub": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labelIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueOn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Report"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "title",
-          "body"
-        ]
+          "type"
+        ],
+        "additionalProperties": false
       },
-      "PatchArticle": {
+      "IssuePatch": {
         "type": "object",
         "properties": {
           "title": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 120
+            "maxLength": 200,
+            "minLength": 1
           },
-          "body": {
-            "type": "string"
-          },
-          "status": {
+          "description": {
             "type": "string",
-            "enum": [
-              "draft",
-              "published"
+            "description": "Markdown, at most 50 KiB UTF-8"
+          },
+          "type": {
+            "$ref": "#/components/schemas/IssueType"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "statusId": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "assigneeSub": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
             ]
+          },
+          "labelIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueOn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Report"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            }
           }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": false
+      },
+      "ViewCreate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "list",
+              "board"
+            ]
+          },
+          "filter": {
+            "$ref": "#/components/schemas/Filter"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/Sort"
+          },
+          "shared": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "ViewPatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "list",
+              "board"
+            ]
+          },
+          "filter": {
+            "$ref": "#/components/schemas/Filter"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/Sort"
+          },
+          "shared": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
       }
     }
   }

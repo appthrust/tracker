@@ -1,6 +1,6 @@
 import { cn } from './cn'
 
-const AVATAR_SIZE = { sm: 'size-6 text-[10px]', md: 'size-8 text-xs', lg: 'size-16 text-xl' } as const
+const AVATAR_SIZE = { xs: 'size-5 text-[9px]', sm: 'size-6 text-[10px]', md: 'size-8 text-xs', lg: 'size-16 text-xl' } as const
 
 /**
  * Up to two initials: the first letters of the first two words of a Latin name
@@ -30,7 +30,7 @@ export function Avatar({ name, size = 'md' }: { name: string; size?: keyof typeo
   )
 }
 
-/** Small neutral label next to a title or name (「下書き」, 「あなた」). */
+/** Small neutral label next to a title or name (「あなた」, 「共有」). */
 export function Badge({ children, tone = 'neutral' }: { children: string; tone?: 'neutral' | 'accent' }) {
   return (
     <span
@@ -44,7 +44,44 @@ export function Badge({ children, tone = 'neutral' }: { children: string; tone?:
   )
 }
 
+/** A keyboard hint (`C`, `⌘K`); decorative next to a labelled control, so screen readers skip it. */
+export function Kbd({ children, className }: { children: string; className?: string }) {
+  return (
+    <kbd
+      aria-hidden
+      className={cn('inline-flex h-5 min-w-5 items-center justify-center rounded border border-stone-200 bg-stone-50 px-1 font-sans text-[11px] leading-none font-medium text-stone-500', className)}
+    >
+      {children}
+    </kbd>
+  )
+}
+
 /** "2026年10月16日" / "Oct 16, 2026" for an ISO timestamp, in the reader's time zone. */
 export function formatDate(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(new Date(iso))
+}
+
+/** "2026/10/16 9:30" / "Oct 16, 2026, 9:30 AM" for tooltips next to a relative time. */
+export function formatDateTime(iso: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
+}
+
+/** Largest unit first, in seconds. */
+const RELATIVE_UNITS: readonly [Intl.RelativeTimeFormatUnit, number][] = [
+  ['year', 31_536_000],
+  ['month', 2_629_800],
+  ['week', 604_800],
+  ['day', 86_400],
+  ['hour', 3_600],
+  ['minute', 60],
+]
+
+/** "3 時間前" / "3 hours ago" in the largest whole unit; under a minute is "今" / "now". `now` is a test seam. */
+export function formatRelative(iso: string, locale: string, now = Date.now()): string {
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  const seconds = (Date.parse(iso) - now) / 1000
+  for (const [unit, size] of RELATIVE_UNITS) {
+    if (Math.abs(seconds) >= size) return format.format(Math.trunc(seconds / size), unit)
+  }
+  return format.format(0, 'second')
 }

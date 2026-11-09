@@ -3,19 +3,19 @@
 @source '../node_modules/@appthrust/app-launcher/dist';
 
 /*
- * One accent color (green, tracker's own) and the スキ heart color; everything
- * else is neutral stone. System font stack only, light only. Status colors are
- * used only through <Notice> (src/ui). Rendered article bodies use `.tracker-prose` below.
+ * One accent color (indigo, tracker's own); everything else is neutral stone.
+ * Status and label colors come from the fixed palette (src/features/issues/visuals.tsx).
+ * System font stack only, light only. Rendered Markdown uses `.tracker-prose` below.
  */
 @theme {
   --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN',
     'Noto Sans JP', Meiryo, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --color-accent: oklch(0.52 0.12 160);
-  --color-accent-strong: oklch(0.44 0.11 160);
-  --color-accent-soft: oklch(0.96 0.03 160);
-  --color-accent-line: oklch(0.86 0.06 160);
+  --color-accent: oklch(0.52 0.17 272);
+  --color-accent-strong: oklch(0.44 0.16 272);
+  --color-accent-soft: oklch(0.96 0.025 272);
+  --color-accent-line: oklch(0.85 0.07 272);
 
   --color-surface: var(--color-white);
   --color-canvas: var(--color-stone-50);
@@ -29,9 +29,6 @@
   --color-bad: oklch(0.55 0.2 27);
   --color-bad-soft: oklch(0.97 0.02 20);
   --color-bad-ink: oklch(0.45 0.16 27);
-  /* スキ (like): the one warm color, only on the heart and its toggle. */
-  --color-like: oklch(0.58 0.2 5);
-  --color-like-soft: oklch(0.97 0.02 5);
 
   --animate-fade-in: fade-in 150ms ease-out;
   --animate-slide-in-left: slide-in-left 200ms ease-out;

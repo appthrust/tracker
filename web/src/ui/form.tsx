@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode, Ref, TextareaHTMLAttributes } from 'react'
+import type { InputHTMLAttributes, ReactNode, Ref, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { useText } from '../i18n'
 import { cn } from './cn'
 
@@ -75,7 +75,7 @@ export function TextInput({
 }
 
 /** Multi-line text; wires `${id}-hint` / `${id}-error` like TextInput. */
-export function TextArea({ invalid, className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }) {
+export function TextArea({ invalid, className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean; ref?: Ref<HTMLTextAreaElement> }) {
   return (
     <textarea
       aria-invalid={invalid || undefined}
@@ -83,5 +83,14 @@ export function TextArea({ invalid, className, ...rest }: TextareaHTMLAttributes
       className={cn(controlClasses, 'min-h-24 w-full resize-y py-2 leading-relaxed', className)}
       {...rest}
     />
+  )
+}
+
+/** Native select (keyboard and screen-reader behavior for free); wires hint/error like TextInput. */
+export function SelectInput({ invalid, className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
+  return (
+    <select aria-invalid={invalid || undefined} aria-describedby={describedBy(rest.id, invalid)} className={cn(controlClasses, 'h-10 w-full pr-8 md:h-9', className)} {...rest}>
+      {children}
+    </select>
   )
 }

@@ -97,21 +97,24 @@ export function errorMessageId(error: unknown): MessageId | undefined {
   if (error.status === 401) return 'tracker.common.accessDenied'
   if (error.code === 'tracker_store_unavailable') return 'tracker.errors.storeUnavailable'
   if (error.code === 'identity_unavailable') return 'tracker.errors.identityUnavailable'
-  if (error.code === 'self_follow') return 'tracker.errors.selfFollow'
   if (error.status === 403) return 'tracker.errors.forbidden'
   if (error.status === 404) return 'tracker.errors.notFound'
+  if (error.status === 409) return 'tracker.errors.conflict'
   if (error.status === 400) return 'tracker.errors.invalid'
   return undefined
 }
 
-/**
- * Failed mutation: the localized explanation first; the server's message (not
- * localized) as a secondary hint for 400s, whose cause the summary cannot name.
- */
+/** The server's own (not localized) reason for a 400/409, which the localized summary cannot name. */
+export function errorDetail(error: unknown): string | undefined {
+  if (!isTrackerError(error) || (error.status !== 400 && error.status !== 409)) return undefined
+  return error.issues.length > 0 ? error.issues.map((issue) => (issue.path ? `${issue.path}: ${issue.message}` : issue.message)).join(' / ') : error.message
+}
+
+/** Failed mutation: the localized explanation first; the server's reason as a secondary hint for 400/409. */
 export function ActionError({ error, className }: { error: unknown; className?: string }) {
   const { t } = useText()
   const known = errorMessageId(error)
-  const detail = isTrackerError(error) && error.status === 400 && error.code === 'invalid_request' ? error.message : undefined
+  const detail = errorDetail(error)
   return (
     <Notice tone="error" title={known ? undefined : t('tracker.common.actionFailed')} className={className}>
       {known ? t(known) : null}

@@ -3,67 +3,80 @@ package api
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
-	"strings"
+	"slices"
 	"time"
-	"unicode/utf8"
 
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/appserver-go/appserver/identity"
-	"github.com/appthrust/appserver-go/appserver/link"
 	"github.com/appthrust/appserver-go/appserver/platformclient"
+	"github.com/appthrust/tracker/cmd/server/internal/directory"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 	"github.com/appthrust/tracker/cmd/server/internal/store"
 )
 
 type API struct {
-	store              *store.Store
-	identity           *identity.Authenticator
-	platform           *platformclient.Client
-	links              *link.Client
-	directoryPublicURL string
-	mux                *http.ServeMux
+	store     *store.Store
+	identity  *identity.Authenticator
+	platform  *platformclient.Client
+	directory *directory.Client
+	workspace string
+	mux       *http.ServeMux
 }
 type request struct {
 	r      *http.Request
 	w      http.ResponseWriter
 	tx     *store.Tx
-	author domain.Author
-	access platformclient.ProjectAccess
+	actor  domain.Actor
 	bearer string
 }
 type endpoint func(*request) (any, int, error)
 
-// New serves the tracker API. directoryPublicURL is the browser origin of the
-// Directory built-in app (empty when the link is not configured); the SPA builds
-// profile links from it.
-func New(database *store.Store, auth *identity.Authenticator, upstream *platformclient.Client, links *link.Client, directoryPublicURL string) http.Handler {
-	a := &API{store: database, identity: auth, platform: upstream, links: links, directoryPublicURL: directoryPublicURL, mux: http.NewServeMux()}
+func New(database *store.Store, auth *identity.Authenticator, upstream *platformclient.Client, people *directory.Client, workspace string) http.Handler {
+	a := &API{store: database, identity: auth, platform: upstream, directory: people, workspace: workspace, mux: http.NewServeMux()}
 	a.mux.HandleFunc("GET /api/tracker/v1/openapi.json", a.openapi)
-	a.route("GET /api/tracker/v1/me", true, true, a.me)
-	a.route("GET /api/tracker/v1/articles", false, false, a.timeline)
-	a.route("GET /api/tracker/v1/drafts", false, false, a.drafts)
-	a.route("POST /api/tracker/v1/articles", true, true, a.createArticle)
-	a.route("GET /api/tracker/v1/articles/{id}", false, false, a.article)
-	a.route("PATCH /api/tracker/v1/articles/{id}", true, true, a.patchArticle)
-	a.route("DELETE /api/tracker/v1/articles/{id}", true, true, a.deleteArticle)
-	a.route("PUT /api/tracker/v1/articles/{id}/like", true, true, a.like)
-	a.route("DELETE /api/tracker/v1/articles/{id}/like", true, true, a.like)
-	a.route("GET /api/tracker/v1/authors/{id}", false, false, a.profile)
-	a.route("GET /api/tracker/v1/authors/{id}/followers", false, false, a.followers)
-	a.route("GET /api/tracker/v1/authors/{id}/following", false, false, a.following)
-	a.route("PUT /api/tracker/v1/authors/{id}/follow", true, true, a.follow)
-	a.route("DELETE /api/tracker/v1/authors/{id}/follow", true, true, a.follow)
-	a.route("/", false, false, func(*request) (any, int, error) { return nil, 0, httpx.NotFound() })
+	a.route("GET /me", false, true, a.me)
+	a.route("GET /workspace", false, false, a.workspaceGet)
+	a.route("PATCH /workspace", true, true, a.workspacePatch)
+	a.route("GET /statuses", false, false, a.statusList)
+	a.route("POST /statuses", true, true, a.statusCreate)
+	a.route("PATCH /statuses/{id}", true, true, a.statusPatch)
+	a.route("DELETE /statuses/{id}", true, true, a.statusDelete)
+	a.route("PUT /statuses/order", true, true, a.statusOrder)
+	a.route("GET /labels", false, false, a.labelList)
+	a.route("POST /labels", true, true, a.labelCreate)
+	a.route("PATCH /labels/{id}", true, true, a.labelPatch)
+	a.route("DELETE /labels/{id}", true, true, a.labelDelete)
+	a.route("GET /issues", false, false, a.issueList)
+	a.route("POST /issues", true, false, a.issueCreate)
+	a.route("GET /issues/{id}", false, false, a.issueGet)
+	a.route("PATCH /issues/{id}", true, false, a.issuePatch)
+	a.route("DELETE /issues/{id}", true, true, a.issueDelete)
+	a.route("GET /issues/{id}/timeline", false, false, a.timeline)
+	a.route("POST /issues/{id}/comments", true, false, a.commentCreate)
+	a.route("PATCH /comments/{id}", true, false, a.commentPatch)
+	a.route("DELETE /comments/{id}", true, true, a.commentDelete)
+	a.route("POST /issues/{id}/attachments", true, false, a.attachmentCreate)
+	a.route("GET /attachments/{id}", false, false, a.attachmentGet)
+	a.route("DELETE /attachments/{id}", true, true, a.attachmentDelete)
+	a.route("GET /views", false, false, a.viewList)
+	a.route("POST /views", true, true, a.viewCreate)
+	a.route("PATCH /views/{id}", true, true, a.viewPatch)
+	a.route("DELETE /views/{id}", true, true, a.viewDelete)
+	a.route("GET /people", false, false, a.people)
+	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { httpx.WriteError(w, httpx.NotFound(), "tracker") })
 	return a
 }
 func Unavailable() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/tracker/v1/openapi.json" {
+			serveOpenAPI(w)
+			return
+		}
 		httpx.WriteError(w, httpx.Fail(503, "tracker_store_unavailable", "The tracker database is not available"), "tracker")
 	})
 }
@@ -71,60 +84,69 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	a.mux.ServeHTTP(w, r)
 }
-func (a *API) route(pattern string, mutation, needsRoles bool, fn endpoint) {
-	a.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
+	method, path, _ := bytes.Cut([]byte(pattern), []byte(" "))
+	a.mux.HandleFunc(string(method)+" /api/tracker/v1"+string(path), func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		r = r.WithContext(ctx)
-		claims, bearer, ok := a.authenticate(w, r)
+		claims, _, ok := a.authenticate(w, r)
 		if !ok {
 			return
 		}
-		s := &request{r: r, w: w, bearer: bearer}
-		var err error
-		if needsRoles {
-			s.access, err = a.platform.Access(ctx, claims.Principal.Subject, bearer)
+		s := &request{r: r, w: w, bearer: r.Header.Get("Authorization"), actor: domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer"}}
+		if s.actor.Name == "" {
+			s.actor.Name = s.actor.Sub
+		}
+		if roles {
+			access, err := a.platform.Access(ctx, s.actor.Sub, s.bearer)
 			if err != nil {
-				httpx.WriteError(w, httpx.Fail(502, "upstream_unavailable", "The platform is temporarily unavailable"), "tracker")
+				httpx.WriteError(w, httpx.Fail(503, "identity_unavailable", "The platform role is temporarily unavailable"), "tracker")
 				return
 			}
+			if !access.NotMember {
+				s.actor.Role = access.Role
+			}
+		}
+		if mutation {
+			s.actor.Person = a.directory.Enrich(ctx, s.bearer, s.actor.Person)
+		}
+		if err := a.store.EnsureWorkspace(ctx, a.workspace); err != nil {
+			httpx.WriteError(w, storeError(err), "tracker")
+			return
 		}
 		var body any
 		var status int
-		err = a.store.Do(ctx, mutation, func(tx *store.Tx) error {
-			s.tx = tx
-			if mutation {
-				s.author, err = tx.UpsertAuthor(claims.Principal.Subject, claims.Name, claims.Email)
-			} else {
-				s.author, err = tx.AuthorBySubject(claims.Principal.Subject)
-				if errors.Is(err, sql.ErrNoRows) {
-					err = nil
-				}
-			}
-			if err != nil {
-				return err
-			}
-			body, status, err = fn(s)
-			return err
-		})
+		err := a.store.InWorkspace(ctx, a.workspace, mutation, func(tx *store.Tx) error { s.tx = tx; var err error; body, status, err = fn(s); return err })
 		if err != nil {
-			httpx.WriteError(w, err, "tracker")
+			httpx.WriteError(w, storeError(err), "tracker")
 			return
 		}
-		if status == 204 {
+		if status == http.StatusNoContent {
 			w.WriteHeader(status)
 			return
 		}
+		if download, ok := body.(attachmentDownload); ok {
+			download.write(w)
+			return
+		}
+		a.enrich(s, body)
 		httpx.WriteJSON(w, status, body)
 	})
 }
+func storeError(err error) error {
+	var response *httpx.Error
+	if errors.As(err, &response) {
+		return err
+	}
+	return httpx.Fail(503, "tracker_store_unavailable", "The tracker database is not available")
+}
+func invalid(message string) error { return httpx.Fail(400, "invalid", message) }
 func (a *API) authenticate(w http.ResponseWriter, r *http.Request) (identity.Identity, string, bool) {
 	claims, bearer, err := a.identity.Authenticate(r.Context(), r.Header.Get("Authorization"))
 	if err != nil {
 		if errors.Is(err, identity.ErrUnavailable) {
 			httpx.WriteError(w, httpx.Fail(503, "identity_unavailable", "The identity provider is temporarily unavailable"), "tracker")
-		} else if errors.Is(err, identity.ErrRawKeyNotAccepted) {
-			httpx.WriteError(w, httpx.Fail(401, "raw_key_not_accepted", "Exchange the access key for an assertion before calling this API"), "tracker")
 		} else {
 			httpx.WriteError(w, httpx.Fail(401, "unauthenticated", "A valid bearer token is required"), "tracker")
 		}
@@ -132,45 +154,45 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) (identity.Ide
 	}
 	return claims, bearer, true
 }
-
-func decode(s *request, target any) error { return decodeLimit(s, target, 256<<10) }
-func decodeLimit(s *request, target any, limit int64) error {
+func decode(s *request, target any, nullable ...string) error {
 	mediaType, _, err := mime.ParseMediaType(s.r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		return httpx.Invalid("Content-Type must be application/json")
+		return invalid("Content-Type must be application/json")
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(s.w, s.r.Body, limit))
+	body, err := io.ReadAll(http.MaxBytesReader(s.w, s.r.Body, 256<<10))
 	if err != nil {
-		return httpx.Invalid("Request body exceeds the size limit")
+		return invalid("Request body exceeds the size limit")
 	}
 	body = bytes.TrimSpace(body)
 	if len(body) == 0 || body[0] != '{' {
-		return httpx.Invalid("Request body must be a JSON object")
+		return invalid("Request body must be a JSON object")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return httpx.Invalid("Request body contains invalid or unknown fields")
+	if decoder.Decode(target) != nil {
+		return invalid("Request body contains invalid or unknown fields")
 	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return httpx.Invalid("Request body must contain one JSON object")
+	if decoder.Decode(new(any)) != io.EOF {
+		return invalid("Request body must contain one JSON object")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return invalid("Invalid request body")
+	}
+	for field, value := range fields {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) && !slices.Contains(nullable, field) {
+			return invalid(field + " cannot be null")
+		}
+	}
+	return nil
+}
+func admin(s *request) error {
+	if !domain.Can(s.actor, domain.ManageWorkspace, domain.Target{}) {
+		return httpx.Forbidden()
 	}
 	return nil
 }
 
-func validateArticle(title, body, status string) (string, error) {
-	title = strings.TrimSpace(title)
-	if n := utf8.RuneCountInString(title); n < 1 || n > 120 {
-		return "", httpx.Invalid("Title must contain 1 to 120 characters")
-	}
-	if !utf8.ValidString(body) || len(body) > 100<<10 {
-		return "", httpx.Invalid("Body must be valid UTF-8 and at most 100 KiB")
-	}
-	if status != "draft" && status != "published" {
-		return "", httpx.Invalid("Status must be draft or published")
-	}
-	if status == "published" && strings.TrimSpace(body) == "" {
-		return "", httpx.Invalid("Published articles require a body")
-	}
-	return title, nil
+type items[T any] struct {
+	Items []T `json:"items"`
 }

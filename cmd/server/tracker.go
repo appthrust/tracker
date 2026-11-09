@@ -13,6 +13,7 @@ import (
 	"github.com/appthrust/appserver-go/appserver/pending"
 	"github.com/appthrust/appserver-go/appserver/platformclient"
 	"github.com/appthrust/tracker/cmd/server/internal/api"
+	"github.com/appthrust/tracker/cmd/server/internal/directory"
 	"github.com/appthrust/tracker/cmd/server/internal/store"
 )
 
@@ -62,12 +63,12 @@ func trackerHandler(upstreamURL, projectID string) (*pending.Handler, func(), er
 			return nil, err
 		}
 		if seed {
-			if err := database.SeedDev(ctx); err != nil {
+			if err := database.SeedDev(ctx, projectID); err != nil {
 				_ = database.Close()
 				return nil, err
 			}
 		}
-		tracker.Swap(api.New(database, auth, platform, links, directoryPublicURL))
+		tracker.Swap(api.New(database, auth, platform, directory.New(links, directoryPublicURL), projectID))
 		return database, nil
 	})
 	return tracker, stop, nil

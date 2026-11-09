@@ -1,9 +1,9 @@
-// Article bodies are Markdown as written; the server never renders HTML.
-// Every render goes through marked (GFM) and then DOMPurify, so a body can
-// never inject script, event handlers or `javascript:` URLs into the page.
+// Issue descriptions and comments are Markdown as written; the server never
+// renders HTML. Every render goes through marked (GFM) and then DOMPurify, so a
+// body can never inject script, event handlers or `javascript:` URLs into the page.
 import DOMPurify, { type WindowLike } from 'dompurify'
 import { marked } from 'marked'
-import { useTracker } from 'react'
+import { useMemo } from 'react'
 import { cn } from './cn'
 
 /** Markdown → sanitized HTML against `window`'s DOM (a test passes a happy-dom window). */
@@ -22,9 +22,9 @@ export function createMarkdownRenderer(window: WindowLike): (markdown: string) =
 
 let browserRenderer: ((markdown: string) => string) | undefined
 
-/** The rendered article body. */
+/** Rendered Markdown (description, comment). */
 export function Markdown({ source, className }: { source: string; className?: string }) {
-  const html = useTracker(() => {
+  const html = useMemo(() => {
     browserRenderer ??= createMarkdownRenderer(window)
     return browserRenderer(source)
   }, [source])

@@ -7,16 +7,13 @@ const digest = `sha256:${'a'.repeat(64)}`
 const nextDigest = `sha256:${'b'.repeat(64)}`
 
 describe('renderEntry', () => {
-  test('keeps the seed floor and appends the public app image with the only default', () => {
-    const entry = renderEntry(template, '0.2.0', digest)
+  test('first tag creates the only version as default from an empty floor', () => {
+    const entry = renderEntry(template, '0.1.0', digest)
     expect(entry.slug).toBe('tracker')
     expect(entry.display).toEqual({ category: 'collaborate', icon: 'tracker' })
-    expect(entry.updatePolicy).toEqual({ default: 'pinned', allowed: ['pinned', 'follow'] })
+    expect(entry.updatePolicy).toEqual({ default: 'follow', allowed: ['pinned', 'follow'] })
     expect(entry.publishedAt).toBeNull()
-    expect(entry.versions).toHaveLength(2)
-    expect(entry.versions[0]).toMatchObject({ name: '0.1.0', stream: '0.1', default: false, served: true })
-    expect(entry.versions[0]!.images.web).toStartWith('ghcr.io/appthrust/platform/tracker@sha256:')
-    expect(entry.versions[1]).toEqual({ name: '0.2.0', images: { web: `ghcr.io/appthrust/tracker@${digest}` }, stream: '0.2', default: true, served: true })
+    expect(entry.versions).toEqual([{ name: '0.1.0', images: { web: `ghcr.io/appthrust/tracker@${digest}` }, stream: '0.1', default: true, served: true }])
     const definition = YAML.parse(entry.definitionYAML) as { spec: { versions: unknown; components: unknown[]; releaseIdentityEnvPrefix: string } }
     expect(definition.spec.versions).toEqual(entry.versions)
     expect(definition.spec.components).toHaveLength(2)
@@ -24,15 +21,15 @@ describe('renderEntry', () => {
   })
 
   test('merges persisted history on subsequent tags without mutating it', () => {
-    const previous = renderEntry(template, '0.2.0', digest)
+    const previous = renderEntry(template, '0.1.0', digest)
     previous.publishedAt = '2026-11-06T00:00:00Z'
-    const entry = renderEntry(template, '0.2.1', nextDigest, previous)
-    expect(entry.versions.map(version => version.name)).toEqual(['0.1.0', '0.2.0', '0.2.1'])
-    expect(entry.versions.filter(version => version.default).map(version => version.name)).toEqual(['0.2.1'])
+    const entry = renderEntry(template, '0.1.1', nextDigest, previous)
+    expect(entry.versions.map(version => version.name)).toEqual(['0.1.0', '0.1.1'])
+    expect(entry.versions.filter(version => version.default).map(version => version.name)).toEqual(['0.1.1'])
     expect(entry.versions.every(version => version.served)).toBe(true)
-    expect(entry.versions[1]!.images.web).toBe(`ghcr.io/appthrust/tracker@${digest}`)
+    expect(entry.versions[0]!.images.web).toBe(`ghcr.io/appthrust/tracker@${digest}`)
     expect(entry.publishedAt).toBe(previous.publishedAt)
-    expect(previous.versions[1]!.default).toBe(true)
+    expect(previous.versions[0]!.default).toBe(true)
   })
 
   test('repeating an immutable release does not duplicate it', () => {
@@ -40,8 +37,7 @@ describe('renderEntry', () => {
     expect(renderEntry(template, '0.2.0', digest, previous)).toEqual(previous)
   })
 
-  test('refuses to replace the floor or an existing image digest', () => {
-    expect(() => renderEntry(template, '0.1.0', digest)).toThrow('version 0.1.0 already has different immutable images')
+  test('refuses to replace an existing image digest', () => {
     const previous = renderEntry(template, '0.2.0', digest)
     expect(() => renderEntry(template, '0.2.0', nextDigest, previous)).toThrow('version 0.2.0 already has different immutable images')
   })

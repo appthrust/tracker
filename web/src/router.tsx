@@ -3,8 +3,8 @@ import { queryClient } from './api/queries'
 import { routeTree } from './routes/pages'
 import { NotFound, RouteError, RoutePending } from './routes/root'
 
-// Search params are plain strings (`?feed=following`), so the URL keeps the
-// URLSearchParams shape instead of TanStack's JSON-encoded default.
+// Search params are plain strings (`?filter=…&issue=APT-12`), so the URL keeps
+// the URLSearchParams shape instead of TanStack's JSON-encoded default.
 function stringifySearch(search: Record<string, unknown>): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(search)) {

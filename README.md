@@ -1,22 +1,26 @@
 # Tracker
 
-Tracker is AppThrust's Markdown publishing application: write drafts, publish articles,
-follow authors, and like articles. A Go server serves the React SPA, the authenticated
+Tracker ("Issues" in the Marketplace) is AppThrust's Linear-style issue tracker:
+report AppThrust defects with environment/surface/version context, triage them on a
+keyboard-first list or board, and follow them to closure with comments, attachments and
+a full activity timeline. A Go server serves the React SPA, the authenticated
 `/api/tracker/v1` API, the shared app launcher, and `/healthz`, `/readyz`, and `/releasez`.
-PostgreSQL stores application data. Directory optionally enriches author profiles.
-The app is built and released independently of the platform.
+PostgreSQL stores application data. Directory (installed automatically as a dependency)
+resolves people. The app is built and released independently of the platform.
+
+Design: [`design/README.md`](design/README.md); API contract: [`design/API.md`](design/API.md).
 
 ## Source and layout
 
-Imported from `appthrust/platform` commit
-`27347914ee15817f27a42055160b42506edc73e6`:
+Skeleton derived from `appthrust/memo` (server wiring, SPA shell, publisher workflow);
+module path `github.com/appthrust/tracker`.
 
-- `cmd/tracker-server/` → `cmd/server/`, including API, domain, storage, SQL migrations,
-  OpenAPI document, and tests. Internal imports use `github.com/appthrust/tracker`.
-- `dashboard/packages/tracker/` → `web/`, including the SPA, development mock, and tests.
-- Neither source directory contained a README at the imported revision.
+- `cmd/server/` — Go server: `internal/domain` (pure rules), `internal/store` (pgstore +
+  embedded SQL migrations), `internal/api` (handlers + `openapi.json`), `internal/directory`.
+- `web/` — Vite + React + TanStack SPA, in-repo mock (`bun run mock`), tests.
+- `catalog/entry.yaml` — the `ApplicationStackDefinition` the publisher submits.
 
-The public Go SDK is `github.com/appthrust/appserver-go v0.2.0`; no platform checkout,
+The public Go SDK is `github.com/appthrust/appserver-go v0.3.0`; no platform checkout,
 module replacement, or private Go credential is required. The launcher and i18n
 packages use the published `^0.1.0` GitHub Packages versions rather than workspace
 packages. Tailwind scans the installed launcher package for its classes.
@@ -79,13 +83,11 @@ a required BuildKit secret, never through build arguments or committed files.
 
 ## Catalog and release
 
-`catalog/entry.yaml` preserves the complete spec read from
-`ApplicationStackDefinition/tracker` in `appthrust-ink-pmc001` on 2026-11-06, excluding
-cluster-owned metadata. The served compatibility floor is `0.1.0`, stream `0.1`,
-with its original immutable `ghcr.io/appthrust/platform/tracker` image. The next release
-is **`0.2.0`**, stream **`0.2`**. No speculative new-version image is committed.
+`catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`) creates
+`versions[]` with the built image `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
+stream `0.1`; later tags append.
 
-After the release prerequisites are available, push a SemVer tag such as `v0.2.0`.
+After the release prerequisites are available, push a SemVer tag such as `v0.1.0`.
 The tag workflow:
 
 1. Performs one multi-platform build on `ubuntu-24.04` for Linux amd64 and arm64,
@@ -105,8 +107,8 @@ The tag workflow:
 Publication commands used by the workflow:
 
 ```sh
-bun hack/publish-entry.ts submit --version 0.2.0 --digest sha256:<image-index-digest>
-bun hack/publish-entry.ts await --version 0.2.0 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts submit --version 0.1.0 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts await --version 0.1.0 --digest sha256:<image-index-digest>
 ```
 
 Writers are serialized by `tracker-catalog-publish`; the workflow is guarded to
@@ -122,10 +124,6 @@ public after its first publication.
 `https://github.com/appthrust/cloud/.github/workflows/catalog-publish.yml@refs/heads/main`,
 issued by `https://token.actions.githubusercontent.com`. It does not require the Cloud
 admin token.
-
-An existing installation moving from `ghcr.io/appthrust/platform/tracker` requires an
-explicit version update with `replaceRepository: true`. Subsequent `follow` updates
-track the selected stream; `pinned` installations require explicit updates.
 
 Migration authority:
 [First-party app repositories](https://github.com/appthrust/platform/blob/main/design/platform/marketplace-apps/first-party-app-repositories.md).
