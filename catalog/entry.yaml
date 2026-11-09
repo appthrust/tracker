@@ -1,0 +1,57 @@
+apiVersion: appthrust.io/v1alpha1
+kind: ApplicationStackDefinition
+metadata:
+  name: tracker
+spec:
+  access:
+    audiences:
+    - appthrust-platform-api
+    scopes:
+    - openid
+    - profile
+    - email
+    tokenClaims:
+    - groups
+  components:
+  - defaultValues:
+      livenessProbePath: /healthz
+      minScale: 1
+      port: 8080
+      publicURLEnv: TRACKER_PUBLIC_URL
+      readinessProbePath: /readyz
+    definitionRef:
+      name: web-service
+      version: v1
+    id: web
+  - defaultValues:
+      provider: CNPG
+      storageSize: 2Gi
+    definitionRef:
+      name: postgresql
+      version: v1
+    id: database
+  connections:
+  - from: web
+    name: database
+    to: database
+  dependencies:
+  - definition: directory
+    installPolicy: Automatic
+    publicURLEnv: TRACKER_DIRECTORY_PUBLIC_URL
+    urlEnv: TRACKER_DIRECTORY_URL
+  display:
+    category: collaborate
+    description: Report and track AppThrust defects and work items on a Linear-style,
+      keyboard-first board.
+    iconRef:
+      name: tracker
+    title: Issues
+  publish:
+    hostnameLabel: tracker
+  releaseIdentityEnvPrefix: TRACKER
+  updatePolicy:
+    allowed:
+    - pinned
+    - follow
+    default: follow
+  versions: []
