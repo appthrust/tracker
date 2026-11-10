@@ -1,9 +1,10 @@
 // Linear-style glyphs: status circle (shape by category, tint by status color),
-// priority bars, type marks and label/project dots, plus the palette color
-// radio group used wherever a label, status or project gets a color. Glyphs
-// are decorative; every use sits next to the visible or screen-reader name.
-import { Bug, CircleDashed, Lightbulb, ListTodo, TriangleAlert } from 'lucide-react'
-import type { IssueType, LabelColor, Priority, Status } from '../../api/tracker'
+// priority bars, type marks (epic and story stand apart from work items),
+// epic/story progress and label/project dots, plus the palette color radio
+// group used wherever a label, status or project gets a color. Glyphs are
+// decorative; every use sits next to the visible or screen-reader name.
+import { BookMarked, Bug, CircleDashed, Lightbulb, ListTodo, TriangleAlert, Zap } from 'lucide-react'
+import type { IssueType, LabelColor, Priority, Progress, Status } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { cn } from '../../ui'
 
@@ -121,7 +122,26 @@ export function PriorityIcon({ priority, className }: { priority: Priority; clas
 
 export function TypeIcon({ type, className }: { type: IssueType; className?: string }) {
   const box = cn('size-3.5 shrink-0', className)
+  if (type === 'epic') return <Zap aria-hidden className={cn(box, 'fill-violet-100 text-violet-600')} />
+  if (type === 'story') return <BookMarked aria-hidden className={cn(box, 'text-teal-600')} />
   if (type === 'bug') return <Bug aria-hidden className={cn(box, 'text-red-500')} />
   if (type === 'feature') return <Lightbulb aria-hidden className={cn(box, 'text-amber-500')} />
   return <ListTodo aria-hidden className={cn(box, 'text-stone-500')} />
+}
+
+/** Completed share of an epic's or story's work items, with `completed/total` beside the bar. */
+export function ProgressBar({ progress, className }: { progress: Progress; className?: string }) {
+  const { t } = useText()
+  const label = t('tracker.progress.label', { completed: progress.completed, total: progress.total })
+  const percent = progress.total === 0 ? 0 : Math.round((progress.completed / progress.total) * 100)
+  return (
+    <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)} title={label}>
+      <span role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.completed} className="block h-1.5 w-14 overflow-hidden rounded-full bg-stone-200">
+        <span className="block h-full rounded-full bg-emerald-500" style={{ width: `${percent}%` }} />
+      </span>
+      <span aria-hidden className="text-[11px] text-stone-500 tabular-nums">
+        {progress.completed}/{progress.total}
+      </span>
+    </span>
+  )
 }

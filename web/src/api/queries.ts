@@ -2,11 +2,11 @@
 // `queryOptions()` / `infiniteQueryOptions()` factory so route loaders
 // (`ensureQueryData`) and components share one key and fetcher. Freshness:
 // every query refetches every 15 s while the tab is visible and on window
-// focus (no push in v1). Issue edits (status, priority, assignee, labels, project, …)
-// are optimistic: lists and the open issue change at once and roll back on
-// failure.
+// focus (no push in v1). Issue edits (status, priority, assignee, labels,
+// project, parent, …) are optimistic: lists and the open issue change at once
+// and roll back on failure.
 import { infiniteQueryOptions, QueryClient, queryOptions, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
-import { compactFilter } from '../model/issues'
+import { compactFilter, levelOf } from '../model/issues'
 import {
   trackerApi,
   TrackerApiError,
@@ -74,6 +74,34 @@ export const issuesQuery = (filter: Filter, sort: Sort) => {
   })
 }
 
+/**
+ * Every matching issue, following `nextCursor` to the end: grouped lists and
+ * boards and the epics overview need complete groups and counts (a page holds
+ * at most the 200 most recent).
+ */
+export const allIssuesQuery = (filter: Filter, sort: Sort) => {
+  const compact = compactFilter(filter)
+  return queryOptions({
+    queryKey: [...ISSUES_KEY, 'all', compact, sort],
+    queryFn: async (): Promise<IssuePage> => {
+      const items: IssueSummary[] = []
+      let cursor: string | null = null
+      do {
+        const page: IssuePage = await trackerApi.issues.list({ filter: compact, sort, cursor, limit: ISSUE_PAGE_SIZE })
+        items.push(...page.items)
+        cursor = page.nextCursor
+      } while (cursor)
+      return { items, nextCursor: null }
+    },
+  })
+}
+
+/** Every epic (resp. story), by number: group headers, pickers and the overview. */
+export const epicsQuery = allIssuesQuery({ type: ['epic'] }, 'number')
+export const storiesQuery = allIssuesQuery({ type: ['story'] }, 'number')
+/** An issue's direct children with their types (hierarchy checks, the epic/story child list). */
+export const childrenQuery = (issueId: string) => allIssuesQuery({ parent: issueId }, 'number')
+
 /** The sidebar's open count for "Reported by me" reads one capped page; a next cursor means "more than the cap". */
 export const REPORTED_OPEN_CAP = 99
 export const reportedOpenQuery = queryOptions({
@@ -101,8 +129,12 @@ export const peopleQuery = (q: string) =>
 
 // --- optimistic issue edits --------------------------------------------------
 
-/** The summary/issue as it will look after `input`; `assignee` is the picked person for display. */
-export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateIssueInput, assignee?: Person | null): T {
+/**
+ * The summary/issue as it will look after `input`; `assignee` is the picked
+ * person for display, `parent` the picked parent's summary, from which the
+ * derived `epic`/`story` follow at once (the server recomputes them).
+ */
+export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateIssueInput, assignee?: Person | null, parent?: IssueSummary | null): T {
   const next: T = { ...issue }
   if (input.title !== undefined) next.title = input.title
   if (input.type !== undefined) next.type = input.type
@@ -113,31 +145,38 @@ export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateI
   if (input.report !== undefined) next.report = input.report
   if (input.projectId !== undefined) next.projectId = input.projectId
   if (input.assigneeSub !== undefined) next.assignee = input.assigneeSub === null ? null : (assignee ?? issue.assignee)
+  if (input.parentId === null) Object.assign(next, { parent: null, epic: null, story: null })
+  else if (input.parentId !== undefined && parent?.id === input.parentId) {
+    const ref = { id: parent.id, identifier: parent.identifier, title: parent.title, statusId: parent.statusId }
+    // Nearest strict ancestors: the parent itself when it is an epic/story, else the parent's own.
+    next.parent = ref
+    next.epic = parent.type === 'epic' ? ref : parent.epic
+    next.story = parent.type === 'story' ? ref : levelOf(parent.type) === 0 ? parent.story : null
+  }
   if ('description' in next && input.description !== undefined) (next as unknown as Issue).description = input.description
   return next
 }
 
-type IssueLists = InfiniteData<IssuePage, string | null>
+type IssueLists = InfiniteData<IssuePage, string | null> | IssuePage
 
-/** Writes `update` into every cached list page and the cached issue detail with this id. */
+/** Writes `update` into every cached list (paged or loaded whole) and the cached issue detail with this id. */
 function patchCaches(client: QueryClient, id: string, update: <T extends IssueSummary>(issue: T) => T) {
-  client.setQueriesData<IssueLists>({ queryKey: ISSUES_KEY }, (data) =>
-    data && 'pages' in data ? { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.map((item) => (item.id === id ? update(item) : item)) })) } : data
-  )
+  const patchPage = (page: IssuePage) => ({ ...page, items: page.items.map((item) => (item.id === id ? update(item) : item)) })
+  client.setQueriesData<IssueLists>({ queryKey: ISSUES_KEY }, (data) => (!data ? data : 'pages' in data ? { ...data, pages: data.pages.map(patchPage) } : 'items' in data ? patchPage(data) : data))
   client.setQueriesData<Issue>({ queryKey: ISSUE_KEY }, (data) => (data && data.id === id ? update(data) : data))
 }
 
-export type IssueEdit = { id: string; input: UpdateIssueInput; assignee?: Person | null }
+export type IssueEdit = { id: string; input: UpdateIssueInput; assignee?: Person | null; parent?: IssueSummary | null }
 
 export function useUpdateIssue() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ id, input }: IssueEdit) => trackerApi.issues.update(id, input),
-    onMutate: async ({ id, input, assignee }) => {
+    onMutate: async ({ id, input, assignee, parent }) => {
       await Promise.all([client.cancelQueries({ queryKey: ISSUES_KEY }), client.cancelQueries({ queryKey: ISSUE_KEY })])
       const lists = client.getQueriesData<IssueLists>({ queryKey: ISSUES_KEY })
       const details = client.getQueriesData<Issue>({ queryKey: ISSUE_KEY })
-      patchCaches(client, id, (issue) => applyIssuePatch(issue, input, assignee))
+      patchCaches(client, id, (issue) => applyIssuePatch(issue, input, assignee, parent))
       return { lists, details }
     },
     onError: (_error, _edit, snapshot) => {
@@ -162,7 +201,7 @@ export function useUpdateIssues() {
   const update = useUpdateIssue()
   return {
     ...update,
-    run: (ids: string[], input: UpdateIssueInput, assignee?: Person | null) => Promise.allSettled(ids.map((id) => update.mutateAsync({ id, input, assignee }))),
+    run: (ids: string[], input: UpdateIssueInput, assignee?: Person | null, parent?: IssueSummary | null) => Promise.allSettled(ids.map((id) => update.mutateAsync({ id, input, assignee, parent }))),
   }
 }
 

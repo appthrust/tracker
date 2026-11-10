@@ -1,26 +1,29 @@
-// ⌘/Ctrl+K command palette: navigate (lists, "Reported by me", projects,
-// views, report, settings, issues by identifier or title) and, when issues are focused or
-// X-selected, change their status, priority, assignee, labels or project
-// (typing a new name offers to create that project and move them into it).
+// ⌘/Ctrl+K command palette: navigate (lists, epics, "Reported by me",
+// projects, views, report, settings, issues by identifier or title) and, when
+// issues are focused or X-selected, change their status, priority, assignee,
+// labels or project (typing a new name offers to create that project and
+// move them into it), or put them in an epic or story (issues the hierarchy
+// forbids are skipped and counted in the summary toast).
 // ↑/↓ move, Enter runs, Backspace on an empty query goes back, Escape closes.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound, UserRoundPen } from 'lucide-react'
+import { ArrowRight, BookMarked, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound, UserRoundPen, Zap } from 'lucide-react'
 import { Dialog as RDialog } from 'radix-ui'
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { issueSearchQuery, useProjectMutations, useUpdateIssues } from '../../api/queries'
+import { epicsQuery, issueSearchQuery, storiesQuery, useProjectMutations, useUpdateIssues } from '../../api/queries'
 import type { IssueSummary, Person } from '../../api/tracker'
 import { setLanguage, useText } from '../../i18n'
 import { PRIORITIES } from '../../model/issues'
 import { listHref, paths } from '../../routes/paths'
 import { cn, errorDetail, errorMessageId, Kbd, showToast, splitHref } from '../../ui'
+import { useBundling } from '../issues/hierarchy'
 import { assigneeValue, usePeopleOptions } from '../issues/properties'
 import { nextProjectColor, ProjectSwatch } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
-import { ColorDot, PriorityIcon, StatusIcon } from '../issues/visuals'
+import { ColorDot, PriorityIcon, StatusIcon, TypeIcon } from '../issues/visuals'
 import { commandTargets, setUi, uiStore, useUi } from '../ui-state'
 
-type Page = 'root' | 'status' | 'priority' | 'assignee' | 'labels' | 'project'
+type Page = 'root' | 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'epic' | 'story'
 type Command = { id: string; group: string; label: string; icon?: ReactNode; hint?: string; checked?: boolean; run: () => 'close' | 'stay' }
 
 export function CommandPalette() {
@@ -44,6 +47,9 @@ function Palette() {
   const updates = useUpdateIssues()
   const people = usePeopleOptions(page === 'assignee' ? query : '', page === 'assignee', current.map((issue) => issue.assignee))
   const search = useQuery({ ...issueSearchQuery(query), enabled: page === 'root' && query.trim().length > 0 })
+  const epics = useQuery({ ...epicsQuery, enabled: page === 'epic' })
+  const stories = useQuery({ ...storiesQuery, enabled: page === 'story' })
+  const bundle = useBundling()
 
   const close = () => setUi({ palette: false })
   const go = (href: string) => () => {
@@ -114,6 +120,27 @@ function Palette() {
           },
         }
       })
+    if (page === 'epic' || page === 'story') {
+      const groupBy = page
+      const groups = (page === 'epic' ? epics.data?.items : stories.data?.items) ?? []
+      return [
+        {
+          id: `${page}-none`,
+          group: groupActions,
+          label: page === 'epic' ? t('tracker.palette.removeEpic') : t('tracker.palette.removeStory'),
+          icon: <CircleDashed />,
+          run: () => (bundle(current, groupBy, null), 'close' as const),
+        },
+        ...groups.map((group) => ({
+          id: `${page}-${group.id}`,
+          group: groupActions,
+          label: `${group.identifier} ${group.title}`,
+          icon: <TypeIcon type={group.type} />,
+          checked: current.length > 0 && current.every((issue) => issue[groupBy]?.id === group.id),
+          run: () => (bundle(current, groupBy, group), 'close' as const),
+        })),
+      ]
+    }
     if (page === 'project') {
       const typed = query.trim()
       const moveTo = (projectId: string | null) => apply({ projectId })
@@ -174,7 +201,9 @@ function Palette() {
         { id: 'act-priority', group: groupActions, label: t('tracker.property.changePriority'), icon: <SignalHigh />, run: sub('priority') },
         { id: 'act-assignee', group: groupActions, label: t('tracker.property.changeAssignee'), icon: <UserRound />, run: sub('assignee') },
         { id: 'act-labels', group: groupActions, label: t('tracker.property.changeLabels'), icon: <Tag />, run: sub('labels') },
-        { id: 'act-project', group: groupActions, label: t('tracker.project.change'), icon: <FolderKanban />, run: sub('project') }
+        { id: 'act-project', group: groupActions, label: t('tracker.project.change'), icon: <FolderKanban />, run: sub('project') },
+        { id: 'act-epic', group: groupActions, label: t('tracker.palette.setEpic'), icon: <Zap />, run: sub('epic') },
+        { id: 'act-story', group: groupActions, label: t('tracker.palette.setStory'), icon: <BookMarked />, run: sub('story') }
       )
       if (current.length === 1) list.push({ id: 'act-open', group: groupActions, label: t('tracker.palette.openIssue', { identifier: current[0]!.identifier }), icon: <ArrowRight />, run: go(paths.issue(current[0]!.identifier)) })
     }
@@ -184,6 +213,7 @@ function Palette() {
       { id: 'nav-report', group: nav, label: t('tracker.nav.report'), icon: <Bug />, hint: '⇧R', run: go(paths.report) },
       { id: 'nav-issues', group: nav, label: t('tracker.nav.issues'), icon: <List />, run: go(paths.home) },
       { id: 'nav-board', group: nav, label: t('tracker.nav.board'), icon: <Columns3 />, run: go(paths.board) },
+      { id: 'nav-epics', group: nav, label: t('tracker.palette.goEpics'), icon: <Zap />, run: go(paths.epics) },
       { id: 'nav-reported', group: nav, label: t('tracker.palette.goReported'), icon: <UserRoundPen />, run: go(paths.reported) },
       ...activeProjects.map((project) => ({
         id: `nav-project-${project.id}`,

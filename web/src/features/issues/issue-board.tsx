@@ -1,71 +1,154 @@
 // One column per status. Cards drag between columns (native drag and drop) to
 // change status; the status chip and the command palette do the same from the
-// keyboard. Cards show their project while the board spans projects.
+// keyboard. Cards show their project while the board spans projects. With a
+// grouping the board has one swimlane per epic or story (same columns, the
+// lane collapsible): dropping a card in another lane makes that lane's issue
+// its parent; the "No epic/story" lane takes it out only when that grouping
+// issue is its direct parent. Drops the hierarchy forbids are refused with a
+// toast.
 import { Plus } from 'lucide-react'
-import { useState, type DragEvent } from 'react'
-import type { IssueSummary } from '../../api/tracker'
+import { useState, type DragEvent, type ReactNode } from 'react'
+import type { IssueSummary, UpdateIssueInput } from '../../api/tracker'
 import { useText } from '../../i18n'
+import { isSummary, levelOf, NO_GROUP, type IssueSection } from '../../model/issues'
 import { paths } from '../../routes/paths'
-import { cn, HrefLink } from '../../ui'
+import { cn, HrefLink, showToast } from '../../ui'
 import { setUi, useUi } from '../ui-state'
-import { isPlainClick, type IssueGroup } from './issue-list'
+import { GroupHeading, hierarchyProblem } from './hierarchy'
+import { isPlainClick, type GroupedProps, type IssueGroup } from './issue-list'
 import { AssigneePicker, IssueProjectPicker, LabelPill, PriorityPicker, useIssueEditor } from './properties'
 import { useReference } from './use-reference'
-import { StatusIcon, TypeIcon } from './visuals'
+import { ProgressBar, StatusIcon, TypeIcon } from './visuals'
 
 const DRAG_TYPE = 'application/x-tracker-issue'
 
-export function IssueBoard({ columns, onOpen, onNewIssue, showProject }: { columns: IssueGroup[]; onOpen: (issue: IssueSummary) => void; onNewIssue: (statusId: string) => void; showProject: boolean }) {
+/** A board row: its section (the whole board without a grouping) split into status columns. */
+export type BoardLane = { section: IssueSection; columns: IssueGroup[] }
+
+type BoardProps = { lanes: BoardLane[]; onOpen: (issue: { identifier: string }) => void; onNewIssue: (statusId: string) => void; showProject: boolean }
+
+export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'onOpen' | 'showProject'> }) {
   const { t } = useText()
   const { update } = useIssueEditor()
   const [over, setOver] = useState<string | null>(null)
-  const drop = (event: DragEvent, statusId: string) => {
+  const { lanes, onOpen, onNewIssue, showProject, grouped } = props
+  const drop = (event: DragEvent, laneKey: string, statusId: string) => {
     event.preventDefault()
     setOver(null)
     const issueId = event.dataTransfer.getData(DRAG_TYPE)
-    const issue = columns.flatMap((column) => column.issues).find((candidate) => candidate.id === issueId)
-    if (issue && issue.statusId !== statusId) update({ id: issue.id, input: { statusId } })
+    const issue = lanes.flatMap((lane) => lane.columns.flatMap((column) => column.issues)).find((candidate) => candidate.id === issueId)
+    const lane = lanes.find((candidate) => candidate.section.key === laneKey)
+    if (!issue || !lane) return
+    const input: UpdateIssueInput = {}
+    let parent: IssueSummary | null | undefined
+    if (issue.statusId !== statusId) input.statusId = statusId
+    const from = grouped ? (issue[grouped.groupBy]?.id ?? NO_GROUP) : laneKey
+    if (grouped && from !== laneKey) {
+      const refuse = (detail: string) => showToast({ tone: 'error', title: t('tracker.hierarchy.moveRefused', { identifier: issue.identifier }), detail })
+      const header = lane.section.header
+      if (!header) {
+        // Out of the group only when the grouping issue is the direct parent; a deeper parent stays and keeps it there.
+        if (issue.parent?.id !== from) return refuse(t('tracker.hierarchy.otherParent', { identifier: issue.parent?.identifier ?? '' }))
+        input.parentId = null
+        parent = null
+      } else {
+        const problem = hierarchyProblem(t, issue, { id: header.id, type: grouped.groupBy })
+        if (problem) return refuse(problem)
+        input.parentId = header.id
+        parent = isSummary(header) ? header : undefined
+      }
+    }
+    if (Object.keys(input).length > 0) update({ id: issue.id, input, parent })
   }
+  const column = (laneKey: string, { status, issues }: IssueGroup, head: ReactNode, fill: boolean) => {
+    const target = `${laneKey}:${status.id}`
+    return (
+      <section
+        key={status.id}
+        aria-label={head ? undefined : status.name}
+        aria-labelledby={head ? `column-${status.id}` : undefined}
+        data-status-column={status.id}
+        data-lane={laneKey}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes(DRAG_TYPE)) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+          setOver(target)
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver((current) => (current === target ? null : current))
+        }}
+        onDrop={(event) => drop(event, laneKey, status.id)}
+        className={cn('flex w-72 shrink-0 flex-col rounded-lg bg-stone-100/70 transition-colors', over === target && 'bg-accent-soft ring-1 ring-accent-line')}
+      >
+        {head}
+        <ul className={cn('flex min-h-16 flex-col gap-1.5 px-2 pb-2', fill ? 'flex-1 overflow-y-auto' : 'pt-2')}>
+          {issues.map((issue) => (
+            <BoardCard key={issue.id} issue={issue} onOpen={onOpen} showProject={showProject} />
+          ))}
+        </ul>
+      </section>
+    )
+  }
+  const columnHead = ({ status, issues }: IssueGroup, count = issues.length) => (
+    <h2 id={`column-${status.id}`} className="flex h-10 shrink-0 items-center gap-2 px-3 text-[13px] font-medium text-stone-700">
+      <StatusIcon status={status} />
+      <span className="truncate">{status.name}</span>
+      <span className="text-stone-400 tabular-nums">{count}</span>
+      <button
+        type="button"
+        aria-label={t('tracker.list.newInStatus', { status: status.name })}
+        title={t('tracker.list.newInStatus', { status: status.name })}
+        onClick={() => onNewIssue(status.id)}
+        className="ml-auto flex size-6 items-center justify-center rounded text-stone-400 hover:bg-stone-200 hover:text-stone-700"
+      >
+        <Plus aria-hidden className="size-3.5" />
+      </button>
+    </h2>
+  )
+
+  if (!grouped) {
+    const lane = lanes[0]
+    return (
+      <div className="flex h-full min-h-0 gap-3 overflow-x-auto px-4 pt-3 pb-6 sm:px-6">
+        {lane?.columns.map((group) => column(lane.section.key, group, columnHead(group), true))}
+      </div>
+    )
+  }
+  // Swimlanes: one sticky row of status headings (totals across lanes), then each lane's heading and its cells.
+  const totals = lanes[0]?.columns.map((group, index) => ({ ...group, count: lanes.reduce((sum, lane) => sum + (lane.columns[index]?.issues.length ?? 0), 0) })) ?? []
   return (
-    <div className="flex h-full min-h-0 gap-3 overflow-x-auto px-4 pt-3 pb-6 sm:px-6">
-      {columns.map(({ status, issues }) => (
-        <section
-          key={status.id}
-          aria-labelledby={`column-${status.id}`}
-          data-status-column={status.id}
-          onDragOver={(event) => {
-            if (!event.dataTransfer.types.includes(DRAG_TYPE)) return
-            event.preventDefault()
-            event.dataTransfer.dropEffect = 'move'
-            setOver(status.id)
-          }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver((current) => (current === status.id ? null : current))
-          }}
-          onDrop={(event) => drop(event, status.id)}
-          className={cn('flex w-72 shrink-0 flex-col rounded-lg bg-stone-100/70 transition-colors', over === status.id && 'bg-accent-soft ring-1 ring-accent-line')}
-        >
-          <h2 id={`column-${status.id}`} className="flex h-10 shrink-0 items-center gap-2 px-3 text-[13px] font-medium text-stone-700">
-            <StatusIcon status={status} />
-            <span className="truncate">{status.name}</span>
-            <span className="text-stone-400 tabular-nums">{issues.length}</span>
-            <button
-              type="button"
-              aria-label={t('tracker.list.newInStatus', { status: status.name })}
-              title={t('tracker.list.newInStatus', { status: status.name })}
-              onClick={() => onNewIssue(status.id)}
-              className="ml-auto flex size-6 items-center justify-center rounded text-stone-400 hover:bg-stone-200 hover:text-stone-700"
-            >
-              <Plus aria-hidden className="size-3.5" />
-            </button>
-          </h2>
-          <ul className="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
-            {issues.map((issue) => (
-              <BoardCard key={issue.id} issue={issue} onOpen={onOpen} showProject={showProject} />
-            ))}
-          </ul>
-        </section>
-      ))}
+    <div className="h-full min-h-0 overflow-auto pb-6">
+      <div className="w-max min-w-full">
+        <div className="sticky top-0 z-[2] flex gap-3 border-b border-line bg-white px-4 py-1 sm:px-6">
+          {totals.map((group) => (
+            <div key={group.status.id} className="w-72 shrink-0">
+              {columnHead(group, group.count)}
+            </div>
+          ))}
+        </div>
+        {lanes.map((lane) => {
+          const collapsed = grouped.isCollapsed(lane.section.key)
+          const count = lane.columns.reduce((sum, group) => sum + group.issues.length, 0)
+          return (
+            <section key={lane.section.key} aria-label={lane.section.header ? `${lane.section.header.identifier} ${lane.section.header.title}` : undefined} className="border-b border-line">
+              <GroupHeading
+                section={lane.section}
+                groupBy={grouped.groupBy}
+                count={count}
+                collapsed={collapsed}
+                onToggle={() => grouped.onToggle(lane.section.key)}
+                onOpen={onOpen}
+                onNew={() => grouped.onNewInGroup(lane.section)}
+                variant="lane"
+              />
+              <div id={`group-rows-${lane.section.key}`} hidden={collapsed} className="flex gap-3 px-4 pb-3 sm:px-6">
+                {collapsed ? null : lane.columns.map((group) => column(lane.section.key, group, null, false))}
+              </div>
+            </section>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -125,6 +208,7 @@ function BoardCard({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen
         >
           {issue.title}
         </HrefLink>
+        {levelOf(issue.type) > 0 && issue.progress ? <ProgressBar progress={issue.progress} className="mt-1.5" /> : null}
         <div className="mt-2 flex flex-wrap items-center gap-1">
           <PriorityPicker issue={issue} />
           {showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}

@@ -1,29 +1,32 @@
 // `/`, `/board`, `/reported` and `/views/<id>`: project scope switcher, filter
 // bar, list or board, and the side panel (`?issue=APT-12`). Keys: J/K (or
 // ↓/↑) move, X selects, Enter opens the panel, Esc closes it (then clears the
-// selection). The filter, sort, project scope and open issue live in the URL
-// so a link reproduces the screen. On `/`, `/board` and `/reported` a single
-// project in the filter travels as `?project=` (paths.ts) and is the scope new
-// issues default to; on a view it stays inside the view's filter. `/reported`
-// is the built-in "Reported by me" view: it behaves like a saved view (its
-// filter, sort and layout are defaults the URL overrides, with a reset) but
-// nothing is stored, so every user has it even when no views exist.
-import { useInfiniteQuery, keepPreviousData } from '@tanstack/react-query'
+// selection). The filter, sort, grouping, project scope and open issue live
+// in the URL so a link reproduces the screen. On `/`, `/board` and
+// `/reported` a single project in the filter travels as `?project=`
+// (paths.ts) and is the scope new issues default to; on a view it stays
+// inside the view's filter. `/reported` is the built-in "Reported by me"
+// view: it behaves like a saved view (its filter, sort and layout are
+// defaults the URL overrides, with a reset) but nothing is stored, so every
+// user has it even when no views exist. Grouping by epic or story (`?group=`,
+// a view's `groupBy`) loads every matching issue, so groups and counts are
+// complete; board lanes after the first few start collapsed.
+import { useInfiniteQuery, useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, Bookmark, Columns3, List, MoreHorizontal, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { issuesQuery, useViewMutations } from '../../api/queries'
-import type { Filter, IssueSummary, Sort, View, ViewLayout } from '../../api/tracker'
+import { allIssuesQuery, epicsQuery, issuesQuery, storiesQuery, useViewMutations } from '../../api/queries'
+import type { Filter, GroupBy, Sort, View, ViewLayout } from '../../api/tracker'
 import { useText } from '../../i18n'
-import { compactFilter, isEmptyFilter } from '../../model/issues'
-import { filterParam, paths, parseFilterParam, parseLayoutParam, parseSortParam, type ListSearch } from '../../routes/paths'
+import { compactFilter, groupIssues, isEmptyFilter, isSummary, type IssueSection } from '../../model/issues'
+import { filterParam, paths, parseFilterParam, parseGroupParam, parseLayoutParam, parseSortParam, type ListSearch } from '../../routes/paths'
 import { ActionError, Button, ConfirmDialog, EmptyState, HrefLink, Kbd, LinkButton, Loading, LoadFailed, useDocumentTitle, cn } from '../../ui'
 import { isPlainShortcut, MOD_KEY, setUi, useUi } from '../ui-state'
 import { FilterBar } from './filter-bar'
-import { IssueBoard } from './issue-board'
+import { IssueBoard, type BoardLane } from './issue-board'
 import { IssuePanel } from './issue-detail'
-import { IssueList, type IssueGroup } from './issue-list'
+import { GroupedIssueList, IssueList, type IssueGroup } from './issue-list'
 import { NO_PROJECT, ProjectScopeSwitcher } from './projects'
 import { SaveViewDialog } from './save-view-dialog'
 import { useReference } from './use-reference'
@@ -31,7 +34,10 @@ import { useReference } from './use-reference'
 export type IssuesPageKind = { kind: 'all' } | { kind: 'board' } | { kind: 'reported' } | { kind: 'view'; view: View }
 
 /** The built-in "Reported by me" view (API.md v0.1.2): the caller's reports, newest first. */
-export const REPORTED_VIEW: { filter: Filter; sort: Sort; layout: ViewLayout } = { filter: { reporter: ['me'] }, sort: 'created', layout: 'list' }
+export const REPORTED_VIEW: { filter: Filter; sort: Sort; layout: ViewLayout; groupBy: GroupBy } = { filter: { reporter: ['me'] }, sort: 'created', layout: 'list', groupBy: 'none' }
+
+/** Board lanes open by default; the rest start collapsed so a large board stays quick. */
+const OPEN_LANES = 3
 
 const sameFilter = (a: Filter, b: Filter) => JSON.stringify(compactFilter(a)) === JSON.stringify(compactFilter(b))
 
@@ -47,6 +53,7 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
   const filter = useMemo(() => (!view && search.project ? { ...base, project: [search.project] } : base), [base, search.project, view])
   const sort: Sort = parseSortParam(search.sort) ?? preset?.sort ?? 'updated'
   const layout: ViewLayout = page.kind === 'board' ? 'board' : page.kind === 'all' ? 'list' : (parseLayoutParam(search.layout) ?? preset!.layout)
+  const groupBy: GroupBy = parseGroupParam(search.group) ?? preset?.groupBy ?? 'none'
   const title = view ? view.name : page.kind === 'board' ? t('tracker.nav.board') : page.kind === 'reported' ? t('tracker.nav.reported') : t('tracker.nav.issues')
   // One project in the filter is the scope; several show as "N projects" and keep the project chips on rows.
   const scope = filter.project?.length === 1 ? filter.project[0]! : null
@@ -79,13 +86,35 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
     if (!view) setUi({ scope: search.project ?? null })
   }, [view, search.project])
 
-  const query = useInfiniteQuery({ ...issuesQuery(filter, sort), placeholderData: keepPreviousData })
-  const items = useMemo(() => query.data?.pages.flatMap((pageData) => pageData.items) ?? [], [query.data])
+  const grouped = groupBy !== 'none'
+  // Without a grouping the list pages ("もっと見る"); grouped, every matching issue loads so no group is cut short.
+  const paged = useInfiniteQuery({ ...issuesQuery(filter, sort), placeholderData: keepPreviousData, enabled: !grouped })
+  const whole = useQuery({ ...allIssuesQuery(filter, sort), placeholderData: keepPreviousData, enabled: grouped })
+  const query = grouped ? whole : paged
+  // Group headers need the grouping issues' status and progress even when the filter leaves them out.
+  const known = useQuery({ ...(groupBy === 'story' ? storiesQuery : epicsQuery), enabled: grouped })
+  const items = useMemo(() => (grouped ? (whole.data?.items ?? []) : (paged.data?.pages.flatMap((pageData) => pageData.items) ?? [])), [grouped, whole.data, paged.data])
   const groups: IssueGroup[] = useMemo(
     () => statuses.map((status) => ({ status, issues: items.filter((issue) => issue.statusId === status.id) })).filter((group) => layout === 'board' || group.issues.length > 0),
     [statuses, items, layout]
   )
-  const ordered = useMemo(() => groups.flatMap((group) => group.issues), [groups])
+  const sections: IssueSection[] = useMemo(() => groupIssues(items, groupBy, known.data?.items), [items, groupBy, known.data])
+  const lanes: BoardLane[] = useMemo(
+    () => sections.map((section) => ({ section, columns: statuses.map((status) => ({ status, issues: section.issues.filter((issue) => issue.statusId === status.id) })) })),
+    [sections, statuses]
+  )
+  // Explicit open/closed choices per grouping and section; untouched sections follow the default.
+  const [toggled, setToggled] = useState<Record<string, boolean>>({})
+  const isCollapsed = useCallback(
+    (key: string) => toggled[`${groupBy}:${key}`] ?? (layout === 'board' && sections.findIndex((section) => section.key === key) >= OPEN_LANES),
+    [toggled, groupBy, layout, sections]
+  )
+  const onToggle = useCallback((key: string) => setToggled((current) => ({ ...current, [`${groupBy}:${key}`]: !isCollapsed(key) })), [groupBy, isCollapsed])
+  const ordered = useMemo(() => {
+    if (!grouped) return groups.flatMap((group) => group.issues)
+    const open = lanes.filter((lane) => !isCollapsed(lane.section.key))
+    return layout === 'board' ? open.flatMap((lane) => lane.columns.flatMap((column) => column.issues)) : open.flatMap((lane) => lane.section.issues)
+  }, [grouped, groups, lanes, layout, isCollapsed])
 
   // Publish what is on screen for the palette and keyboard commands.
   useEffect(() => {
@@ -97,7 +126,7 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
   }, [ordered])
   useEffect(() => () => setUi({ context: [], focusedId: null, selectedIds: [] }), [])
 
-  const open = useCallback((issue: IssueSummary) => setSearch({ issue: issue.identifier }, false), [setSearch])
+  const open = useCallback((issue: { identifier: string }) => setSearch({ issue: issue.identifier }, false), [setSearch])
   const close = useCallback(() => setSearch({ issue: undefined }, false), [setSearch])
   const focusedId = useUi((state) => state.focusedId)
 
@@ -141,9 +170,18 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
   const [saving, setSaving] = useState(false)
   // New issues land in the scoped project while it is active; "No project", archived or several projects give none.
   const newIssue = (statusId?: string) => setUi({ newIssue: { statusId, projectId: scopeProject && !scopeProject.archived ? scopeProject.id : null } })
-  const dirty = preset !== undefined && ((search.filter !== undefined && !sameFilter(base, preset.filter)) || (search.sort !== undefined && sort !== preset.sort) || (search.layout !== undefined && layout !== preset.layout))
-  const reset = () => setSearch({ filter: undefined, sort: undefined, layout: undefined })
+  // "+" on a group: its epic/story becomes the parent (a header known only by ref has no type yet, so none is preset).
+  const newInGroup = (section: IssueSection) =>
+    setUi({ newIssue: { projectId: scopeProject && !scopeProject.archived ? scopeProject.id : null, parent: section.header && isSummary(section.header) ? section.header : undefined } })
+  const dirty =
+    preset !== undefined &&
+    ((search.filter !== undefined && !sameFilter(base, preset.filter)) ||
+      (search.sort !== undefined && sort !== preset.sort) ||
+      (search.layout !== undefined && layout !== preset.layout) ||
+      (search.group !== undefined && groupBy !== preset.groupBy))
+  const reset = () => setSearch({ filter: undefined, sort: undefined, layout: undefined, group: undefined })
   const onlyScope = scope !== null && Object.keys(compactFilter(filter)).length === 1
+  const groupedProps = groupBy !== 'none' ? { groupBy, isCollapsed, onToggle, onNewInGroup: newInGroup } : undefined
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -154,7 +192,7 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
         <span className="shrink-0 text-xs text-stone-400 tabular-nums max-sm:hidden">{query.data ? t('tracker.list.count', { count: items.length }) : null}</span>
         <div className="ml-auto flex items-center gap-1.5">
           <LayoutSwitch presetLayout={preset?.layout} layout={layout} search={search} setSearch={setSearch} />
-          {view ? <ViewMenu view={view} dirty={dirty} filter={filter} sort={sort} layout={layout} reset={reset} /> : null}
+          {view ? <ViewMenu view={view} dirty={dirty} filter={filter} sort={sort} layout={layout} groupBy={groupBy} reset={reset} /> : null}
           {page.kind === 'reported' && dirty ? (
             <Button size="sm" tone="ghost" icon={<RotateCcw />} onClick={reset}>
               {t('tracker.view.reset')}
@@ -171,6 +209,8 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
         sort={sort}
         onFilter={onFilter}
         onSort={(next) => setSearch({ sort: next === (preset?.sort ?? 'updated') && !view ? undefined : next })}
+        groupBy={groupBy}
+        onGroupBy={(next) => setSearch({ group: next === (preset?.groupBy ?? 'none') ? undefined : next })}
         actions={
           <Button size="sm" tone="ghost" icon={<Bookmark />} onClick={() => setSaving(true)} className="h-7 md:h-7">
             {t('tracker.view.saveAs')}
@@ -251,13 +291,17 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
               )}
             </div>
           ) : layout === 'list' ? (
-            <IssueList groups={groups} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
+            groupedProps ? (
+              <GroupedIssueList sections={sections} {...groupedProps} onOpen={open} showProject={scope === null} />
+            ) : (
+              <IssueList groups={groups} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
+            )
           ) : (
-            <IssueBoard columns={groups} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
+            <IssueBoard lanes={groupedProps ? lanes : [{ section: sections[0]!, columns: groups }]} grouped={groupedProps} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
           )}
-          {query.hasNextPage ? (
+          {!grouped && paged.hasNextPage ? (
             <div className="flex justify-center py-4">
-              <Button size="sm" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+              <Button size="sm" loading={paged.isFetchingNextPage} onClick={() => void paged.fetchNextPage()}>
                 {t('tracker.common.loadMore')}
               </Button>
             </div>
@@ -266,7 +310,7 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
         </div>
         {search.issue ? <IssuePanel identifier={search.issue} onClose={close} /> : null}
       </div>
-      <SaveViewDialog open={saving} onOpenChange={setSaving} filter={filter} sort={sort} layout={layout} />
+      <SaveViewDialog open={saving} onOpenChange={setSaving} filter={filter} sort={sort} layout={layout} groupBy={groupBy} />
     </div>
   )
 }
@@ -287,6 +331,7 @@ function LayoutSwitch({ presetLayout, layout, search, setSearch }: { presetLayou
     const query = new URLSearchParams()
     if (search.filter) query.set('filter', search.filter)
     if (search.sort) query.set('sort', search.sort)
+    if (search.group) query.set('group', search.group)
     if (search.project) query.set('project', search.project)
     const href = query.toString() ? `${target}?${query}` : target
     return (
@@ -303,8 +348,8 @@ function LayoutSwitch({ presetLayout, layout, search, setSearch }: { presetLayou
   )
 }
 
-/** Update (when the filter changed), reset and delete for a saved view; owners edit private views, Admins shared ones. */
-function ViewMenu({ view, dirty, filter, sort, layout, reset }: { view: View; dirty: boolean; filter: Filter; sort: Sort; layout: ViewLayout; reset: () => void }) {
+/** Update (when the filter, sort, layout or grouping changed), reset and delete for a saved view; owners edit private views, Admins shared ones. */
+function ViewMenu({ view, dirty, filter, sort, layout, groupBy, reset }: { view: View; dirty: boolean; filter: Filter; sort: Sort; layout: ViewLayout; groupBy: GroupBy; reset: () => void }) {
   const { t } = useText()
   const navigate = useNavigate()
   const { me } = useReference()
@@ -319,7 +364,7 @@ function ViewMenu({ view, dirty, filter, sort, layout, reset }: { view: View; di
             {t('tracker.view.reset')}
           </Button>
           {canEdit ? (
-            <Button size="sm" loading={update.isPending} onClick={() => update.mutate({ id: view.id, input: { filter: compactFilter(filter), sort, layout } }, { onSuccess: reset })}>
+            <Button size="sm" loading={update.isPending} onClick={() => update.mutate({ id: view.id, input: { filter: compactFilter(filter), sort, layout, groupBy } }, { onSuccess: reset })}>
               {t('tracker.view.update')}
             </Button>
           ) : null}

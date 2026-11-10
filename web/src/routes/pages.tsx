@@ -4,6 +4,7 @@ import { useSuspenseQuery } from '@tanstack/react-query'
 import { createRoute, notFound, redirect } from '@tanstack/react-router'
 import { issueQuery, viewsQuery } from '../api/queries'
 import { IssuePage } from '../features/issues/issue-detail'
+import { EpicsPage } from '../features/issues/epics-page'
 import { IssuesPage } from '../features/issues/issues-page'
 import { ReportPage } from '../features/report/report-page'
 import { SettingsPage, type SettingsTab } from '../features/settings/settings-page'
@@ -34,6 +35,15 @@ export const reportedRoute = createRoute({
   validateSearch: validateListSearch,
   component: function ReportedRoute() {
     return <IssuesPage page={{ kind: 'reported' }} path={paths.reported} search={reportedRoute.useSearch()} />
+  },
+})
+
+export const epicsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/epics',
+  validateSearch: (search: Record<string, unknown>): { project?: string } => (typeof search.project === 'string' && search.project ? { project: search.project } : {}),
+  component: function EpicsRoute() {
+    return <EpicsPage project={epicsRoute.useSearch().project} />
   },
 })
 
@@ -95,6 +105,7 @@ export const routeTree = rootRoute.addChildren([
   listRoute,
   boardRoute,
   reportedRoute,
+  epicsRoute,
   viewRoute,
   issueRoute,
   reportRoute,

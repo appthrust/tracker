@@ -5,10 +5,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { CircleDashed, Tag, UserRound } from 'lucide-react'
 import { useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react'
-import { peopleQuery, useUpdateIssue, type IssueEdit } from '../../api/queries'
-import type { IssueSummary, IssueType, Person, Priority } from '../../api/tracker'
+import { childrenQuery, peopleQuery, useUpdateIssue, type IssueEdit } from '../../api/queries'
+import type { Issue, IssueSummary, IssueType, Person, Priority } from '../../api/tracker'
 import { useText } from '../../i18n'
-import { ISSUE_TYPES, PRIORITIES } from '../../model/issues'
+import { canBeType, ISSUE_TYPES, parentLevelOf, PRIORITIES } from '../../model/issues'
 import { Avatar, cn, errorDetail, errorMessageId, Picker, showToast, type PickerOption } from '../../ui'
 import { ProjectPicker, ProjectPill, ProjectSwatch } from './projects'
 import { useReference } from './use-reference'
@@ -94,11 +94,20 @@ export function PriorityPicker({ issue, variant = 'chip' }: { issue: IssueSummar
   )
 }
 
-export function TypePicker({ issue }: { issue: IssueSummary }) {
+/** Type of one issue. Choices the hierarchy forbids here (against its parent and its children) are shown disabled. */
+export function TypePicker({ issue }: { issue: Issue }) {
   const { t } = useText()
   const { update } = useIssueEditor()
+  const children = useQuery({ ...childrenQuery(issue.id), enabled: issue.children.length > 0 })
+  const childTypes = (children.data?.items ?? []).map((child) => child.type)
+  // Until the children's types are known, only the current type is safe to offer.
+  const known = issue.children.length === 0 || children.isSuccess
+  const parentLevel = parentLevelOf(issue)
   // bug ↔ other needs a report (API.md); switching to bug happens through the report editor in the detail.
-  const options: PickerOption[] = ISSUE_TYPES.filter((type) => type !== 'bug' || issue.type === 'bug').map((type) => ({ value: type, label: t(`tracker.type.${type}`), icon: <TypeIcon type={type} /> }))
+  const options: PickerOption[] = ISSUE_TYPES.filter((type) => type !== 'bug' || issue.type === 'bug').map((type) => {
+    const allowed = type === issue.type || (known && canBeType(type, parentLevel, childTypes))
+    return { value: type, label: t(`tracker.type.${type}`), icon: <TypeIcon type={type} />, disabled: !allowed, detail: allowed ? undefined : t('tracker.type.notAllowed') }
+  })
   return (
     <Picker
       label={t('tracker.property.changeType')}

@@ -26,7 +26,9 @@ In scope (v1):
 
 - One workspace per installation (= the installing Project).
 - Issues with identifier `KEY-n`, title, Markdown description, type, priority,
-  status, assignee, labels, due date, parent/child, blocking links.
+  status, assignee, labels, due date, parent/child, blocking links; since 0.1.7 the parent link also
+  carries epics and user stories (epic › story › work item, [API.md](./API.md)
+  "Epics and stories").
 - A structured **bug report** form that fills the AppThrust-specific
   `report` fields.
 - Comments, attachments (pasted screenshots), and a full activity timeline.
@@ -70,7 +72,7 @@ erDiagram
 | **Workspace** | Team Admin via settings | created on first request (one row, id = `PLATFORM_PROJECT_ID`) | `key` matches `^[A-Z][A-Z0-9]{1,5}$`, default `APT`; changing the key renames display identifiers but `issue.number` never changes. |
 | **Status** | Team Admin | seeded on workspace creation: Backlog, Todo, In Progress, In Review, Done, Canceled | Every status has exactly one `category ∈ {backlog, unstarted, started, completed, canceled}`; each category keeps ≥ 1 status; a status with issues cannot be deleted (409, move issues first). |
 | **Label** | Team Admin | CRUD | unique name per workspace; colour from a fixed palette. |
-| **Issue** | any signed-in user | `number` from a per-workspace sequence; soft-deleted by Admin only | `title` 1–200 chars; `description` ≤ 50 KiB Markdown; `type ∈ {bug, feature, task}`; `priority ∈ {urgent, high, medium, low, none}`; `parent` must not create a cycle; `blocks` is symmetric-stored as `blocked_by`. `report` is present iff `type = bug`. |
+| **Issue** | any signed-in user | `number` from a per-workspace sequence; soft-deleted by Admin only | `title` 1–200 chars; `description` ≤ 50 KiB Markdown; `type ∈ {epic, story, bug, feature, task}`; an epic has no parent, a story's parent is an epic, a work item's parent is any issue (`domain.ValidateHierarchy`); `priority ∈ {urgent, high, medium, low, none}`; `parent` must not create a cycle; `blocks` is symmetric-stored as `blocked_by`. `report` is present iff `type = bug`. |
 | **Report** (embedded in Issue, `jsonb`) | reporter | written on create, editable | `environment` (free label, suggestions: `appthrust.ink`, `craftsman`, `appthrust.dev`, `local`), `surface ∈ {dashboard, platform-api, apth, builder-console, console-app, cluster, other}`, `version` (what the reporter saw on `/releasez`, optional), `steps`, `expected`, `actual` (each ≤ 4 KiB). |
 | **Comment** | author; Admin may delete | append | ≤ 20 KiB Markdown; edits keep `edited_at`. |
 | **Attachment** | uploader | immutable | `bytea` ≤ 2 MiB, ≤ 10 per issue, `image/png|image/jpeg|image/webp|text/plain|application/json`; served only to signed-in users of the same workspace. |

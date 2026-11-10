@@ -118,7 +118,7 @@ func TestReporterFilterValidation(t *testing.T) {
 			filter := Filter{Reporter: tc.reporter}
 			for _, err := range []error{
 				ValidateFilter(filter),
-				ValidateView(View{Name: "Reported", Layout: "list", Sort: SortCreated, Filter: filter}),
+				ValidateView(View{Name: "Reported", Layout: "list", GroupBy: "none", Sort: SortCreated, Filter: filter}),
 			} {
 				if tc.message == "" {
 					require.NoError(t, err)
@@ -146,5 +146,55 @@ func TestIssueAndAttachmentLimits(t *testing.T) {
 		valid bool
 	}{{"image/png", 2 << 20, true}, {"text/plain", 1, true}, {"application/json", 0, false}, {"image/png", (2 << 20) + 1, false}, {"text/html", 1, false}} {
 		require.Equal(t, tc.valid, ValidateAttachment("file", tc.media, tc.size) == nil)
+	}
+}
+
+func TestHierarchy(t *testing.T) {
+	for _, tc := range []struct {
+		kind  string
+		level int
+	}{{"epic", 2}, {"story", 1}, {"bug", 0}, {"feature", 0}, {"task", 0}, {"unknown", 0}} {
+		require.Equal(t, tc.level, Level(tc.kind))
+	}
+	for _, child := range []string{"epic", "story", "bug", "feature", "task"} {
+		for _, parent := range []string{"", "epic", "story", "bug", "feature", "task"} {
+			t.Run(child+"/"+parent, func(t *testing.T) {
+				valid := parent == "" || child == "bug" || child == "feature" || child == "task" || (child == "story" && parent == "epic")
+				require.Equal(t, valid, ValidateHierarchy(child, parent) == nil)
+			})
+		}
+		item := Issue{IssueSummary: IssueSummary{Title: "Valid", Type: child, Priority: "none"}}
+		if child == "bug" {
+			item.Report = &Report{Environment: "local", Surface: "apth"}
+		}
+		require.NoError(t, ValidateIssue(item))
+	}
+}
+
+func TestHierarchyFiltersAndGrouping(t *testing.T) {
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	for _, tc := range []struct {
+		name   string
+		filter Filter
+		valid  bool
+	}{
+		{"types", Filter{Type: []string{"epic", "story"}}, true},
+		{"epic", Filter{Epic: []string{id, "none"}}, true},
+		{"story", Filter{Story: []string{id, "none"}}, true},
+		{"invalid epic", Filter{Epic: []string{"APT-1"}}, false},
+		{"invalid story", Filter{Story: []string{"me"}}, false},
+		{"empty epic", Filter{Epic: []string{""}}, false},
+		{"empty story", Filter{Story: []string{""}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.valid, ValidateFilter(tc.filter) == nil)
+			require.Equal(t, tc.valid, ValidateView(View{Name: "Grouped", Layout: "board", GroupBy: "epic", Sort: SortUpdated, Filter: tc.filter}) == nil)
+		})
+	}
+	for _, tc := range []struct {
+		group string
+		valid bool
+	}{{"none", true}, {"epic", true}, {"story", true}, {"", false}, {"status", false}} {
+		require.Equal(t, tc.valid, ValidateView(View{Name: "Grouped", Layout: "list", GroupBy: tc.group, Sort: SortUpdated}) == nil)
 	}
 }

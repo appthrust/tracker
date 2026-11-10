@@ -7,8 +7,11 @@ import { Popover } from 'radix-ui'
 import { useId, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { cn } from './cn'
 
-/** `hint`: a digit picks the option while the search is empty (status 1–9, priority 0–4); `detail`: extra right-aligned text (a count), never a shortcut. */
-export type PickerOption = { value: string; label: string; icon?: ReactNode; hint?: string; detail?: string; keywords?: string }
+/**
+ * `hint`: a digit picks the option while the search is empty (status 1–9, priority 0–4); `detail`: extra right-aligned text (a count), never a shortcut;
+ * `disabled`: shown but not pickable (a choice the rules forbid here), with `detail` saying why.
+ */
+export type PickerOption = { value: string; label: string; icon?: ReactNode; hint?: string; detail?: string; keywords?: string; disabled?: boolean }
 
 export function Picker({
   label,
@@ -57,8 +60,9 @@ export function Picker({
   const visible = onQueryChange || !needle ? options : options.filter((option) => `${option.label} ${option.keywords ?? ''}`.toLowerCase().includes(needle))
   const activeIndex = Math.min(active, Math.max(visible.length - 1, 0))
 
-  const pick = (value: string) => {
-    onPick(value)
+  const pick = (option: PickerOption) => {
+    if (option.disabled) return
+    onPick(option.value)
     if (!multiple) setOpen(false)
   }
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -70,13 +74,13 @@ export function Picker({
     } else if (event.key === 'Enter') {
       event.preventDefault()
       const option = visible[activeIndex]
-      if (option) pick(option.value)
+      if (option) pick(option)
     } else if (/^[0-9]$/.test(event.key) && !query) {
       // Digit hints (status 1–9, priority 0–4) pick directly while the search box is empty.
       const option = visible.find((candidate) => candidate.hint === event.key)
       if (option) {
         event.preventDefault()
-        pick(option.value)
+        pick(option)
       }
     }
   }
@@ -120,12 +124,14 @@ export function Picker({
                   id={`${listId}-${index}`}
                   role="option"
                   aria-selected={isSelected}
+                  aria-disabled={option.disabled || undefined}
                   onPointerMove={() => setActive(index)}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => pick(option.value)}
+                  onClick={() => pick(option)}
                   className={cn(
                     'flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] text-stone-700 [&_svg]:size-3.5 [&_svg]:shrink-0',
-                    index === activeIndex && 'bg-stone-100 text-stone-900'
+                    index === activeIndex && 'bg-stone-100 text-stone-900',
+                    option.disabled && 'cursor-not-allowed text-stone-400 [&_svg]:opacity-50'
                   )}
                 >
                   {option.icon ? <span className="flex shrink-0 items-center">{option.icon}</span> : null}

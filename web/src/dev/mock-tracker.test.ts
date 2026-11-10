@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { Attachment, Issue, IssuePage, Label, Project, Status, TimelineItem, View } from '../api/tracker'
+import type { Attachment, Issue, IssuePage, IssueSummary, Label, Project, Status, TimelineItem, View } from '../api/tracker'
 import { MOCK_PEOPLE, trackerRoutes } from './mock-tracker'
 
 const BASE = '/api/tracker/v1'
@@ -35,7 +35,7 @@ beforeEach(async () => {
 describe('tracker mock: fixture shared with the server dev seed', () => {
   test('caller, workspace, statuses, labels, views and people', async () => {
     expect((await call('GET', '/me')).body).toEqual({ ...MOCK_PEOPLE.alex, role: 'Admin', isAdmin: true })
-    expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 30 })
+    expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 36 })
     expect((await statuses()).map((status) => [status.name, status.category, status.color, status.position])).toEqual([
       ['Backlog', 'backlog', 'gray', 0],
       ['Todo', 'unstarted', 'gray', 1],
@@ -50,9 +50,10 @@ describe('tracker mock: fixture shared with the server dev seed', () => {
       ['ux', 'purple'],
     ])
     const views = (await call('GET', '/views')).body.items as View[]
-    expect(views.map((view) => [view.name, view.shared, view.filter])).toEqual([
-      ['Bugs', true, { type: ['bug'] }],
-      ['My issues', true, { assignee: ['me'] }],
+    expect(views.map((view) => [view.name, view.shared, view.layout, view.groupBy, view.filter])).toEqual([
+      ['Bugs', true, 'list', 'none', { type: ['bug'] }],
+      ['My issues', true, 'list', 'none', { assignee: ['me'] }],
+      ['By epic', true, 'board', 'epic', {}],
     ])
     expect((await call('GET', '/people?q=sam')).body).toEqual({ items: [MOCK_PEOPLE.sam], source: 'directory' })
     expect((await call('GET', '/people')).body.items).toHaveLength(3)
@@ -73,7 +74,7 @@ describe('tracker mock: fixture shared with the server dev seed', () => {
   })
 
   test('issue i follows the seed formula: status i%6, type i%3, priority i%5, reporter i%3, assignee (i+1)%3', async () => {
-    const all = (await list('?sort=number')).items
+    const all = (await list('?sort=number')).items.slice(0, 30)
     expect(all).toHaveLength(30)
     const ordered = await statuses()
     const first = all[0]!
@@ -81,6 +82,7 @@ describe('tracker mock: fixture shared with the server dev seed', () => {
     expect(first.report).toEqual({ environment: 'appthrust.ink', surface: 'dashboard', version: '0.1.0', steps: 'Open the affected surface and repeat the action.', expected: 'The action completes successfully.', actual: 'The observed behavior differs from the expected result.' })
     expect(all[4]).toMatchObject({ identifier: 'APT-5', type: 'feature', priority: 'none', statusId: ordered[4]!.id, report: null, completedAt: expect.any(String) })
     expect(new Set(all.map((issue) => issue.statusId)).size).toBe(6)
+    expect(new Set(all.map((issue) => issue.type))).toEqual(new Set(['bug', 'feature', 'task']))
   })
 })
 
@@ -88,7 +90,7 @@ describe('tracker mock: issues', () => {
   test('filter, sort and cursor paging; malformed parameters are 400 invalid', async () => {
     expect((await list(filterQuery({ type: ['bug'] }))).items).toHaveLength(10)
     expect((await list(filterQuery({ assignee: ['me'] }))).items.every((issue) => issue.assignee?.sub === 'dev-alex')).toBe(true)
-    expect((await list(filterQuery({ category: ['started'] }))).items).toHaveLength(10)
+    expect((await list(filterQuery({ category: ['started'] }))).items).toHaveLength(16)
     expect((await list(filterQuery({ q: 'cluster' }))).items.map((issue) => issue.identifier).sort()).toEqual(['APT-10', 'APT-28', 'APT-3'])
     const seen: string[] = []
     let cursor: string | null = null
@@ -97,12 +99,12 @@ describe('tracker mock: issues', () => {
       seen.push(...page.items.map((issue) => issue.identifier))
       cursor = page.nextCursor
     } while (cursor)
-    expect(seen).toHaveLength(30)
+    expect(seen).toHaveLength(36)
     expect(seen[0]).toBe('APT-1')
-    expect(new Set(seen).size).toBe(30)
+    expect(new Set(seen).size).toBe(36)
     const urgentFirst = (await list('?sort=priority')).items
     expect(urgentFirst.slice(0, 6).every((issue) => issue.priority === 'urgent')).toBe(true)
-    for (const bad of ['?filter=%7Bnope', filterQuery({ colour: ['red'] }), filterQuery({ type: ['epic'] }), '?sort=title', '?limit=500']) {
+    for (const bad of ['?filter=%7Bnope', filterQuery({ colour: ['red'] }), filterQuery({ type: ['initiative'] }), filterQuery({ epic: ['APT-31'] }), filterQuery({ story: 'none' }), '?sort=title', '?limit=500']) {
       const { status, body } = await call('GET', `/issues${bad}`)
       expect(status, bad).toBe(400)
       expect(body.error).toBe('invalid')
@@ -156,9 +158,9 @@ describe('tracker mock: issues', () => {
     expect((await call('POST', '/issues', { title: 'x', type: 'task', report: { environment: 'local', surface: 'apth' } })).status).toBe(400)
     const created = await call('POST', '/issues', { title: '  Board drag fails  ', type: 'bug', priority: 'high', report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0', steps: '' } })
     expect(created.status).toBe(201)
-    expect(created.body).toMatchObject({ identifier: 'APT-31', title: 'Board drag fails', statusId: (await statusNamed('Backlog')).id, reporter: MOCK_PEOPLE.alex, report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0' } })
+    expect(created.body).toMatchObject({ identifier: 'APT-37', title: 'Board drag fails', statusId: (await statusNamed('Backlog')).id, reporter: MOCK_PEOPLE.alex, report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0' } })
     expect(created.body.report.steps).toBeUndefined()
-    expect((await call('GET', '/workspace')).body.issueCount).toBe(31)
+    expect((await call('GET', '/workspace')).body.issueCount).toBe(37)
   })
 
   test('PATCH: one activity per changed field, completion time, links and cycle checks', async () => {
@@ -204,7 +206,129 @@ describe('tracker mock: issues', () => {
     await as('dev-alex', 'Admin')
     expect((await call('DELETE', `/issues/${issue.id}`)).status).toBe(204)
     expect((await call('GET', '/issues/APT-4')).status).toBe(404)
-    expect((await list()).items).toHaveLength(29)
+    expect((await list()).items).toHaveLength(35)
+  })
+})
+
+describe('tracker mock: epics and stories', () => {
+  const byNumber = async () => new Map((await list('?sort=number')).items.map((issue) => [issue.number, issue]))
+
+  test('fixture: 2 epics, 4 stories (two per epic) In Progress; seed issue n with n%5 != 0 sits under stories[n%4]', async () => {
+    const issues = await byNumber()
+    const inProgress = await statusNamed('In Progress')
+    const epics = [issues.get(31)!, issues.get(32)!]
+    const stories = [33, 34, 35, 36].map((number) => issues.get(number)!)
+    expect(epics.map((epic) => [epic.type, epic.title, epic.statusId, epic.parent, epic.epic, epic.story])).toEqual([
+      ['epic', 'Reliable bug intake', inProgress.id, null, null, null],
+      ['epic', 'Faster triage', inProgress.id, null, null, null],
+    ])
+    expect(stories.map((story) => [story.type, story.parent?.id, story.epic?.id, story.story])).toEqual([
+      ['story', epics[0]!.id, epics[0]!.id, null],
+      ['story', epics[0]!.id, epics[0]!.id, null],
+      ['story', epics[1]!.id, epics[1]!.id, null],
+      ['story', epics[1]!.id, epics[1]!.id, null],
+    ])
+    expect(stories.every((story) => story.title.startsWith('As a'))).toBe(true)
+    expect(epics.concat(stories).every((issue) => issue.reporter.sub === 'dev-alex' && issue.assignee === null && issue.priority === 'medium' && issue.projectId === null)).toBe(true)
+    for (let n = 1; n <= 30; n++) {
+      const issue = issues.get(n)!
+      const story = n % 5 === 0 ? null : stories[n % 4]!
+      expect([issue.parent?.id ?? null, issue.story?.id ?? null, issue.progress], issue.identifier).toEqual([story?.id ?? null, story?.id ?? null, null])
+      expect(issue.epic?.id ?? null, issue.identifier).toBe(story ? epics[Math.floor((n % 4) / 2)]!.id : null)
+    }
+  })
+
+  test('progress counts level-0 descendants at any depth: canceled excluded from total, completed counted', async () => {
+    const issues = await byNumber()
+    const category = new Map((await statuses()).map((status) => [status.id, status.category]))
+    const expected = (inGroup: (issue: IssueSummary) => boolean) => {
+      const counted = [...issues.values()].filter((issue) => issue.number <= 30 && inGroup(issue) && category.get(issue.statusId) !== 'canceled')
+      return { total: counted.length, completed: counted.filter((issue) => category.get(issue.statusId) === 'completed').length }
+    }
+    const epic = issues.get(31)!
+    const story = issues.get(33)!
+    expect(story.progress).toEqual(expected((issue) => issue.story?.id === story.id))
+    expect(epic.progress).toEqual(expected((issue) => issue.epic?.id === epic.id))
+    expect(epic.progress!.total).toBeGreaterThan(story.progress!.total)
+
+    // A completed sub-task two levels below its story counts there and in the epic.
+    const parentTask = issues.get(1)!
+    const subTask = (await call('POST', '/issues', { title: 'Sub-task', type: 'task', parentId: parentTask.id, statusId: (await statusNamed('Done')).id })).body as Issue
+    expect(subTask).toMatchObject({ epic: { id: parentTask.epic!.id }, story: { id: parentTask.story!.id }, progress: null })
+    for (const group of [parentTask.story!, parentTask.epic!]) {
+      const before = [...issues.values()].find((issue) => issue.id === group.id)!.progress!
+      expect(((await call('GET', `/issues/${group.id}`)).body as Issue).progress).toEqual({ total: before.total + 1, completed: before.completed + 1 })
+    }
+  })
+
+  test('a deleted issue ends the hierarchy: no epic/story through it, and its subtree leaves progress', async () => {
+    const story = (await call('GET', '/issues/APT-33')).body as Issue
+    const parentTask = (await call('POST', '/issues', { title: 'Parent', type: 'task', parentId: story.id })).body as Issue
+    const child = (await call('POST', '/issues', { title: 'Child', type: 'task', parentId: parentTask.id })).body as Issue
+    expect(((await call('GET', `/issues/${story.id}`)).body as Issue).progress!.total).toBe(story.progress!.total + 2)
+    expect((await call('DELETE', `/issues/${parentTask.id}`)).status).toBe(204)
+    expect((await call('GET', `/issues/${child.id}`)).body).toMatchObject({ parent: null, epic: null, story: null })
+    expect(((await call('GET', `/issues/${story.id}`)).body as Issue).progress).toEqual(story.progress)
+  })
+
+  test('filter epic/story: derived ids OR `none`; type accepts epic and story; parent stays the direct parent', async () => {
+    const issues = await byNumber()
+    const epic = issues.get(31)!
+    const story = issues.get(33)!
+    const inEpic = (await list(`${filterQuery({ epic: [epic.id] })}&limit=200`)).items
+    expect(inEpic.length).toBeGreaterThan(2)
+    expect(inEpic.every((issue) => issue.epic?.id === epic.id)).toBe(true)
+    expect(inEpic.map((issue) => issue.number)).toContain(33)
+    expect((await list(`${filterQuery({ story: [story.id] })}&limit=200`)).items.every((issue) => issue.story?.id === story.id)).toBe(true)
+    const noEpic = (await list(`${filterQuery({ epic: ['none'] })}&limit=200`)).items
+    expect(noEpic.map((issue) => issue.number).sort((a, b) => a - b)).toEqual([5, 10, 15, 20, 25, 30, 31, 32])
+    expect((await list(`${filterQuery({ epic: [epic.id, 'none'] })}&limit=200`)).items).toHaveLength(inEpic.length + noEpic.length)
+    expect((await list(filterQuery({ type: ['epic', 'story'] }))).items).toHaveLength(6)
+    expect((await list(filterQuery({ parent: epic.id }))).items.map((issue) => issue.number).sort()).toEqual([33, 34])
+  })
+
+  test('hierarchy: an epic has no parent, a story only an epic; a work item anything; 400 invalid with the parentId or type path', async () => {
+    const issues = await byNumber()
+    const [epic, otherEpic, story, task] = [issues.get(31)!, issues.get(32)!, issues.get(33)!, issues.get(3)!]
+    const refused = async (method: string, path: string, body: object, field: string) => {
+      const response = await call(method, path, body)
+      expect(response.status, JSON.stringify(body)).toBe(400)
+      expect(response.body).toMatchObject({ error: 'invalid', issues: [{ path: field }] })
+    }
+    await refused('POST', '/issues', { title: 'x', type: 'epic', parentId: otherEpic.id }, 'parentId')
+    await refused('POST', '/issues', { title: 'x', type: 'story', parentId: story.id }, 'parentId')
+    await refused('POST', '/issues', { title: 'x', type: 'story', parentId: task.id }, 'parentId')
+    expect((await call('POST', '/issues', { title: 'New story', type: 'story', parentId: epic.id })).body).toMatchObject({ type: 'story', epic: { id: epic.id }, progress: { total: 0, completed: 0 } })
+    expect((await call('POST', '/issues', { title: 'New epic', type: 'epic' })).body).toMatchObject({ type: 'epic', parent: null, progress: { total: 0, completed: 0 } })
+    for (const parent of [epic, story, task]) expect((await call('POST', '/issues', { title: 'Work', type: 'feature', parentId: parent.id })).status).toBe(201)
+
+    await refused('PATCH', `/issues/${otherEpic.id}`, { parentId: epic.id }, 'parentId')
+    await refused('PATCH', `/issues/${story.id}`, { parentId: issues.get(34)!.id }, 'parentId')
+    // Type changes check the current parent (path `type`) and every direct child against the new type.
+    await refused('PATCH', `/issues/${story.id}`, { type: 'epic' }, 'type')
+    await refused('PATCH', `/issues/${epic.id}`, { type: 'story' }, 'type')
+    await refused('PATCH', `/issues/${task.id}`, { type: 'story' }, 'type')
+    const moved = await call('PATCH', `/issues/${story.id}`, { parentId: otherEpic.id })
+    expect(moved.body).toMatchObject({ parent: { id: otherEpic.id }, epic: { id: otherEpic.id } })
+    // The story's work items (APT-4 sits under stories[0]) follow it without any write of their own.
+    expect(((await call('GET', '/issues/APT-4')).body as Issue).epic?.id).toBe(otherEpic.id)
+    const timeline = (await call('GET', `/issues/${story.id}/timeline`)).body.items as TimelineItem[]
+    expect(timeline.flatMap((item) => (item.kind === 'activity' ? [item.activity.field] : []))).toEqual(['created', 'parent'])
+    // Leaving the epic and becoming one at once is fine: both directions are checked against the new state.
+    expect((await call('PATCH', `/issues/${story.id}`, { parentId: null, type: 'epic' })).body).toMatchObject({ type: 'epic', parent: null, epic: null })
+  })
+
+  test('views: groupBy defaults to none, is saved and updated; unknown values are 400 invalid', async () => {
+    const created = await call('POST', '/views', { name: 'Stories', layout: 'list', groupBy: 'story' })
+    expect(created.body).toMatchObject({ groupBy: 'story', layout: 'list' })
+    expect((await call('POST', '/views', { name: 'Plain' })).body.groupBy).toBe('none')
+    expect((await call('PATCH', `/views/${created.body.id}`, { groupBy: 'epic' })).body.groupBy).toBe('epic')
+    for (const bad of [{ name: 'x', groupBy: 'project' }, { name: 'x', groupBy: null }]) {
+      const response = await call('POST', '/views', bad)
+      expect(response.status).toBe(400)
+      expect(response.body.issues[0].path).toBe('groupBy')
+    }
+    expect((await call('PATCH', `/views/${created.body.id}`, { groupBy: 'label' })).status).toBe(400)
   })
 })
 
@@ -274,7 +398,10 @@ describe('tracker mock: projects', () => {
     const byName = Object.fromEntries(items.map((project) => [project.name, project.id]))
     const order = [byName.Dashboard, byName['Platform API'], byName['Builder Console']]
     const all = (await list('?sort=number')).items
-    for (const issue of all) expect(issue.projectId, issue.identifier).toBe(issue.number % 3 === 0 ? null : order[((issue.number % 3) + (issue.number % 2)) % 3]!)
+    for (const issue of all) {
+      const seeded = issue.number <= 30
+      expect(issue.projectId, issue.identifier).toBe(seeded && issue.number % 3 !== 0 ? order[((issue.number % 3) + (issue.number % 2)) % 3]! : null)
+    }
     const closed = new Set((await statuses()).filter((status) => status.category === 'completed' || status.category === 'canceled').map((status) => status.id))
     for (const project of items) {
       expect(project.openIssueCount, project.name).toBe(all.filter((issue) => issue.projectId === project.id && !closed.has(issue.statusId)).length)
@@ -285,9 +412,9 @@ describe('tracker mock: projects', () => {
 
   test('filter: project ids OR `none`', async () => {
     const dashboard = await projectNamed('Dashboard')
-    expect((await list(filterQuery({ project: ['none'] }))).items).toHaveLength(10)
+    expect((await list(filterQuery({ project: ['none'] }))).items).toHaveLength(16)
     expect((await list(filterQuery({ project: [dashboard.id] }))).items.every((issue) => issue.projectId === dashboard.id)).toBe(true)
-    expect((await list(filterQuery({ project: [dashboard.id, 'none'] }))).items).toHaveLength(15)
+    expect((await list(filterQuery({ project: [dashboard.id, 'none'] }))).items).toHaveLength(21)
     expect((await call('GET', `/issues${filterQuery({ project: 'none' })}`)).status).toBe(400)
   })
 
@@ -368,13 +495,13 @@ describe('tracker mock: views and settings authorization', () => {
     const mine = await call('POST', '/views', { name: 'Sam bugs', layout: 'board', filter: { type: ['bug'], assignee: ['me'] }, sort: 'priority' })
     expect(mine.status).toBe(201)
     expect(mine.body).toMatchObject({ owner: MOCK_PEOPLE.sam, shared: false, layout: 'board', sort: 'priority' })
-    expect(((await call('GET', '/views')).body.items as View[]).map((view) => view.name)).toEqual(['Bugs', 'My issues', 'Sam bugs'])
+    expect(((await call('GET', '/views')).body.items as View[]).map((view) => view.name)).toEqual(['Bugs', 'My issues', 'By epic', 'Sam bugs'])
     const bugs = ((await call('GET', '/views')).body.items as View[])[0]!
     expect((await call('PATCH', `/views/${bugs.id}`, { name: 'x' })).status).toBe(403)
     expect((await call('PATCH', `/views/${mine.body.id}`, { name: 'Sam: bugs' })).body.name).toBe('Sam: bugs')
     expect((await call('POST', '/views', { name: 'bad', filter: { nope: [] } })).status).toBe(400)
     await as('dev-jordan')
-    expect(((await call('GET', '/views')).body.items as View[]).map((view) => view.name)).toEqual(['Bugs', 'My issues'])
+    expect(((await call('GET', '/views')).body.items as View[]).map((view) => view.name)).toEqual(['Bugs', 'My issues', 'By epic'])
     expect((await call('DELETE', `/views/${mine.body.id}`)).status).toBe(404)
     await as('dev-alex', 'Admin')
     expect((await call('PATCH', `/views/${bugs.id}`, { filter: { type: ['bug'], environment: ['craftsman'] } })).body.filter).toEqual({ type: ['bug'], environment: ['craftsman'] })

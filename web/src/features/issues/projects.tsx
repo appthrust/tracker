@@ -150,7 +150,8 @@ export function ProjectField({ id, value, onChange }: { id: string; value: strin
   )
 }
 
-function FieldTrigger({ className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { ref?: Ref<HTMLButtonElement> }) {
+/** Form control look for a picker trigger (new issue dialog, bug report). */
+export function FieldTrigger({ className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { ref?: Ref<HTMLButtonElement> }) {
   return (
     <button
       type="button"

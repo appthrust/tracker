@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { Attachment, IssueSummary, Status, TimelineItem } from '../api/tracker'
-import { attachmentProblem, attachmentsOf, compactFilter, compareIssues, matchesFilter, orderStatuses, reportProblems, toReport } from './issues'
+import type { Attachment, IssueRef, IssueSummary, Status, TimelineItem } from '../api/tracker'
+import { attachmentProblem, attachmentsOf, canBeType, canParent, compactFilter, compareIssues, groupIssues, levelOf, matchesFilter, orderStatuses, parentLevelOf, reportProblems, tallyProgress, toReport } from './issues'
 
 const statuses: Status[] = [
   { id: 'done', name: 'Done', category: 'completed', position: 0, color: 'green' },
@@ -22,6 +22,9 @@ const issue = (number: number, patch: Partial<IssueSummary> = {}): IssueSummary 
   labelIds: [],
   projectId: null,
   parent: null,
+  epic: null,
+  story: null,
+  progress: null,
   dueOn: null,
   report: null,
   commentCount: 0,
@@ -69,7 +72,78 @@ describe('issue rules', () => {
     expect(matchesFilter(scoped, { project: ['none'] }, context)).toBe(false)
     expect(matchesFilter(mine, { project: ['none', 'p-api'] }, context)).toBe(true)
     expect(matchesFilter(mine, { project: ['p-api'] }, context)).toBe(false)
+    const bundled = issue(5, { epic: ref(31), story: ref(33) })
+    expect(matchesFilter(bundled, { epic: ['id-31'] }, context)).toBe(true)
+    expect(matchesFilter(bundled, { epic: ['none'] }, context)).toBe(false)
+    expect(matchesFilter(mine, { epic: ['none', 'id-31'], story: ['none'] }, context)).toBe(true)
+    expect(matchesFilter(bundled, { story: ['id-34'] }, context)).toBe(false)
+    expect(matchesFilter(bundled, { epic: ['id-31'], story: ['id-33', 'id-34'] }, context)).toBe(true)
     expect(compactFilter({ status: [], q: '', label: ['ux'] })).toEqual({ label: ['ux'] })
+  })
+
+  test('hierarchy: epic 2 > story 1 > work items 0; a work item fits anywhere, others only under a higher level', () => {
+    expect([levelOf('epic'), levelOf('story'), levelOf('bug'), levelOf('feature'), levelOf('task')]).toEqual([2, 1, 0, 0, 0])
+    expect(canParent('epic', null)).toBe(true)
+    expect(canParent('epic', 'epic')).toBe(false)
+    expect(canParent('epic', 'task')).toBe(false)
+    expect(canParent('story', 'epic')).toBe(true)
+    expect(canParent('story', 'story')).toBe(false)
+    expect(canParent('story', 'bug')).toBe(false)
+    for (const parent of ['epic', 'story', 'task', null] as const) expect(canParent('bug', parent)).toBe(true)
+
+    // The parent's level comes from the derived refs.
+    expect(parentLevelOf(issue(1))).toBeNull()
+    expect(parentLevelOf(issue(1, { parent: ref(31), epic: ref(31) }))).toBe(2)
+    expect(parentLevelOf(issue(1, { parent: ref(33), epic: ref(31), story: ref(33) }))).toBe(1)
+    expect(parentLevelOf(issue(1, { parent: ref(7), epic: ref(31), story: ref(33) }))).toBe(0)
+    // A type change checks the parent and every direct child.
+    expect(canBeType('epic', 2, [])).toBe(false)
+    expect(canBeType('story', 2, ['task'])).toBe(true)
+    expect(canBeType('story', null, ['story'])).toBe(false)
+    expect(canBeType('story', 0, [])).toBe(false)
+    expect(canBeType('task', 1, ['story'])).toBe(false)
+    expect(canBeType('task', 0, ['bug'])).toBe(true)
+  })
+
+  test('grouping: sections by epic/story ordered by number, "none" last; the grouping type and higher levels head sections, never rows', () => {
+    const epicA = issue(31, { type: 'epic', progress: { total: 2, completed: 1 } })
+    const storyA = issue(33, { type: 'story', parent: ref(31), epic: ref(31), progress: { total: 1, completed: 0 } })
+    const emptyEpic = issue(32, { type: 'epic', progress: { total: 0, completed: 0 } })
+    const rows = [
+      issue(9, { epic: ref(40), story: null }),
+      issue(2, { epic: ref(31), story: ref(33) }),
+      issue(3),
+      issue(4, { epic: ref(31), story: null }),
+    ]
+    const items = [rows[0]!, storyA, epicA, rows[1]!, rows[2]!, emptyEpic, rows[3]!]
+    expect(groupIssues(items, 'none')).toEqual([{ key: 'all', header: null, issues: items }])
+
+    const byEpic = groupIssues(items, 'epic', [issue(40, { type: 'epic', title: 'Known epic' })])
+    expect(byEpic.map((section) => [section.key, section.issues.map((row) => row.number)])).toEqual([
+      ['id-31', [33, 2, 4]],
+      ['id-32', []],
+      ['id-40', [9]],
+      ['none', [3]],
+    ])
+    expect(byEpic[0]!.header).toBe(epicA)
+    // A group only referenced by rows takes its summary from `known`, else stays the ref.
+    expect(byEpic[2]!.header).toMatchObject({ title: 'Known epic', type: 'epic' })
+    expect(groupIssues(items, 'epic')[2]!.header).toEqual(ref(40))
+
+    const byStory = groupIssues(items, 'story')
+    expect(byStory.map((section) => [section.key, section.issues.map((row) => row.number)])).toEqual([
+      ['id-33', [2]],
+      ['none', [9, 3, 4]],
+    ])
+    expect(byStory[0]!.header).toBe(storyA)
+    expect(groupIssues([], 'story')).toEqual([{ key: 'none', header: null, issues: [] }])
+  })
+
+  test('progress tally: work items only, canceled left out of the total, completed counted', () => {
+    const canceled: Status = { id: 'gone', name: 'Canceled', category: 'canceled', position: 9, color: 'gray' }
+    const items = [issue(1, { statusId: 'done' }), issue(2), issue(3, { statusId: 'gone' }), issue(4, { type: 'story', statusId: 'done' }), issue(5, { type: 'bug', statusId: 'doing' })]
+    expect(tallyProgress(items, [...statuses, canceled])).toEqual({ total: 3, completed: 1 })
+    expect(tallyProgress([], statuses)).toEqual({ total: 0, completed: 0 })
   })
 
   test('attachments come from the timeline: added in `to`, removed in `from`', () => {
@@ -93,3 +167,7 @@ describe('issue rules', () => {
     expect(toReport(draft)).toEqual({ environment: 'craftsman', surface: 'dashboard', version: '0.1.0', expected: 'ok' })
   })
 })
+
+function ref(number: number): IssueRef {
+  return { id: `id-${number}`, identifier: `APT-${number}`, title: `Issue ${number}`, statusId: 'todo' }
+}

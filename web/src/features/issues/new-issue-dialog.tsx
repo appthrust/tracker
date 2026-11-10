@@ -1,19 +1,22 @@
-// "New issue" (C): project, title, Markdown description, type, status,
-// priority, assignee and labels. The project starts as the list/board scope
-// (or the one the opener passes). Choosing "bug" asks for the two required
-// report fields; the full report form is `/report` (Shift+R). ⌘/Ctrl+Enter
-// creates.
+// "New issue" (C): project, title, Markdown description, type (epic, story or
+// a work item), parent (only what the hierarchy allows for that type),
+// status, priority, assignee and labels. The project starts as the
+// list/board scope (or the one the opener passes); an epic's "New story" or
+// a group's "+" passes the type and parent. Choosing "bug" asks for the two
+// required report fields; the full report form is `/report` (Shift+R).
+// ⌘/Ctrl+Enter creates.
 import { useNavigate } from '@tanstack/react-router'
 import { useState, type FormEvent } from 'react'
 import { useCreateIssue } from '../../api/queries'
-import type { IssueType, Priority } from '../../api/tracker'
+import type { IssueSummary, IssueType, Priority } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { ISSUE_TYPES, PRIORITIES, reportProblems, TITLE_MAX, toReport, type ReportDraft } from '../../model/issues'
 import { paths } from '../../routes/paths'
 import { ActionError, Button, Dialog, Field, HrefLink, Kbd, SelectInput, TextArea, TextInput } from '../../ui'
 import { EMPTY_REPORT, ReportFields } from '../report/report-fields'
-import { MOD_KEY, setUi, uiStore, useUi } from '../ui-state'
+import { MOD_KEY, setUi, uiStore, useUi, type NewIssueDefaults } from '../ui-state'
 import { ColorDot } from './visuals'
+import { hierarchyProblem, parentLabel, ParentField } from './hierarchy'
 import { ProjectField } from './projects'
 import { assigneeValue, usePeopleOptions } from './properties'
 import { useReference } from './use-reference'
@@ -21,17 +24,18 @@ import { useReference } from './use-reference'
 export function NewIssueDialog() {
   const defaults = useUi((state) => state.newIssue)
   // Remount per opening so every dialog starts empty with its own defaults.
-  return defaults ? <NewIssueForm key={JSON.stringify(defaults)} statusId={defaults.statusId} projectId={defaults.projectId} /> : null
+  return defaults ? <NewIssueForm key={JSON.stringify(defaults)} defaults={defaults} /> : null
 }
 
-function NewIssueForm({ statusId: initialStatus, projectId: requestedProject }: { statusId?: string; projectId?: string | null }) {
+function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requestedProject, type: initialType, parent: initialParent } }: { defaults: NewIssueDefaults }) {
   const { t } = useText()
   const navigate = useNavigate()
   const { statuses, labels, activeProjects } = useReference()
   const create = useCreateIssue()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [type, setType] = useState<IssueType>('task')
+  const [type, setType] = useState<IssueType>(initialType ?? 'task')
+  const [parent, setParent] = useState<IssueSummary | null>(initialParent ?? null)
   const [statusId, setStatusId] = useState(initialStatus ?? statuses.find((status) => status.category === 'backlog')?.id ?? '')
   const [priority, setPriority] = useState<Priority>('none')
   const [assignee, setAssignee] = useState('')
@@ -47,12 +51,14 @@ function NewIssueForm({ statusId: initialStatus, projectId: requestedProject }: 
 
   const problems = type === 'bug' ? reportProblems(title, report) : !title.trim() ? { title: 'required' as const } : Array.from(title.trim()).length > TITLE_MAX ? { title: 'tooLong' as const } : {}
   const { title: titleProblem, ...reportFieldProblems } = problems
+  // A type change can make the chosen parent invalid (a story under a story); creating waits until it is fixed.
+  const parentProblem = hierarchyProblem(t, { type }, parent)
   const close = () => setUi({ newIssue: null })
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
     setSubmitted(true)
-    if (Object.keys(problems).length > 0 || create.isPending) return
+    if (Object.keys(problems).length > 0 || parentProblem || create.isPending) return
     const sub = assigneeValue(assignee || '__none')
     create.mutate(
       {
@@ -63,6 +69,7 @@ function NewIssueForm({ statusId: initialStatus, projectId: requestedProject }: 
         statusId: statusId || undefined,
         assigneeSub: sub ?? undefined,
         labelIds: labelIds.length > 0 ? labelIds : undefined,
+        parentId: parent?.id,
         projectId: projectId ?? undefined,
         report: type === 'bug' ? toReport(report) : undefined,
       },
@@ -95,9 +102,14 @@ function NewIssueForm({ statusId: initialStatus, projectId: requestedProject }: 
         }}
         className="space-y-4"
       >
-        <Field id="new-issue-project" label={t('tracker.project.label')} className="sm:w-1/2">
-          <ProjectField id="new-issue-project" value={projectId} onChange={setProjectId} />
-        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field id="new-issue-project" label={t('tracker.project.label')}>
+            <ProjectField id="new-issue-project" value={projectId} onChange={setProjectId} />
+          </Field>
+          <Field id="new-issue-parent" label={parentLabel(t, type)} error={parentProblem} hint={type === 'epic' ? t('tracker.parent.epicTop') : undefined}>
+            <ParentField id="new-issue-parent" childType={type} value={type === 'epic' ? null : parent} onChange={setParent} />
+          </Field>
+        </div>
         <Field
           id="new-issue-title"
           label={t('tracker.issue.title')}
@@ -111,7 +123,16 @@ function NewIssueForm({ statusId: initialStatus, projectId: requestedProject }: 
         </Field>
         <div className="grid gap-3 sm:grid-cols-3">
           <Field id="new-issue-type" label={t('tracker.property.type')}>
-            <SelectInput id="new-issue-type" value={type} onChange={(event) => setType(event.target.value as IssueType)}>
+            <SelectInput
+              id="new-issue-type"
+              value={type}
+              onChange={(event) => {
+                const next = event.target.value as IssueType
+                setType(next)
+                // An epic has no parent; the field shows that instead of the old choice.
+                if (next === 'epic') setParent(null)
+              }}
+            >
               {ISSUE_TYPES.map((value) => (
                 <option key={value} value={value}>
                   {t(`tracker.type.${value}`)}

@@ -1,13 +1,18 @@
 // Pure issue rules shared by screens and the dev mock: category and priority
-// order, list sorting (API.md `Sort`), filter matching (API.md `Filter`) and
-// the attachments an issue's timeline carries (there is no attachment-list
-// route; `attachment` activities hold the Attachment in `to` when added and in
-// `from` when removed).
-import type { Attachment, Filter, IssueSummary, IssueType, Priority, Report, Sort, Status, StatusCategory, Surface, TimelineItem } from '../api/tracker'
+// order, list sorting (API.md `Sort`), filter matching (API.md `Filter`), the
+// epic › story › work item hierarchy and the list/board grouping built on it
+// (API.md "Epics and stories"), and the attachments an issue's timeline
+// carries (there is no attachment-list route; `attachment` activities hold
+// the Attachment in `to` when added and in `from` when removed).
+import type { Attachment, Filter, GroupBy, IssueRef, IssueSummary, IssueType, Priority, Progress, Report, Sort, Status, StatusCategory, Surface, TimelineItem } from '../api/tracker'
 
 export const CATEGORIES: readonly StatusCategory[] = ['backlog', 'unstarted', 'started', 'completed', 'canceled']
 export const PRIORITIES: readonly Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
-export const ISSUE_TYPES: readonly IssueType[] = ['bug', 'feature', 'task']
+/** Highest level first: epic, story, then the work item types. */
+export const ISSUE_TYPES: readonly IssueType[] = ['epic', 'story', 'bug', 'feature', 'task']
+/** Level-0 types: a unit of work. */
+export const WORK_ITEM_TYPES: readonly IssueType[] = ['bug', 'feature', 'task']
+export const GROUP_BYS: readonly GroupBy[] = ['none', 'epic', 'story']
 export const SURFACES: readonly Surface[] = ['dashboard', 'platform-api', 'apth', 'builder-console', 'console-app', 'cluster', 'other']
 export const SORTS: readonly Sort[] = ['updated', 'created', 'priority', 'number']
 export const ENVIRONMENT_SUGGESTIONS: readonly string[] = ['appthrust.ink', 'craftsman', 'appthrust.dev', 'local']
@@ -28,6 +33,38 @@ export function orderStatuses(statuses: readonly Status[]): Status[] {
 /** `APT-12` → true; identifiers are case-insensitive. */
 export function isIdentifier(value: string): boolean {
   return /^[A-Za-z][A-Za-z0-9]{1,5}-\d+$/.test(value)
+}
+
+/** `epic` 2, `story` 1, every work item type 0. */
+export function levelOf(type: IssueType): 0 | 1 | 2 {
+  return type === 'epic' ? 2 : type === 'story' ? 1 : 0
+}
+
+/** Whether an issue of `childType` may sit under one of `parentType` (null = no parent): work items anywhere, otherwise only under a higher level. */
+export function canParent(childType: IssueType, parentType: IssueType | null): boolean {
+  return parentType === null || levelOf(childType) === 0 || levelOf(parentType) > levelOf(childType)
+}
+
+/**
+ * The level of the issue's direct parent, read from its derived refs: the
+ * parent is its epic (2) or its story (1), else a work item (0); null without a parent.
+ */
+export function parentLevelOf(issue: Pick<IssueSummary, 'parent' | 'epic' | 'story'>): number | null {
+  if (!issue.parent) return null
+  if (issue.parent.id === issue.epic?.id) return 2
+  if (issue.parent.id === issue.story?.id) return 1
+  return 0
+}
+
+/** Whether an issue whose parent has `parentLevel` and whose direct children have `childTypes` may become `type`. */
+export function canBeType(type: IssueType, parentLevel: number | null, childTypes: readonly IssueType[]): boolean {
+  const fitsParent = parentLevel === null || levelOf(type) === 0 || parentLevel > levelOf(type)
+  return fitsParent && childTypes.every((child) => canParent(child, type))
+}
+
+/** The number in `KEY-123`. */
+export function issueNumber(issue: Pick<IssueRef, 'identifier'> & { number?: number }): number {
+  return issue.number ?? Number(issue.identifier.slice(issue.identifier.lastIndexOf('-') + 1))
 }
 
 export function compareIssues(sort: Sort): (a: IssueSummary, b: IssueSummary) => number {
@@ -71,6 +108,8 @@ export function matchesFilter(issue: IssueSummary, filter: Filter, context: Filt
     if (filter.parent === 'none' ? issue.parent !== null : issue.parent?.id !== filter.parent) return false
   }
   if (filter.project && filter.project.length > 0 && !filter.project.some((value) => (value === 'none' ? issue.projectId === null : issue.projectId === value))) return false
+  if (filter.epic && filter.epic.length > 0 && !filter.epic.some((value) => (value === 'none' ? issue.epic === null : issue.epic?.id === value))) return false
+  if (filter.story && filter.story.length > 0 && !filter.story.some((value) => (value === 'none' ? issue.story === null : issue.story?.id === value))) return false
   const q = filter.q?.trim().toLowerCase()
   if (q) {
     const text = `${issue.identifier} ${issue.title} ${context.description?.(issue) ?? ''}`.toLowerCase()
@@ -92,6 +131,55 @@ export function compactFilter(filter: Filter): Filter {
 
 export function isEmptyFilter(filter: Filter): boolean {
   return Object.keys(compactFilter(filter)).length === 0
+}
+
+/** Section key of the issues without an epic (resp. story); also the Filter value for "none". */
+export const NO_GROUP = 'none'
+
+/** A list section or board lane: `header` is the grouping issue (its summary when known, else the ref the rows carry), null for "no epic/story" or no grouping. */
+export type IssueSection = { key: string; header: IssueSummary | IssueRef | null; issues: IssueSummary[] }
+
+export const isSummary = (header: IssueSummary | IssueRef): header is IssueSummary => 'type' in header
+
+/**
+ * API.md grouping: with `groupBy` epic (story), rows are sectioned by
+ * `issue.epic?.id` (`issue.story?.id`), sections ordered by the group's
+ * number, the "none" section (key `none`, always present) last. Issues of the
+ * grouping type head their section (with no rows, an empty section) and,
+ * like higher levels, are never rows. `known` supplies summaries for groups
+ * the rows only reference (their status and progress). Rows keep their order.
+ * `none` gives one section with every issue.
+ */
+export function groupIssues(issues: readonly IssueSummary[], groupBy: GroupBy, known: readonly IssueSummary[] = []): IssueSection[] {
+  if (groupBy === 'none') return [{ key: 'all', header: null, issues: [...issues] }]
+  const level = levelOf(groupBy)
+  const lookup = new Map(known.filter((issue) => issue.type === groupBy).map((issue) => [issue.id, issue]))
+  const sections = new Map<string, IssueSection>()
+  const none: IssueSection = { key: NO_GROUP, header: null, issues: [] }
+  const sectionFor = (header: IssueSummary | IssueRef) => {
+    const existing = sections.get(header.id)
+    if (existing) {
+      if (isSummary(header) && !isSummary(existing.header!)) existing.header = header
+      return existing
+    }
+    const section: IssueSection = { key: header.id, header: isSummary(header) ? header : (lookup.get(header.id) ?? header), issues: [] }
+    sections.set(header.id, section)
+    return section
+  }
+  for (const issue of issues) {
+    if (issue.type === groupBy) sectionFor(issue)
+    if (levelOf(issue.type) >= level) continue
+    const ref = issue[groupBy]
+    ;(ref ? sectionFor(ref) : none).issues.push(issue)
+  }
+  return [...[...sections.values()].sort((a, b) => issueNumber(a.header!) - issueNumber(b.header!)), none]
+}
+
+/** API.md `Progress` over these issues: work items only, `total` without canceled ones, `completed` those in a completed status. */
+export function tallyProgress(issues: readonly IssueSummary[], statuses: readonly Status[]): Progress {
+  const category = new Map(statuses.map((status) => [status.id, status.category]))
+  const counted = issues.filter((issue) => levelOf(issue.type) === 0 && category.get(issue.statusId) !== 'canceled')
+  return { total: counted.length, completed: counted.filter((issue) => category.get(issue.statusId) === 'completed').length }
 }
 
 /** Attachments currently on the issue, oldest first, from its timeline. */

@@ -18,8 +18,44 @@ const issueColumns = `i.id,w.key,i.number,i.title,i.type,i.priority,i.status_id,
 	(SELECT json_build_object('id',p.id,'identifier',w.key||'-'||p.number,'title',p.title,'statusId',p.status_id) FROM tracker_issue p WHERE p.id=i.parent_id AND p.workspace_id=i.workspace_id AND p.deleted_at IS NULL),
 	to_char(i.due_on,'YYYY-MM-DD'),i.report,
 	(SELECT count(*) FROM tracker_comment c WHERE c.issue_id=i.id AND c.deleted_at IS NULL),
-	(SELECT count(*) FROM tracker_attachment a WHERE a.issue_id=i.id),i.created_at,i.updated_at,i.completed_at,i.project_id`
+	(SELECT count(*) FROM tracker_attachment a WHERE a.issue_id=i.id),i.created_at,i.updated_at,i.completed_at,i.project_id,
+	lineage.epic,lineage.story,rollup.progress`
 const issueFrom = ` FROM tracker_issue i JOIN tracker_workspace w ON w.id=i.workspace_id JOIN tracker_status s ON s.id=i.status_id `
+
+// Lateral recursive queries keep detail and list projections identical without
+// issuing per-row database calls. Only the strict ancestor walk is depth-limited;
+// progress includes work items at every depth.
+const issueHierarchy = `
+	LEFT JOIN LATERAL (
+		WITH RECURSIVE ancestors AS (
+			SELECT p.id,p.parent_id,p.number,p.title,p.status_id,p.type,1 AS depth
+			FROM tracker_issue p
+			WHERE p.workspace_id=i.workspace_id AND p.id=i.parent_id AND p.deleted_at IS NULL
+			UNION ALL
+			SELECT p.id,p.parent_id,p.number,p.title,p.status_id,p.type,a.depth+1
+			FROM tracker_issue p JOIN ancestors a ON p.id=a.parent_id
+			WHERE p.workspace_id=i.workspace_id AND p.deleted_at IS NULL AND a.depth<32
+		)
+		SELECT
+			(SELECT jsonb_build_object('id',a.id,'identifier',w.key||'-'||a.number,'title',a.title,'statusId',a.status_id)
+			 FROM ancestors a WHERE a.type='epic' ORDER BY a.depth LIMIT 1) AS epic,
+			(SELECT jsonb_build_object('id',a.id,'identifier',w.key||'-'||a.number,'title',a.title,'statusId',a.status_id)
+			 FROM ancestors a WHERE a.type='story' ORDER BY a.depth LIMIT 1) AS story
+	) lineage ON true
+	LEFT JOIN LATERAL (
+		WITH RECURSIVE descendants AS (
+			SELECT c.id,c.type,c.status_id FROM tracker_issue c
+			WHERE i.type IN ('epic','story') AND c.workspace_id=i.workspace_id AND c.parent_id=i.id AND c.deleted_at IS NULL
+			UNION
+			SELECT c.id,c.type,c.status_id FROM tracker_issue c JOIN descendants d ON c.parent_id=d.id
+			WHERE c.workspace_id=i.workspace_id AND c.deleted_at IS NULL
+		)
+		SELECT CASE WHEN i.type IN ('epic','story') THEN jsonb_build_object(
+			'total',count(*) FILTER (WHERE s.category<>'canceled'),
+			'completed',count(*) FILTER (WHERE s.category='completed')) END AS progress
+		FROM descendants d JOIN tracker_status s ON s.id=d.status_id
+		WHERE d.type NOT IN ('epic','story')
+	) rollup ON true `
 const prioritySQL = `(CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END)`
 
 type scanner interface{ Scan(...any) error }
@@ -28,12 +64,12 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	var item domain.Issue
 	var key string
 	var sub, name, due sql.NullString
-	var parent, report []byte
+	var parent, report, epic, story, progress []byte
 	item.LabelIDs = []string{}
 	item.Children = []domain.IssueRef{}
 	item.Blocks = []domain.IssueRef{}
 	item.BlockedBy = []domain.IssueRef{}
-	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &item.Description)
+	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &epic, &story, &progress, &item.Description)
 	if err != nil {
 		return item, err
 	}
@@ -44,14 +80,14 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	if due.Valid {
 		item.DueOn = &due.String
 	}
-	if len(parent) > 0 {
-		if err := json.Unmarshal(parent, &item.Parent); err != nil {
-			return item, err
-		}
-	}
-	if len(report) > 0 {
-		if err := json.Unmarshal(report, &item.Report); err != nil {
-			return item, err
+	for _, field := range []struct {
+		data   []byte
+		target any
+	}{{parent, &item.Parent}, {report, &item.Report}, {epic, &item.Epic}, {story, &item.Story}, {progress, &item.Progress}} {
+		if len(field.data) > 0 {
+			if err := json.Unmarshal(field.data, field.target); err != nil {
+				return item, err
+			}
 		}
 	}
 	item.CreatedAt = item.CreatedAt.UTC()
@@ -80,7 +116,7 @@ func (t *Tx) Issue(id string) (domain.Issue, error) {
 		predicate = "i.number=$2"
 		value = number
 	}
-	item, err := scanIssue(t.SQL.QueryRowContext(t.Context, `SELECT `+issueColumns+`,i.description`+issueFrom+`WHERE i.workspace_id=$1 AND i.deleted_at IS NULL AND `+predicate, t.WorkspaceID, value))
+	item, err := scanIssue(t.SQL.QueryRowContext(t.Context, `SELECT `+issueColumns+`,i.description`+issueFrom+issueHierarchy+`WHERE i.workspace_id=$1 AND i.deleted_at IS NULL AND `+predicate, t.WorkspaceID, value))
 	if err != nil {
 		return item, err
 	}
@@ -210,6 +246,18 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		}
 		clauses = append(clauses, "("+condition+")")
 	}
+	for _, field := range []struct {
+		column string
+		values []string
+	}{{"lineage.epic", f.Epic}, {"lineage.story", f.Story}} {
+		if len(field.values) > 0 {
+			condition := field.column + "->>'id'=ANY(" + bind(pq.Array(field.values)) + ")"
+			if slices.Contains(field.values, "none") {
+				condition += " OR " + field.column + " IS NULL"
+			}
+			clauses = append(clauses, "("+condition+")")
+		}
+	}
 	if f.Q != "" {
 		value := bind(f.Q)
 		clauses = append(clauses, "(strpos(lower(i.title),lower("+value+"))>0 OR strpos(lower(i.description),lower("+value+"))>0)")
@@ -250,7 +298,7 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 			clauses = append(clauses, "("+column+",i.id)<("+bind(c.At)+","+bind(c.ID)+")")
 		}
 	}
-	query := `SELECT ` + issueColumns + `,''` + issueFrom + `WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY ` + order + ` LIMIT ` + bind(options.Limit+1)
+	query := `SELECT ` + issueColumns + `,''` + issueFrom + issueHierarchy + `WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY ` + order + ` LIMIT ` + bind(options.Limit+1)
 	rows, err := t.SQL.QueryContext(t.Context, query, args...)
 	if err != nil {
 		return page, err

@@ -231,3 +231,58 @@ func TestProjectionDropsStaleActivityAvatar(t *testing.T) {
 	require.NotContains(t, person, "avatarUrl")
 	require.Equal(t, "Alex", person["name"])
 }
+
+func TestOpenAPIHierarchyContract(t *testing.T) {
+	var document struct {
+		Components struct {
+			Schemas map[string]struct {
+				Type       string                     `json:"type"`
+				Enum       []string                   `json:"enum"`
+				Default    string                     `json:"default"`
+				Properties map[string]json.RawMessage `json:"properties"`
+				Required   []string                   `json:"required"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(openapiDocument, &document))
+	schemas := document.Components.Schemas
+	require.Equal(t, domain.Types, schemas["IssueType"].Enum)
+	require.Equal(t, []string{"none", "epic", "story"}, schemas["GroupBy"].Enum)
+	require.Equal(t, "none", schemas["GroupBy"].Default)
+	require.ElementsMatch(t, []string{"total", "completed"}, schemas["Progress"].Required)
+	for _, field := range []string{"total", "completed"} {
+		require.JSONEq(t, `{"type":"integer","minimum":0}`, string(schemas["Progress"].Properties[field]))
+	}
+	for _, name := range []string{"Issue", "IssueSummary"} {
+		for _, field := range []string{"epic", "story", "progress"} {
+			require.Contains(t, schemas[name].Required, field)
+			var property struct {
+				AnyOf []map[string]string `json:"anyOf"`
+			}
+			require.NoError(t, json.Unmarshal(schemas[name].Properties[field], &property))
+			ref := "IssueRef"
+			if field == "progress" {
+				ref = "Progress"
+			}
+			require.ElementsMatch(t, []map[string]string{{"$ref": "#/components/schemas/" + ref}, {"type": "null"}}, property.AnyOf)
+		}
+	}
+	for _, field := range []string{"epic", "story"} {
+		var property struct {
+			Type  string `json:"type"`
+			Items struct {
+				AnyOf []map[string]string `json:"anyOf"`
+			} `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(schemas["Filter"].Properties[field], &property))
+		require.Equal(t, "array", property.Type)
+		require.Contains(t, property.Items.AnyOf, map[string]string{"const": "none"})
+		require.Contains(t, property.Items.AnyOf, map[string]string{"type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"})
+	}
+	for _, name := range []string{"View", "ViewCreate", "ViewPatch"} {
+		require.JSONEq(t, `{"$ref":"#/components/schemas/GroupBy"}`, string(schemas[name].Properties["groupBy"]))
+	}
+	require.Contains(t, schemas["View"].Required, "groupBy")
+	require.NotContains(t, schemas["ViewCreate"].Required, "groupBy")
+	require.NotContains(t, schemas["ViewPatch"].Required, "groupBy")
+}
