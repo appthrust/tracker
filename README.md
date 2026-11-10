@@ -67,6 +67,14 @@ and `/healthz` remains 200. Missing database configuration leaves the API return
 when the API is available. `/releasez` uses `TRACKER_RELEASE_VERSION` and
 `TRACKER_ARTIFACT_DIGEST` supplied by the catalog.
 
+A request whose bearer the server refuses (401 `unauthenticated`) writes one
+`tracker auth rejected:` log line: method, path, the edge `X-Request-Id`, a
+reason (`issuer`, `audience`, `expired_or_not_yet_valid`, `signature_or_keys`,
+`claims_shape`, `malformed_jwt`, `missing_bearer`, `raw_access_key`, `other`),
+and unverified token metadata (`alg`, `kid`, `iss`, `aud`, `azp`, `iat`, `nbf`,
+`exp`, the JSON type of `groups`). It never contains the token, its signature,
+or a personal claim. A 401 with no such line was answered by the edge.
+
 PostgreSQL integration tests are opt-in: they skip when both
 `BUILTIN_APPSERVER_TEST_DATABASE_URL` and `BUILDER_CONSOLE_TEST_DATABASE_URL` are unset.
 An explicitly configured test database must permit isolated schema creation.
@@ -90,14 +98,14 @@ a required BuildKit secret, never through build arguments or committed files.
 
 ## Catalog and release
 
-The next app release is **0.1.7**, also recorded in `web/package.json`.
+The next app release is **0.1.8**, also recorded in `web/package.json`.
 `catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`)
 created `versions[]` with `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
 stream `0.1`; later tags append at publication time. Do not add a version with
 an unbuilt or placeholder image digest. OpenAPI's `info.version` describes the
 API schema, not the app release. This repository has no hand-maintained changelog.
 
-After the release prerequisites are available, push the SemVer tag `v0.1.7`.
+After the release prerequisites are available, push the SemVer tag `v0.1.8`.
 The tag workflow:
 
 1. Performs one multi-platform build on `ubuntu-24.04` for Linux amd64 and arm64,
@@ -117,8 +125,8 @@ The tag workflow:
 Publication commands used by the workflow:
 
 ```sh
-bun hack/publish-entry.ts submit --version 0.1.7 --digest sha256:<image-index-digest>
-bun hack/publish-entry.ts await --version 0.1.7 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts submit --version 0.1.8 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts await --version 0.1.8 --digest sha256:<image-index-digest>
 ```
 
 Writers are serialized by `tracker-catalog-publish`; the workflow is guarded to
@@ -139,7 +147,7 @@ After publication, each estate's `AppCatalogSource` syncs the signed catalog.
 Install Issues from the Project Marketplace (Directory is an automatic
 dependency). Existing `follow` installations on stream `0.1` roll to the new
 version; `pinned` installations show `UpdateAvailable` and require an explicit
-version update. Confirm the installation is Ready, `/releasez` reports `0.1.7`,
+version update. Confirm the installation is Ready, `/releasez` reports `0.1.8`,
 and a signed-in Tracker page lists the Epics page in the navigation. These are release steps,
 not actions performed by a source-only version bump.
 
