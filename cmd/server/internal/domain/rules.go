@@ -16,7 +16,7 @@ import (
 var keyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,5}$`)
 var Categories = []string{"backlog", "unstarted", "started", "completed", "canceled"}
 var Priorities = []string{"urgent", "high", "medium", "low", "none"}
-var Types = []string{"bug", "feature", "task"}
+var Types = []string{"epic", "story", "bug", "feature", "task"}
 var Surfaces = []string{"dashboard", "platform-api", "apth", "builder-console", "console-app", "cluster", "other"}
 var Colors = []string{"gray", "red", "orange", "yellow", "green", "teal", "blue", "indigo", "purple", "pink"}
 
@@ -121,6 +121,28 @@ func ParentCycle(id, parent string, parents map[string]string) bool {
 	}
 	return false
 }
+
+func Level(kind string) int {
+	switch kind {
+	case "epic":
+		return 2
+	case "story":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ValidateHierarchy treats an empty parent type as no parent.
+func ValidateHierarchy(childType, parentType string) error {
+	if parentType == "" || Level(childType) == 0 || Level(parentType) > Level(childType) {
+		return nil
+	}
+	if childType == "epic" {
+		return errors.New("Epics cannot have a parent")
+	}
+	return errors.New("Stories can only have an epic parent")
+}
 func Text(value string, min, max int) bool {
 	return utf8.ValidString(value) && utf8.RuneCountInString(strings.TrimSpace(value)) >= min && utf8.RuneCountInString(value) <= max
 }
@@ -204,6 +226,16 @@ func ValidateFilter(filter Filter) error {
 			return errors.New("Invalid project filter")
 		}
 	}
+	for _, field := range []struct {
+		name string
+		ids  []string
+	}{{"epic", filter.Epic}, {"story", filter.Story}} {
+		for _, id := range field.ids {
+			if id != "none" && !ValidID(id) {
+				return &FieldError{Path: "filter." + field.name, Message: "Filter must contain issue IDs or none"}
+			}
+		}
+	}
 	if len(filter.Reporter) > 20 {
 		return &FieldError{Path: "filter.reporter", Message: "Reporter filter must contain at most 20 entries"}
 	}
@@ -244,6 +276,9 @@ func ValidateView(view View) error {
 	}
 	if view.Layout != "list" && view.Layout != "board" {
 		return errors.New("Layout must be list or board")
+	}
+	if view.GroupBy != "none" && view.GroupBy != "epic" && view.GroupBy != "story" {
+		return &FieldError{Path: "groupBy", Message: "Group by must be none, epic, or story"}
 	}
 	if !ValidSort(view.Sort) {
 		return errors.New("Invalid sort")

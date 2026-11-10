@@ -3734,6 +3734,8 @@
       "IssueType": {
         "type": "string",
         "enum": [
+          "epic",
+          "story",
           "bug",
           "feature",
           "task"
@@ -3769,6 +3771,34 @@
           "priority",
           "number"
         ]
+      },
+      "GroupBy": {
+        "type": "string",
+        "enum": [
+          "none",
+          "epic",
+          "story"
+        ],
+        "default": "none"
+      },
+      "Progress": {
+        "type": "object",
+        "description": "Counts non-deleted descendant work items at any depth; canceled work items are excluded from total.",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "total",
+          "completed"
+        ],
+        "additionalProperties": false
       },
       "Report": {
         "type": "object",
@@ -3900,6 +3930,39 @@
               }
             ]
           },
+          "epic": {
+            "description": "Nearest strict epic ancestor within 32 parent hops, or null.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "story": {
+            "description": "Nearest strict story ancestor within 32 parent hops, or null.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "description": "Present for epics and stories only; null for work items. Status is never derived.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Progress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "dueOn": {
             "anyOf": [
               {
@@ -3960,6 +4023,9 @@
           "labelIds",
           "projectId",
           "parent",
+          "epic",
+          "story",
+          "progress",
           "dueOn",
           "report",
           "commentCount",
@@ -4034,6 +4100,39 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epic": {
+            "description": "Nearest strict epic ancestor within 32 parent hops, or null.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "story": {
+            "description": "Nearest strict story ancestor within 32 parent hops, or null.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "description": "Present for epics and stories only; null for work items. Status is never derived.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Progress"
               },
               {
                 "type": "null"
@@ -4122,6 +4221,9 @@
           "labelIds",
           "projectId",
           "parent",
+          "epic",
+          "story",
+          "progress",
           "dueOn",
           "report",
           "commentCount",
@@ -4378,6 +4480,36 @@
               ]
             }
           },
+          "epic": {
+            "type": "array",
+            "description": "Match the derived strict epic ancestor by ID; none matches issues without an epic.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                {
+                  "const": "none"
+                }
+              ]
+            }
+          },
+          "story": {
+            "type": "array",
+            "description": "Match the derived strict story ancestor by ID; none matches issues without a story.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                {
+                  "const": "none"
+                }
+              ]
+            }
+          },
           "type": {
             "type": "array",
             "items": {
@@ -4444,6 +4576,9 @@
               "board"
             ]
           },
+          "groupBy": {
+            "$ref": "#/components/schemas/GroupBy"
+          },
           "filter": {
             "$ref": "#/components/schemas/Filter"
           },
@@ -4468,6 +4603,7 @@
           "owner",
           "shared",
           "layout",
+          "groupBy",
           "filter",
           "sort",
           "position",
@@ -4721,6 +4857,9 @@
               "board"
             ]
           },
+          "groupBy": {
+            "$ref": "#/components/schemas/GroupBy"
+          },
           "filter": {
             "$ref": "#/components/schemas/Filter"
           },
@@ -4750,6 +4889,9 @@
               "list",
               "board"
             ]
+          },
+          "groupBy": {
+            "$ref": "#/components/schemas/GroupBy"
           },
           "filter": {
             "$ref": "#/components/schemas/Filter"

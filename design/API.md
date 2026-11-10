@@ -243,6 +243,9 @@ Changes to existing shapes:
     `completed`.
   An epic has `epic: null`; a story has `story: null`. The ancestor walk is
   bounded to 32 hops.
+  A soft-deleted issue is not part of the hierarchy: as `parent` already reads
+  a deleted parent as `null`, the `epic`/`story` walk ends at a deleted node
+  and `progress` counts nothing reachable only through one.
 - `Filter` gains `epic?: (string | 'none')[]` and `story?: (string | 'none')[]`:
   the issue's `epic` (resp. `story`) as defined above is one of the ids;
   `'none'` matches issues without one. An id that is not a ULID → 400

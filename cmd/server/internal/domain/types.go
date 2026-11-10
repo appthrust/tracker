@@ -59,6 +59,10 @@ type IssueRef struct {
 	Title      string `json:"title"`
 	StatusID   string `json:"statusId"`
 }
+type Progress struct {
+	Total     int `json:"total"`
+	Completed int `json:"completed"`
+}
 type IssueSummary struct {
 	ID              string     `json:"id"`
 	Identifier      string     `json:"identifier"`
@@ -72,6 +76,9 @@ type IssueSummary struct {
 	LabelIDs        []string   `json:"labelIds"`
 	ProjectID       *string    `json:"projectId"`
 	Parent          *IssueRef  `json:"parent"`
+	Epic            *IssueRef  `json:"epic"`
+	Story           *IssueRef  `json:"story"`
+	Progress        *Progress  `json:"progress"`
 	DueOn           *string    `json:"dueOn"`
 	Report          *Report    `json:"report"`
 	CommentCount    int        `json:"commentCount"`
@@ -126,6 +133,8 @@ type Filter struct {
 	Reporter     []string `json:"reporter,omitempty"`
 	Label        []string `json:"label,omitempty"`
 	Project      []string `json:"project,omitempty"`
+	Epic         []string `json:"epic,omitempty"`
+	Story        []string `json:"story,omitempty"`
 	Type         []string `json:"type,omitempty"`
 	Priority     []string `json:"priority,omitempty"`
 	Q            string   `json:"q,omitempty"`
@@ -149,6 +158,7 @@ type View struct {
 	Owner     Person    `json:"owner"`
 	Shared    bool      `json:"shared"`
 	Layout    string    `json:"layout"`
+	GroupBy   string    `json:"groupBy"`
 	Filter    Filter    `json:"filter"`
 	Sort      Sort      `json:"sort"`
 	Position  int       `json:"position"`

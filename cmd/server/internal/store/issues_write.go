@@ -75,16 +75,21 @@ func (t *Tx) activity(issueID string, actor domain.Person, field string, from, t
 func ref(issue domain.Issue) domain.IssueRef {
 	return domain.IssueRef{ID: issue.ID, Identifier: issue.Identifier, Title: issue.Title, StatusID: issue.StatusID}
 }
-func (t *Tx) parent(id, parentID string) (*domain.IssueRef, error) {
+func (t *Tx) parent(id, parentID, childType, path string) (*domain.IssueRef, error) {
 	if parentID == "" {
 		return nil, nil
 	}
 	if !domain.ValidID(parentID) {
 		return nil, invalid("Parent must be an issue ID")
 	}
-	parent, err := t.Issue(parentID)
+	var parent domain.IssueRef
+	var parentType string
+	err := t.SQL.QueryRowContext(t.Context, `SELECT i.id,w.key||'-'||i.number,i.title,i.status_id,i.type`+issueFrom+`WHERE i.workspace_id=$1 AND i.id=$2 AND i.deleted_at IS NULL`, t.WorkspaceID, parentID).Scan(&parent.ID, &parent.Identifier, &parent.Title, &parent.StatusID, &parentType)
 	if err != nil {
 		return nil, invalid("Parent must be an existing issue in this workspace")
+	}
+	if err := domain.ValidateHierarchy(childType, parentType); err != nil {
+		return nil, &domain.FieldError{Path: path, Message: err.Error()}
 	}
 	rows, err := t.SQL.QueryContext(t.Context, `WITH RECURSIVE ancestors AS (SELECT id,parent_id FROM tracker_issue WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL UNION SELECT i.id,i.parent_id FROM tracker_issue i JOIN ancestors a ON i.id=a.parent_id WHERE i.workspace_id=$1 AND i.deleted_at IS NULL) SELECT id,coalesce(parent_id,'') FROM ancestors`, t.WorkspaceID, parentID)
 	if err != nil {
@@ -107,8 +112,24 @@ func (t *Tx) parent(id, parentID string) (*domain.IssueRef, error) {
 	if domain.ParentCycle(id, parentID, parents) {
 		return nil, invalid("Parent would create a cycle")
 	}
-	value := ref(parent)
-	return &value, nil
+	return &parent, nil
+}
+func (t *Tx) validateChildren(id, parentType string) error {
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT DISTINCT type FROM tracker_issue WHERE workspace_id=$1 AND parent_id=$2 AND deleted_at IS NULL`, t.WorkspaceID, id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var childType string
+		if err := rows.Scan(&childType); err != nil {
+			return err
+		}
+		if err := domain.ValidateHierarchy(childType, parentType); err != nil {
+			return &domain.FieldError{Path: "type", Message: err.Error()}
+		}
+	}
+	return rows.Err()
 }
 func (t *Tx) replaceLabels(id string, ids []string) ([]string, error) {
 	ids = slices.Clone(ids)
@@ -183,7 +204,7 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	}
 	item.CompletedAt = domain.TransitionCompletedAt(status.Category, time.Now())
 	if input.ParentID != nil {
-		item.Parent, err = t.parent(item.ID, *input.ParentID)
+		item.Parent, err = t.parent(item.ID, *input.ParentID, item.Type, "parentId")
 		if err != nil {
 			return item, err
 		}
@@ -257,13 +278,27 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	if err := domain.ValidateIssue(item); err != nil {
 		return item, invalid(err.Error())
 	}
-	if input.ParentID.Present {
+	if input.ParentID.Present || item.Type != old.Type {
 		parent := ""
-		if input.ParentID.Value != nil {
-			parent = *input.ParentID.Value
+		if old.Parent != nil {
+			parent = old.Parent.ID
 		}
-		item.Parent, err = t.parent(item.ID, parent)
+		oldParent := parent
+		if input.ParentID.Present {
+			parent = ""
+			if input.ParentID.Value != nil {
+				parent = *input.ParentID.Value
+			}
+		}
+		path := "type"
+		if parent != oldParent {
+			path = "parentId"
+		}
+		item.Parent, err = t.parent(item.ID, parent, item.Type, path)
 		if err != nil {
+			return item, err
+		}
+		if err := t.validateChildren(item.ID, item.Type); err != nil {
 			return item, err
 		}
 	}

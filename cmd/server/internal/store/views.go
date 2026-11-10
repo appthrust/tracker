@@ -10,27 +10,29 @@ import (
 )
 
 type ViewCreate struct {
-	Name   string        `json:"name"`
-	Layout string        `json:"layout"`
-	Filter domain.Filter `json:"filter"`
-	Sort   domain.Sort   `json:"sort"`
-	Shared bool          `json:"shared"`
+	Name    string        `json:"name"`
+	Layout  string        `json:"layout"`
+	GroupBy *string       `json:"groupBy"`
+	Filter  domain.Filter `json:"filter"`
+	Sort    domain.Sort   `json:"sort"`
+	Shared  bool          `json:"shared"`
 }
 type ViewPatch struct {
 	Name     *string        `json:"name"`
 	Layout   *string        `json:"layout"`
+	GroupBy  *string        `json:"groupBy"`
 	Filter   *domain.Filter `json:"filter"`
 	Sort     *domain.Sort   `json:"sort"`
 	Shared   *bool          `json:"shared"`
 	Position *int           `json:"position"`
 }
 
-const viewColumns = `id,name,owner_sub,owner_name,shared,layout,filter,sort,position,created_at,updated_at`
+const viewColumns = `id,name,owner_sub,owner_name,shared,layout,group_by,filter,sort,position,created_at,updated_at`
 
 func scanView(row scanner) (domain.View, error) {
 	var item domain.View
 	var filter []byte
-	err := row.Scan(&item.ID, &item.Name, &item.Owner.Sub, &item.Owner.Name, &item.Shared, &item.Layout, &filter, &item.Sort, &item.Position, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.Name, &item.Owner.Sub, &item.Owner.Name, &item.Shared, &item.Layout, &item.GroupBy, &filter, &item.Sort, &item.Position, &item.CreatedAt, &item.UpdatedAt)
 	if err == nil {
 		err = json.Unmarshal(filter, &item.Filter)
 	}
@@ -58,7 +60,7 @@ func (t *Tx) view(id string) (domain.View, error) {
 	return scanView(t.SQL.QueryRowContext(t.Context, `SELECT `+viewColumns+` FROM tracker_view WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, id))
 }
 func (t *Tx) CreateView(input ViewCreate, actor domain.Actor) (domain.View, error) {
-	item := domain.View{ID: ulid.Make().String(), Name: strings.TrimSpace(input.Name), Owner: actor.Person, Shared: input.Shared, Layout: input.Layout, Filter: input.Filter, Sort: input.Sort}
+	item := domain.View{ID: ulid.Make().String(), Name: strings.TrimSpace(input.Name), Owner: actor.Person, Shared: input.Shared, Layout: input.Layout, GroupBy: "none", Filter: input.Filter, Sort: input.Sort}
 	if !domain.Can(actor, domain.CreateView, domain.Target{Shared: item.Shared}) {
 		return item, httpx.Forbidden()
 	}
@@ -67,6 +69,9 @@ func (t *Tx) CreateView(input ViewCreate, actor domain.Actor) (domain.View, erro
 	}
 	if item.Sort == "" {
 		item.Sort = domain.SortUpdated
+	}
+	if input.GroupBy != nil {
+		item.GroupBy = *input.GroupBy
 	}
 	if err := domain.ValidateView(item); err != nil {
 		if _, ok := err.(*domain.FieldError); ok {
@@ -85,7 +90,7 @@ func (t *Tx) CreateView(input ViewCreate, actor domain.Actor) (domain.View, erro
 	if err != nil {
 		return item, err
 	}
-	if err := t.Exec(`INSERT INTO tracker_view (id,workspace_id,name,owner_sub,owner_name,shared,layout,filter,sort,position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, item.ID, t.WorkspaceID, item.Name, actor.Sub, actor.Name, item.Shared, item.Layout, filter, item.Sort, item.Position); err != nil {
+	if err := t.Exec(`INSERT INTO tracker_view (id,workspace_id,name,owner_sub,owner_name,shared,layout,group_by,filter,sort,position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, item.ID, t.WorkspaceID, item.Name, actor.Sub, actor.Name, item.Shared, item.Layout, item.GroupBy, filter, item.Sort, item.Position); err != nil {
 		return item, err
 	}
 	return t.view(item.ID)
@@ -103,6 +108,9 @@ func (t *Tx) PatchView(id string, input ViewPatch, actor domain.Actor) (domain.V
 	}
 	if input.Layout != nil {
 		item.Layout = *input.Layout
+	}
+	if input.GroupBy != nil {
+		item.GroupBy = *input.GroupBy
 	}
 	if input.Filter != nil {
 		item.Filter = *input.Filter
@@ -132,7 +140,7 @@ func (t *Tx) PatchView(id string, input ViewPatch, actor domain.Actor) (domain.V
 	if err != nil {
 		return item, err
 	}
-	if err := t.Exec(`UPDATE tracker_view SET name=$3,shared=$4,layout=$5,filter=$6,sort=$7,position=$8,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Name, item.Shared, item.Layout, filter, item.Sort, item.Position); err != nil {
+	if err := t.Exec(`UPDATE tracker_view SET name=$3,shared=$4,layout=$5,filter=$6,sort=$7,position=$8,group_by=$9,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Name, item.Shared, item.Layout, filter, item.Sort, item.Position, item.GroupBy); err != nil {
 		return item, err
 	}
 	return t.view(item.ID)

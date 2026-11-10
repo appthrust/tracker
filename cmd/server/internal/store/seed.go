@@ -44,8 +44,10 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 			return err
 		}
 		titles := []string{"Dashboard loses filters on reload", "Add keyboard shortcuts to issue list", "Document cluster recovery steps", "Platform API returns stale status", "Improve deployment progress display", "Update CLI quickstart", "Console app screenshot upload fails", "Add assignee picker search", "Review Gateway access documentation", "Cluster provisioning stalls", "Improve empty-state guidance", "Document release identity", "Dashboard sidebar overlaps content", "Add board column counts", "Clean up old fixtures", "CLI login expires too early", "Improve report form validation", "Document attachment limits", "Builder Console fails to load logs", "Add saved view navigation", "Review issue triage process", "Platform API pagination skips items", "Improve status colors", "Document Directory integration", "Console app reload loses state", "Add copy identifier action", "Review accessibility labels", "Cluster status is delayed", "Improve mobile issue detail", "Document workspace settings"}
+		workTypes := []string{"bug", "feature", "task"}
+		issues := make([]domain.Issue, 0, len(titles))
 		for i, title := range titles {
-			kind := domain.Types[i%len(domain.Types)]
+			kind := workTypes[i%len(workTypes)]
 			input := IssueCreate{Title: title, Description: fmt.Sprintf("Track and investigate this AppThrust work item.\n\nFixture issue %d.", i+1), Type: kind, Priority: domain.Priorities[i%len(domain.Priorities)], StatusID: statuses[i%len(statuses)].ID, LabelIDs: []string{labels[i%len(labels)].ID}}
 			n := i + 1
 			if n%3 != 0 {
@@ -55,11 +57,39 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 				input.Report = &domain.Report{Environment: []string{"appthrust.ink", "craftsman", "appthrust.dev", "local"}[i%4], Surface: domain.Surfaces[i%len(domain.Surfaces)], Version: "0.1.0", Steps: "Open the affected surface and repeat the action.", Expected: "The action completes successfully.", Actual: "The observed behavior differs from the expected result."}
 			}
 			assignee := people[(i+1)%len(people)]
-			if _, err := tx.CreateIssue(input, people[i%len(people)], &assignee); err != nil {
+			item, err := tx.CreateIssue(input, people[i%len(people)], &assignee)
+			if err != nil {
 				return err
 			}
+			issues = append(issues, item)
 		}
-		for _, input := range []ViewCreate{{Name: "Bugs", Shared: true, Filter: domain.Filter{Type: []string{"bug"}}}, {Name: "My issues", Shared: true, Filter: domain.Filter{Assignee: []string{"me"}}}} {
+		epics := make([]domain.Issue, 0, 2)
+		for _, title := range []string{"Reliable bug intake", "Faster triage"} {
+			item, err := tx.CreateIssue(IssueCreate{Title: title, Type: "epic", Priority: "medium", StatusID: statuses[2].ID}, admin.Person, nil)
+			if err != nil {
+				return err
+			}
+			epics = append(epics, item)
+		}
+		stories := make([]domain.Issue, 0, 4)
+		for i, title := range []string{"As a reporter, I want to submit a complete bug report", "As a triager, I want to reproduce reported bugs", "As a triager, I want to prioritize incoming work", "As an assignee, I want to find my next task"} {
+			item, err := tx.CreateIssue(IssueCreate{Title: title, Type: "story", Priority: "medium", StatusID: statuses[2].ID, ParentID: &epics[i/2].ID}, admin.Person, nil)
+			if err != nil {
+				return err
+			}
+			stories = append(stories, item)
+		}
+		for i, issue := range issues {
+			n := i + 1
+			if n%5 != 0 {
+				parent := stories[n%4].ID
+				if _, err := tx.PatchIssue(issue.ID, IssuePatch{ParentID: Field[string]{Present: true, Value: &parent}}, admin.Person, nil); err != nil {
+					return err
+				}
+			}
+		}
+		groupBy := "epic"
+		for _, input := range []ViewCreate{{Name: "Bugs", Shared: true, Filter: domain.Filter{Type: []string{"bug"}}}, {Name: "My issues", Shared: true, Filter: domain.Filter{Assignee: []string{"me"}}}, {Name: "By epic", Shared: true, Layout: "board", GroupBy: &groupBy}} {
 			if _, err := tx.CreateView(input, admin); err != nil {
 				return err
 			}
