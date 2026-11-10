@@ -67,6 +67,14 @@ and `/healthz` remains 200. Missing database configuration leaves the API return
 when the API is available. `/releasez` uses `TRACKER_RELEASE_VERSION` and
 `TRACKER_ARTIFACT_DIGEST` supplied by the catalog.
 
+A request whose bearer the server refuses (401 `unauthenticated`) writes one
+`tracker auth rejected:` log line: method, path, the edge `X-Request-Id`, a
+reason (`issuer`, `audience`, `expired_or_not_yet_valid`, `signature_or_keys`,
+`claims_shape`, `malformed_jwt`, `missing_bearer`, `raw_access_key`, `other`),
+and unverified token metadata (`alg`, `kid`, `iss`, `aud`, `azp`, `iat`, `nbf`,
+`exp`, the JSON type of `groups`). It never contains the token, its signature,
+or a personal claim. A 401 with no such line was answered by the edge.
+
 PostgreSQL integration tests are opt-in: they skip when both
 `BUILTIN_APPSERVER_TEST_DATABASE_URL` and `BUILDER_CONSOLE_TEST_DATABASE_URL` are unset.
 An explicitly configured test database must permit isolated schema creation.
