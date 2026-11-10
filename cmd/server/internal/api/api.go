@@ -169,7 +169,7 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) (identity.Ide
 		} else {
 			// The edge has already accepted this session, so a 401 here is the app
 			// disagreeing with the edge about the token; record why.
-			log.Printf("tracker auth rejected: %s %s request_id=%q %s", r.Method, r.URL.Path, r.Header.Get("X-Request-Id"), describeRejection(r.Header.Get("Authorization"), err))
+			log.Printf("tracker auth rejected: %s %s request_id=%q %s edge_cookies_expired=%d", r.Method, r.URL.Path, r.Header.Get("X-Request-Id"), describeRejection(r.Header.Get("Authorization"), err), expireEdgeSession(w, r))
 			httpx.WriteError(w, httpx.Fail(401, "unauthenticated", "A valid bearer token is required"), "tracker")
 		}
 		return identity.Identity{}, "", false
