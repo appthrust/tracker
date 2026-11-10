@@ -1,27 +1,41 @@
-// Parent, children and blocking links. Parent and "blocks" are this issue's
-// own fields (PATCH parentId / blocks); adding a child sets the child's
-// parentId; "blocked by" is the reverse of other issues' blocks and is shown
-// read-only.
+// Children and blocking links of a work item. "Blocks" is this issue's own
+// field (PATCH blocks); adding a child sets the child's parentId; "blocked
+// by" is the reverse of other issues' blocks and is shown read-only. The
+// parent is a property (hierarchy.tsx `IssueParentPicker`); an epic's or
+// story's children are its hierarchy section.
 import { useQuery } from '@tanstack/react-query'
 import { Plus, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { issueSearchQuery } from '../../api/queries'
-import type { Issue, IssueRef } from '../../api/tracker'
+import type { Issue, IssueRef, IssueSummary } from '../../api/tracker'
 import { useText } from '../../i18n'
+import { canParent, levelOf } from '../../model/issues'
 import { paths } from '../../routes/paths'
 import { HrefLink, Picker } from '../../ui'
 import { useIssueEditor } from './properties'
 import { useReference } from './use-reference'
-import { StatusIcon } from './visuals'
+import { StatusIcon, TypeIcon } from './visuals'
 
-/** Picks another issue by identifier or title words. */
-export function IssueSearchPicker({ label, exclude, onPick, children }: { label: string; exclude: string[]; onPick: (issue: IssueRef) => void; children: ReactNode }) {
+/** Picks another issue by identifier or title words; `accept` hides results that cannot be picked here (hierarchy rules). */
+export function IssueSearchPicker({
+  label,
+  exclude,
+  accept,
+  onPick,
+  children,
+}: {
+  label: string
+  exclude: string[]
+  accept?: (issue: IssueSummary) => boolean
+  onPick: (issue: IssueSummary) => void
+  children: ReactNode
+}) {
   const { t } = useText()
   const { statusById } = useReference()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const results = useQuery({ ...issueSearchQuery(query), enabled: open })
-  const items = (results.data?.items ?? []).filter((issue) => !exclude.includes(issue.id))
+  const items = (results.data?.items ?? []).filter((issue) => !exclude.includes(issue.id) && (accept?.(issue) ?? true))
   return (
     <Picker
       label={label}
@@ -29,11 +43,15 @@ export function IssueSearchPicker({ label, exclude, onPick, children }: { label:
       onOpenChange={setOpen}
       onQueryChange={setQuery}
       placeholder={t('tracker.relation.searchPlaceholder')}
-      options={items.map((issue) => ({ value: issue.id, label: `${issue.identifier} ${issue.title}`, icon: <StatusIcon status={statusById.get(issue.statusId)} /> }))}
+      options={items.map((issue) => ({
+        value: issue.id,
+        label: `${issue.identifier} ${issue.title}`,
+        icon: levelOf(issue.type) > 0 ? <TypeIcon type={issue.type} /> : <StatusIcon status={statusById.get(issue.statusId)} />,
+      }))}
       selected={[]}
       onPick={(id) => {
         const issue = items.find((candidate) => candidate.id === id)
-        if (issue) onPick({ id: issue.id, identifier: issue.identifier, title: issue.title, statusId: issue.statusId })
+        if (issue) onPick(issue)
       }}
       empty={results.isFetching ? t('tracker.common.loading') : t('tracker.relation.noResults')}
     >
@@ -85,30 +103,25 @@ export function Relations({ issue }: { issue: Issue }) {
   )
   return (
     <section aria-label={t('tracker.relation.title')} className="space-y-3">
-      {group(
-        t('tracker.relation.parent'),
-        issue.parent ? [issue.parent] : [],
-        <IssueSearchPicker label={t('tracker.relation.setParent')} exclude={[issue.id, ...issue.children.map((child) => child.id)]} onPick={(parent) => update({ id: issue.id, input: { parentId: parent.id } })}>
-          <button type="button" className={ADD}>
-            <Plus aria-hidden className="size-3" />
-            {issue.parent ? t('tracker.relation.change') : t('tracker.relation.set')}
-          </button>
-        </IssueSearchPicker>,
-        () => update({ id: issue.id, input: { parentId: null } }),
-        (ref) => t('tracker.relation.removeParent', { identifier: ref.identifier })
-      )}
-      {group(
-        t('tracker.relation.children'),
-        issue.children,
-        <IssueSearchPicker label={t('tracker.relation.addChild')} exclude={related} onPick={(child) => update({ id: child.id, input: { parentId: issue.id } })}>
-          <button type="button" className={ADD}>
-            <Plus aria-hidden className="size-3" />
-            {t('tracker.relation.add')}
-          </button>
-        </IssueSearchPicker>,
-        (child) => update({ id: child.id, input: { parentId: null } }),
-        (ref) => t('tracker.relation.removeChild', { identifier: ref.identifier })
-      )}
+      {levelOf(issue.type) === 0
+        ? group(
+            t('tracker.relation.children'),
+            issue.children,
+            <IssueSearchPicker
+              label={t('tracker.relation.addChild')}
+              exclude={related}
+              accept={(candidate) => canParent(candidate.type, issue.type)}
+              onPick={(child) => update({ id: child.id, input: { parentId: issue.id }, parent: issue })}
+            >
+              <button type="button" className={ADD}>
+                <Plus aria-hidden className="size-3" />
+                {t('tracker.relation.add')}
+              </button>
+            </IssueSearchPicker>,
+            (child) => update({ id: child.id, input: { parentId: null } }),
+            (ref) => t('tracker.relation.removeChild', { identifier: ref.identifier })
+          )
+        : null}
       {group(
         t('tracker.relation.blocks'),
         issue.blocks,

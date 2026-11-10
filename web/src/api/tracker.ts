@@ -31,13 +31,16 @@ export type Project = {
   updatedAt: string
 }
 
-export type IssueType = 'bug' | 'feature' | 'task'
+/** Level 2 `epic`, level 1 `story`, level 0 work items (`bug`, `feature`, `task`); API.md "Epics and stories". */
+export type IssueType = 'epic' | 'story' | 'bug' | 'feature' | 'task'
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none'
 export type Surface = 'dashboard' | 'platform-api' | 'apth' | 'builder-console' | 'console-app' | 'cluster' | 'other'
 /** Each text ≤ 4096 characters. */
 export type Report = { environment: string; surface: Surface; version?: string; steps?: string; expected?: string; actual?: string }
 
 export type IssueRef = { id: string; identifier: string; title: string; statusId: string }
+/** Over all level-0 descendants: `total` excludes canceled ones, `completed` counts those in a completed status. */
+export type Progress = { total: number; completed: number }
 export type Issue = {
   id: string
   /** `KEY-123` */
@@ -55,6 +58,12 @@ export type Issue = {
   /** The tracker project, or null for "no project". */
   projectId: string | null
   parent: IssueRef | null
+  /** The nearest strict ancestor of type `epic` (null on an epic). */
+  epic: IssueRef | null
+  /** The nearest strict ancestor of type `story` (null on a story). */
+  story: IssueRef | null
+  /** Non-null iff `type` is `epic` or `story`. */
+  progress: Progress | null
   children: IssueRef[]
   blocks: IssueRef[]
   blockedBy: IssueRef[]
@@ -109,11 +118,17 @@ export type Filter = {
   parent?: string
   /** Project ids, or `none` for issues without a project. */
   project?: string[]
+  /** The issue's derived `epic` is one of these ids, or `none` for issues without one. */
+  epic?: string[]
+  /** The issue's derived `story` is one of these ids, or `none` for issues without one. */
+  story?: string[]
 }
 /** updated/created: desc; priority: urgent→none then updated desc; number: asc. */
 export type Sort = 'updated' | 'created' | 'priority' | 'number'
 export type ViewLayout = 'list' | 'board'
-export type View = { id: string; name: string; owner: Person; shared: boolean; layout: ViewLayout; filter: Filter; sort: Sort; position: number; createdAt: string; updatedAt: string }
+/** Client-side sectioning of a list or board by the issues' derived `epic` or `story`. */
+export type GroupBy = 'none' | 'epic' | 'story'
+export type View = { id: string; name: string; owner: Person; shared: boolean; layout: ViewLayout; groupBy: GroupBy; filter: Filter; sort: Sort; position: number; createdAt: string; updatedAt: string }
 
 export type IssuePage = { items: IssueSummary[]; nextCursor: string | null }
 export type PeopleResult = { items: Person[]; source: 'directory' | 'unavailable' }
@@ -147,7 +162,7 @@ export type UpdateIssueInput = Partial<{
   /** null clears the project. */
   projectId: string | null
 }>
-export type CreateViewInput = { name: string; layout?: ViewLayout; filter?: Filter; sort?: Sort; shared?: boolean }
+export type CreateViewInput = { name: string; layout?: ViewLayout; groupBy?: GroupBy; filter?: Filter; sort?: Sort; shared?: boolean }
 export type UpdateViewInput = Partial<CreateViewInput>
 export type IssueListParams = { filter?: Filter; sort?: Sort; cursor?: string | null; limit?: number }
 export type CreateProjectInput = { name: string; description?: string; color?: LabelColor }

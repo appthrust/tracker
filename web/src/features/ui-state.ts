@@ -1,21 +1,24 @@
 // App-wide UI state outside the URL: which overlay is open and which issues
 // keyboard commands act on. List/board/detail screens publish the issues on
 // screen (`context`), the focused one (J/K) and the X-selected ones; the
-// command palette edits the selection, else the focused issue. `/` and
-// `/board` publish their project scope (`?project=`), which stays while the
-// person moves elsewhere: new issues default to it and the sidebar's list
-// links keep it.
+// command palette edits the selection, else the focused issue. `/`,
+// `/board`, `/reported` and `/epics` publish their project scope
+// (`?project=`), which stays while the person moves elsewhere: new issues
+// default to it and the sidebar's list links keep it.
 import { Store, useSelector } from '@tanstack/react-store'
-import type { IssueSummary } from '../api/tracker'
+import type { IssueSummary, IssueType } from '../api/tracker'
+
+/** Defaults of the "new issue" dialog. `projectId` undefined = the project scope; null = no project. `parent` prefills the parent (an epic's "New story", a group's "+"). */
+export type NewIssueDefaults = { statusId?: string; projectId?: string | null; type?: IssueType; parent?: IssueSummary }
 
 type UiState = {
   palette: boolean
-  /** Open "new issue" dialog with its defaults, or null. `projectId` undefined = the project scope; null = no project. */
-  newIssue: { statusId?: string; projectId?: string | null } | null
+  /** Open "new issue" dialog with its defaults, or null. */
+  newIssue: NewIssueDefaults | null
   context: IssueSummary[]
   focusedId: string | null
   selectedIds: string[]
-  /** Last project scope of `/` or `/board`: a project id, `none`, or null for all projects. */
+  /** Last project scope of the list, board, "Reported by me" or epics overview: a project id, `none`, or null for all projects. */
   scope: string | null
 }
 

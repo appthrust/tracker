@@ -110,4 +110,19 @@ describe('tracker API client', () => {
     expect(applyIssuePatch({ ...issue, projectId: 'P' }, { title: 'x' }).projectId).toBe('P')
     expect(issue.statusId).not.toBe('S')
   })
+
+  test('optimistic parent: the derived epic and story follow the picked parent; clearing it clears both', async () => {
+    const { api } = mockApi()
+    const task = await api.issues.get('APT-5')
+    const [epic, story, parentTask] = await Promise.all([api.issues.get('APT-32'), api.issues.get('APT-35'), api.issues.get('APT-3')])
+    expect(task).toMatchObject({ parent: null, epic: null, story: null })
+    const ref = (issue: typeof epic) => ({ id: issue.id, identifier: issue.identifier, title: issue.title, statusId: issue.statusId })
+    expect(applyIssuePatch(task, { parentId: story.id }, undefined, story)).toMatchObject({ parent: ref(story), story: ref(story), epic: story.epic })
+    expect(applyIssuePatch(task, { parentId: epic.id }, undefined, epic)).toMatchObject({ parent: ref(epic), epic: ref(epic), story: null })
+    expect(applyIssuePatch(task, { parentId: parentTask.id }, undefined, parentTask)).toMatchObject({ parent: ref(parentTask), epic: parentTask.epic, story: parentTask.story })
+    // What the server answers after the write matches the optimistic shape.
+    expect(await api.issues.update(task.id, { parentId: story.id })).toMatchObject({ parent: ref(story), story: ref(story), epic: story.epic })
+    expect(applyIssuePatch(story, { parentId: null })).toMatchObject({ parent: null, epic: null, story: null })
+    expect(listHref('/board', { group: 'epic', project: 'P1' })).toBe('/board?group=epic&project=P1')
+  })
 })

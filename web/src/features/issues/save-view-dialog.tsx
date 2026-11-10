@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useState, type FormEvent } from 'react'
 import { useViewMutations } from '../../api/queries'
-import type { Filter, Sort, ViewLayout } from '../../api/tracker'
+import type { Filter, GroupBy, Sort, ViewLayout } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { paths } from '../../routes/paths'
 import { ActionError, Button, Dialog, Field, TextInput } from '../../ui'
@@ -9,8 +9,22 @@ import { useReference } from './use-reference'
 
 const NAME_MAX = 60
 
-/** Saves the current filter, sort and layout as a new view; Admins may share it with everyone. */
-export function SaveViewDialog({ open, onOpenChange, filter, sort, layout }: { open: boolean; onOpenChange: (open: boolean) => void; filter: Filter; sort: Sort; layout: ViewLayout }) {
+/** Saves the current filter, sort, layout and grouping as a new view; Admins may share it with everyone. */
+export function SaveViewDialog({
+  open,
+  onOpenChange,
+  filter,
+  sort,
+  layout,
+  groupBy,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  filter: Filter
+  sort: Sort
+  layout: ViewLayout
+  groupBy: GroupBy
+}) {
   const { t } = useText()
   const { me } = useReference()
   const navigate = useNavigate()
@@ -25,7 +39,7 @@ export function SaveViewDialog({ open, onOpenChange, filter, sort, layout }: { o
     setTouched(true)
     if (!name.trim() || Array.from(name.trim()).length > NAME_MAX) return
     create.mutate(
-      { name: name.trim(), filter, sort, layout, shared: me.isAdmin && shared },
+      { name: name.trim(), filter, sort, layout, groupBy, shared: me.isAdmin && shared },
       {
         onSuccess: (view) => {
           onOpenChange(false)

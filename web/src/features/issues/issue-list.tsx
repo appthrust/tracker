@@ -1,24 +1,69 @@
-// Dense list grouped by status (category order). Each row: checkbox (X),
-// priority, identifier, status, title, project (when the list spans
+// Dense list grouped by status (category order), or — with a grouping — by
+// epic or story in collapsible sections headed by that issue ("No epic/story"
+// last). Each row: checkbox (X), priority, identifier, status, title (epics
+// and stories add their mark and progress), project (when the list spans
 // projects), labels, counts, assignee, updated. Rows are roving-focus targets
 // for J/K; clicking a row (or Enter) opens the side panel, the title link
 // opens the full page with a modifier click.
 import { MessageSquare, Paperclip, Plus } from 'lucide-react'
 import type { MouseEvent } from 'react'
-import type { IssueSummary, Status } from '../../api/tracker'
+import type { GroupBy, IssueSummary, Status } from '../../api/tracker'
 import { useText } from '../../i18n'
+import { levelOf, NO_GROUP, type IssueSection } from '../../model/issues'
 import { paths } from '../../routes/paths'
 import { cn, formatDate, HrefLink } from '../../ui'
 import { setUi, useUi } from '../ui-state'
+import { GroupHeading } from './hierarchy'
 import { AssigneePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, StatusPicker } from './properties'
-import { StatusIcon } from './visuals'
+import { ProgressBar, StatusIcon, TypeIcon } from './visuals'
 
 export type IssueGroup = { status: Status; issues: IssueSummary[] }
 
 /** A modified or middle click keeps the browser's own link behavior (new tab, copy). */
 export const isPlainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
 
-export function IssueList({ groups, onOpen, onNewIssue, showProject }: { groups: IssueGroup[]; onOpen: (issue: IssueSummary) => void; onNewIssue: (statusId: string) => void; showProject: boolean }) {
+/** What a grouped list or board needs from its page: the grouping, which sections are closed, and the open/new actions. */
+export type GroupedProps = {
+  groupBy: Exclude<GroupBy, 'none'>
+  isCollapsed: (key: string) => boolean
+  onToggle: (key: string) => void
+  onOpen: (issue: { identifier: string }) => void
+  /** New issue in a section, with its grouping issue as the parent (none for "No epic/story"). */
+  onNewInGroup: (section: IssueSection) => void
+  showProject: boolean
+}
+
+/** Sections by epic or story; an empty "No epic/story" section is left out. */
+export function GroupedIssueList({ sections, groupBy, isCollapsed, onToggle, onOpen, onNewInGroup, showProject }: GroupedProps & { sections: IssueSection[] }) {
+  return (
+    <div className="pb-24">
+      {sections
+        .filter((section) => section.key !== NO_GROUP || section.issues.length > 0)
+        .map((section) => {
+          const collapsed = isCollapsed(section.key)
+          return (
+            <section key={section.key} aria-label={section.header ? `${section.header.identifier} ${section.header.title}` : undefined}>
+              <GroupHeading
+                section={section}
+                groupBy={groupBy}
+                count={section.issues.length}
+                collapsed={collapsed}
+                onToggle={() => onToggle(section.key)}
+                onOpen={onOpen}
+                onNew={() => onNewInGroup(section)}
+                variant="section"
+              />
+              <ul id={`group-rows-${section.key}`} hidden={collapsed}>
+                {collapsed ? null : section.issues.map((issue) => <IssueRow key={issue.id} issue={issue} onOpen={onOpen} showProject={showProject} />)}
+              </ul>
+            </section>
+          )
+        })}
+    </div>
+  )
+}
+
+export function IssueList({ groups, onOpen, onNewIssue, showProject }: { groups: IssueGroup[]; onOpen: (issue: { identifier: string }) => void; onNewIssue: (statusId: string) => void; showProject: boolean }) {
   const { t } = useText()
   return (
     <div className="pb-24">
@@ -49,7 +94,7 @@ export function IssueList({ groups, onOpen, onNewIssue, showProject }: { groups:
   )
 }
 
-function IssueRow({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen: (issue: IssueSummary) => void; showProject: boolean }) {
+function IssueRow({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen: (issue: { identifier: string }) => void; showProject: boolean }) {
   const { t, locale } = useText()
   const focused = useUi((state) => state.focusedId === issue.id)
   const selected = useUi((state) => state.selectedIds.includes(issue.id))
@@ -82,6 +127,12 @@ function IssueRow({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen:
         <PriorityPicker issue={issue} />
         <span className="w-16 shrink-0 truncate font-mono text-xs text-stone-500 tabular-nums">{issue.identifier}</span>
         <StatusPicker issue={issue} />
+        {levelOf(issue.type) > 0 ? (
+          <span className="ml-1 flex shrink-0 items-center" title={t(`tracker.type.${issue.type}`)}>
+            <TypeIcon type={issue.type} />
+            <span className="sr-only">{t(`tracker.type.${issue.type}`)}</span>
+          </span>
+        ) : null}
         <HrefLink
           href={paths.issue(issue.identifier)}
           className="ml-1 min-w-0 flex-1 truncate font-medium text-stone-800 hover:text-stone-950"
@@ -95,6 +146,7 @@ function IssueRow({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen:
           {issue.title}
         </HrefLink>
         <span className="hidden min-w-0 items-center gap-2 md:flex">
+          {issue.progress ? <ProgressBar progress={issue.progress} /> : null}
           {showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}
           <LabelsPicker issue={issue} />
           {issue.commentCount > 0 ? (

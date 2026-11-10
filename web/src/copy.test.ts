@@ -1,7 +1,7 @@
 import { createDashboardTranslator } from '@appthrust/platform-dashboard-i18n'
 import { describe, expect, test } from 'bun:test'
 import { catalogs } from './copy'
-import { CATEGORIES, ISSUE_TYPES, PRIORITIES, SORTS, SURFACES } from './model/issues'
+import { CATEGORIES, GROUP_BYS, ISSUE_TYPES, PRIORITIES, SORTS, SURFACES } from './model/issues'
 
 const placeholders = (text: string) => [...text.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)].map((match) => match[1]).sort()
 
@@ -25,6 +25,7 @@ describe('tracker copy catalogs', () => {
       ...CATEGORIES.flatMap((value) => [`tracker.category.${value}`, `tracker.category.${value}Hint`]),
       ...SURFACES.map((value) => `tracker.surface.${value}`),
       ...SORTS.map((value) => `tracker.sort.${value}`),
+      ...GROUP_BYS.map((value) => `tracker.group.${value}`),
     ]
     for (const id of expected) expect(ids.has(id), id).toBe(true)
   })

@@ -1,6 +1,8 @@
-// One issue: title, Markdown description, bug report fields, relations,
-// attachments, timeline and comment box, with a properties sidebar. Rendered
-// as the full page (`/issues/APT-12`) or as the side panel over a list.
+// One issue: breadcrumb (epic › story › parent), title, Markdown description,
+// bug report fields, an epic's or story's children with progress, relations,
+// attachments, timeline and comment box, with a properties sidebar (parent
+// included). Rendered as the full page (`/issues/APT-12`) or as the side
+// panel over a list.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, Copy, Maximize2, Pencil, Trash2, X } from 'lucide-react'
@@ -8,12 +10,13 @@ import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type 
 import { issueQuery, timelineQuery, useDeleteIssue } from '../../api/queries'
 import { isTrackerError, type Issue, type Report } from '../../api/tracker'
 import { useText } from '../../i18n'
-import { attachmentsOf, reportProblems, toReport, TITLE_MAX, type ReportDraft } from '../../model/issues'
+import { attachmentsOf, levelOf, reportProblems, toReport, TITLE_MAX, type ReportDraft } from '../../model/issues'
 import { paths } from '../../routes/paths'
 import { Avatar, Button, cn, ConfirmDialog, EmptyState, formatDate, formatDateTime, formatRelative, HrefLink, Loading, LoadFailed, Markdown, showToast, TextArea, useDocumentTitle } from '../../ui'
 import { setUi } from '../ui-state'
 import { ReportFields, type ReportProblems } from '../report/report-fields'
 import { Attachments, markdownFor, transferFiles, useUploader } from './attachments'
+import { HierarchySection, IssueBreadcrumb, IssueParentPicker, parentLabel } from './hierarchy'
 import { AssigneePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, StatusPicker, TypePicker, useIssueEditor } from './properties'
 import { Relations } from './relations'
 import { CommentComposer, insertAtCaret, Timeline } from './timeline'
@@ -103,6 +106,7 @@ function IssueDetail({ identifier, variant }: { identifier: string; variant: Var
         <DescriptionEditor issue={data} attachmentCount={attachments.length} />
       </div>
       {data.report ? <ReportSection issue={data} report={data.report} /> : null}
+      {levelOf(data.type) > 0 ? <HierarchySection issue={data} /> : null}
       <Relations issue={data} />
       <Attachments issueId={data.id} attachments={attachments} />
       <section aria-labelledby={`activity-${data.id}`} className="space-y-4">
@@ -150,14 +154,9 @@ function TitleEditor({ issue, variant }: { issue: Issue; variant: Variant }) {
   const Heading = variant === 'page' ? 'h1' : 'h2'
   return (
     <div>
-      {issue.parent ? (
-        <HrefLink href={paths.issue(issue.parent.identifier)} className="mb-1 inline-flex max-w-full items-center gap-1 text-xs text-stone-500 hover:text-stone-900">
-          <span className="font-mono">{issue.parent.identifier}</span>
-          <span className="truncate">{issue.parent.title}</span>
-          <span aria-hidden>›</span>
-        </HrefLink>
-      ) : null}
-      {variant === 'page' ? <p className="font-mono text-xs text-stone-500">{issue.identifier}</p> : null}
+      <IssueBreadcrumb issue={issue} />
+      {/* With a parent the breadcrumb already ends in the identifier. */}
+      {variant === 'page' && !issue.parent ? <p className="font-mono text-xs text-stone-500">{issue.identifier}</p> : null}
       {editing ? (
         <input
           autoFocus
@@ -344,6 +343,7 @@ function ReportSection({ issue, report }: { issue: Issue; report: Report }) {
 
 /** Compact property strip at the top of the side panel. */
 function PropertiesBar({ issue }: { issue: Issue }) {
+  const { t } = useText()
   return (
     <div className="flex flex-wrap items-center gap-1 rounded-lg border border-line px-1.5 py-1">
       <div className="w-40">
@@ -357,6 +357,12 @@ function PropertiesBar({ issue }: { issue: Issue }) {
       </div>
       <div className="w-44">
         <IssueProjectPicker issue={issue} variant="row" />
+      </div>
+      <div className="w-36">
+        <TypePicker issue={issue} />
+      </div>
+      <div className="w-56" role="group" aria-label={parentLabel(t, issue.type)}>
+        <IssueParentPicker issue={issue} />
       </div>
       <div className="min-w-32 flex-1">
         <LabelsPicker issue={issue} variant="row" />
@@ -391,6 +397,7 @@ function PropertiesSidebar({ issue }: { issue: Issue }) {
       {row(t('tracker.property.assignee'), <AssigneePicker issue={issue} variant="row" />)}
       {row(t('tracker.property.labels'), <LabelsPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.type'), <TypePicker issue={issue} />)}
+      {row(parentLabel(t, issue.type), <IssueParentPicker issue={issue} />)}
       {row(
         t('tracker.property.due'),
         <input

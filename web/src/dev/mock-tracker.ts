@@ -5,7 +5,9 @@
 // Lee), three labels (regression/red, ux/purple, docs/blue), three projects
 // (Dashboard/blue, Platform API/purple, Builder Console/orange), 30 issues
 // across every status (Alex Chen reports 10 of them, so "Reported by me" is
-// not empty), and two shared views (Bugs, My issues).
+// not empty), then 2 epics and 4 stories (APT-31…36, In Progress) that bundle
+// every seeded issue n with n % 5 != 0 under stories[n % 4], and three shared
+// views (Bugs, My issues, By epic).
 // The caller is Alex Chen as Team Admin; MOCK_ROLE=Editor (or Viewer) makes
 // them a non-admin. `POST /api/tracker/v1/__mock/caller {sub, role?}` switches
 // the signed-in person (role default Editor); a `sub` outside the seed needs a
@@ -22,6 +24,7 @@ import type {
   Attachment,
   Comment,
   Filter,
+  GroupBy,
   Issue,
   IssueRef,
   IssueSummary,
@@ -31,6 +34,7 @@ import type {
   Me,
   Person,
   Priority,
+  Progress,
   Project,
   Report,
   Role,
@@ -46,9 +50,12 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_TYPES,
   ATTACHMENTS_PER_ISSUE,
+  canParent,
   CATEGORIES,
   compareIssues,
+  GROUP_BYS,
   ISSUE_TYPES,
+  levelOf,
   matchesFilter,
   orderStatuses,
   PRIORITIES,
@@ -58,6 +65,7 @@ import {
   SORTS,
   SURFACES,
   TITLE_MAX,
+  WORK_ITEM_TYPES,
 } from '../model/issues'
 
 const BASE = '/api/tracker/v1'
@@ -67,6 +75,9 @@ const MAX_VIEWS = 50
 const PEOPLE_LIMIT = 20
 /** Most subjects one `reporter` filter may name (API.md, same limit as `assignee`). */
 const REPORTER_FILTER_MAX = 20
+/** Ancestor walks for the derived `epic`/`story` stop after this many hops (API.md). */
+const ANCESTOR_HOPS = 32
+const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i
 const DESCRIPTION_MAX_BYTES = 51_200
 const COMMENT_MAX_BYTES = 20_480
 const LABEL_COLORS: readonly LabelColor[] = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink']
@@ -84,6 +95,8 @@ const FILTER_KEYS: Record<keyof Filter, true> = {
   surface: true,
   parent: true,
   project: true,
+  epic: true,
+  story: true,
 }
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -198,12 +211,25 @@ const SEED_TITLES: readonly string[] = [
   'Document workspace settings',
 ]
 const SEED_ENVIRONMENTS = ['appthrust.ink', 'craftsman', 'appthrust.dev', 'local'] as const
+/** API.md v0.1.6 fixture, in creation order after the seed issues (same titles and order as the server seed). */
+const EPIC_SEED: readonly string[] = ['Reliable bug intake', 'Faster triage']
+/** Story `s` belongs to EPIC_SEED[floor(s / 2)]. */
+const STORY_SEED: readonly string[] = [
+  'As a reporter, I want to submit a complete bug report',
+  'As a triager, I want to reproduce reported bugs',
+  'As a triager, I want to prioritize incoming work',
+  'As an assignee, I want to find my next task',
+]
 
 /**
- * Mirrors the server's SeedDev: issue `i` has status i%6, type i%3, priority i%5,
- * label i%3, reporter i%3, assignee (i+1)%3, project by `seedProjectIndex(i+1)`;
- * bugs carry a report with environment i%4 and surface i%7. Creation times are
- * spaced one hour apart. `withProjects: false` seeds a workspace without projects.
+ * Mirrors the server's SeedDev: issue `i` has status i%6, type i%3 (bug,
+ * feature, task), priority i%5, label i%3, reporter i%3, assignee (i+1)%3,
+ * project by `seedProjectIndex(i+1)`; bugs carry a report with environment
+ * i%4 and surface i%7. Then the epics and stories: In Progress, medium
+ * priority, reported by Alex, unassigned, no labels, project or description;
+ * seed issue n (1-based) with n % 5 != 0 gets the parent stories[n % 4].
+ * Creation times are spaced one hour apart. `withProjects: false` seeds a
+ * workspace without projects.
  */
 function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { withProjects?: boolean } = {}) {
   const at = (hours: number) => new Date(T0 + hours * HOUR).toISOString()
@@ -219,7 +245,7 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
   SEED_TITLES.forEach((title, i) => {
     const createdAt = at(i + 1)
     const status = statuses[i % statuses.length]!
-    const type = ISSUE_TYPES[i % ISSUE_TYPES.length]!
+    const type = WORK_ITEM_TYPES[i % WORK_ITEM_TYPES.length]!
     const issue: StoredIssue = {
       id: ulid(T0 + (i + 1) * HOUR, seq++),
       number: i + 1,
@@ -253,9 +279,43 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
     issues.push(issue)
     activities.push({ id: ulid(T0 + (i + 1) * HOUR, seq++), issueId: issue.id, actor: issue.reporter, field: 'created', from: null, to: null, createdAt })
   })
+  const inProgress = statuses.find((status) => status.name === 'In Progress')!
+  const bundle = (title: string, type: IssueType, parentId: string | null): StoredIssue => {
+    const number = issues.length + 1
+    const createdAt = at(number)
+    const issue: StoredIssue = {
+      id: ulid(T0 + number * HOUR, seq++),
+      number,
+      title,
+      description: '',
+      type,
+      priority: 'medium',
+      statusId: inProgress.id,
+      assignee: null,
+      reporter: MOCK_PEOPLE.alex,
+      labelIds: [],
+      projectId: null,
+      parentId,
+      dueOn: null,
+      report: null,
+      createdAt,
+      updatedAt: createdAt,
+      completedAt: null,
+      deleted: false,
+    }
+    issues.push(issue)
+    activities.push({ id: ulid(T0 + number * HOUR, seq++), issueId: issue.id, actor: issue.reporter, field: 'created', from: null, to: null, createdAt })
+    return issue
+  }
+  const epics = EPIC_SEED.map((title) => bundle(title, 'epic', null))
+  const stories = STORY_SEED.map((title, s) => bundle(title, 'story', epics[Math.floor(s / 2)]!.id))
+  issues.slice(0, SEED_TITLES.length).forEach((issue) => {
+    if (issue.number % 5 !== 0) issue.parentId = stories[issue.number % 4]!.id
+  })
   const views: (View & { ownerSub: string })[] = [
-    { id: ulid(T0, seq++), name: 'Bugs', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', filter: { type: ['bug'] }, sort: 'updated', position: 0, createdAt: at(0), updatedAt: at(0) },
-    { id: ulid(T0, seq++), name: 'My issues', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', filter: { assignee: ['me'] }, sort: 'updated', position: 1, createdAt: at(0), updatedAt: at(0) },
+    { id: ulid(T0, seq++), name: 'Bugs', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { type: ['bug'] }, sort: 'updated', position: 0, createdAt: at(0), updatedAt: at(0) },
+    { id: ulid(T0, seq++), name: 'My issues', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { assignee: ['me'] }, sort: 'updated', position: 1, createdAt: at(0), updatedAt: at(0) },
+    { id: ulid(T0, seq++), name: 'By epic', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'board', groupBy: 'epic', filter: {}, sort: 'updated', position: 2, createdAt: at(0), updatedAt: at(0) },
   ]
   const role = process.env.MOCK_ROLE === 'Editor' || process.env.MOCK_ROLE === 'Viewer' ? (process.env.MOCK_ROLE as Role) : 'Admin'
   return {
@@ -323,8 +383,38 @@ function issueById(id: string | null): StoredIssue | undefined {
   return id ? state.issues.find((issue) => issue.id === id && !issue.deleted) : undefined
 }
 
+/** The nearest strict ancestor of `type`, walking at most ANCESTOR_HOPS parents. */
+function ancestorOfType(issue: StoredIssue, type: IssueType): StoredIssue | undefined {
+  let cursor = issueById(issue.parentId)
+  for (let hops = 0; cursor && hops < ANCESTOR_HOPS; hops++, cursor = issueById(cursor.parentId)) {
+    if (cursor.type === type) return cursor
+  }
+  return undefined
+}
+
+/** Epics and stories: over all live level-0 descendants, `total` excludes canceled ones, `completed` counts completed ones. */
+function progressOf(issue: StoredIssue): Progress | null {
+  if (levelOf(issue.type) === 0) return null
+  const category = (statusId: string) => state.statuses.find((status) => status.id === statusId)?.category
+  const progress: Progress = { total: 0, completed: 0 }
+  const seen = new Set<string>([issue.id])
+  for (let frontier = [issue.id]; frontier.length > 0; ) {
+    const children = live().filter((candidate) => candidate.parentId !== null && frontier.includes(candidate.parentId) && !seen.has(candidate.id))
+    for (const child of children) {
+      seen.add(child.id)
+      if (levelOf(child.type) !== 0 || category(child.statusId) === 'canceled') continue
+      progress.total++
+      if (category(child.statusId) === 'completed') progress.completed++
+    }
+    frontier = children.map((child) => child.id)
+  }
+  return progress
+}
+
 function summary(issue: StoredIssue): IssueSummary {
   const parent = issueById(issue.parentId)
+  const epic = ancestorOfType(issue, 'epic')
+  const story = ancestorOfType(issue, 'story')
   return {
     id: issue.id,
     identifier: identifier(issue),
@@ -338,6 +428,9 @@ function summary(issue: StoredIssue): IssueSummary {
     labelIds: [...issue.labelIds],
     projectId: issue.projectId,
     parent: parent ? ref(parent) : null,
+    epic: epic ? ref(epic) : null,
+    story: story ? ref(story) : null,
+    progress: progressOf(issue),
     dueOn: issue.dueOn,
     report: issue.report,
     commentCount: state.comments.filter((comment) => comment.issueId === issue.id && !comment.deleted).length,
@@ -468,6 +561,11 @@ function projectInputProblem(input: Record<string, unknown>, creating: boolean):
   return undefined
 }
 
+/** Why an issue of `childType` cannot sit under its parent (same wording as the server's domain.ValidateHierarchy). */
+function hierarchyMessage(childType: IssueType): string {
+  return childType === 'epic' ? 'Epics cannot have a parent' : 'Stories can only have an epic parent'
+}
+
 function parseFilter(raw: string | null): Filter | Problem {
   if (!raw) return {}
   let parsed: unknown
@@ -491,6 +589,9 @@ function parseFilter(raw: string | null): Filter | Problem {
   if (reporter && (reporter.length > REPORTER_FILTER_MAX || reporter.some((value) => value.length === 0 || value.length > 4096)))
     return { path: 'filter.reporter', message: `reporter must list at most ${REPORTER_FILTER_MAX} subjects of 1 to 4096 characters` }
   if (typeof filter.createdAfter === 'string' && Number.isNaN(Date.parse(filter.createdAfter))) return { path: 'filter.createdAfter', message: 'createdAfter must be RFC 3339' }
+  for (const key of ['epic', 'story'] as const) {
+    if ((filter[key] as string[] | undefined)?.some((value) => value !== 'none' && !ULID_PATTERN.test(value))) return { path: `filter.${key}`, message: `${key} must list issue ids or none` }
+  }
   return filter as Filter
 }
 
@@ -540,6 +641,8 @@ async function createIssue(request: Request): Promise<Response> {
   if (input.assigneeSub !== undefined && input.assigneeSub !== null && typeof input.assigneeSub !== 'string') return invalid('assigneeSub', 'assigneeSub must be a string')
   if (input.labelIds !== undefined && (!isStringArray(input.labelIds) || input.labelIds.some((id) => !state.labels.some((label) => label.id === id)))) return invalid('labelIds', 'unknown label')
   if (input.parentId !== undefined && input.parentId !== null && (typeof input.parentId !== 'string' || !issueById(input.parentId))) return invalid('parentId', 'unknown parent')
+  const parent = issueById((input.parentId as string | null | undefined) ?? null)
+  if (parent && !canParent(type, parent.type)) return invalid('parentId', hierarchyMessage(type))
   if (input.dueOn !== undefined && input.dueOn !== null && (typeof input.dueOn !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.dueOn))) return invalid('dueOn', 'dueOn must be YYYY-MM-DD')
   if (input.projectId !== undefined) {
     const problem = projectRefProblem(input.projectId, null)
@@ -610,6 +713,14 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
   const nextReport = nextType !== 'bug' ? null : 'report' in input ? (input.report === null ? null : cleanReport(input.report as Record<string, unknown>)) : issue.report
   if (nextType === 'bug' && !nextReport) return invalid('report', 'report is required for bugs')
   if (nextType !== 'bug' && 'report' in input && input.report !== null) return invalid('report', 'report is only allowed on bugs')
+  // Hierarchy (API.md): the issue against its (new) parent, and its direct children against its new type.
+  const parentChanged = 'parentId' in input && (input.parentId ?? null) !== issue.parentId
+  const nextParent = issueById('parentId' in input ? ((input.parentId as string | null) ?? null) : issue.parentId)
+  if ((parentChanged || nextType !== issue.type) && nextParent && !canParent(nextType, nextParent.type)) return invalid(parentChanged ? 'parentId' : 'type', hierarchyMessage(nextType))
+  if (nextType !== issue.type) {
+    const misfit = live().find((child) => child.parentId === issue.id && !canParent(child.type, nextType))
+    if (misfit) return invalid('type', `${identifier(misfit)}: ${hierarchyMessage(misfit.type)}`)
+  }
 
   const time = now()
   let changed = false
@@ -743,6 +854,7 @@ function viewProblem(input: Record<string, unknown>, creating: boolean): Problem
     if (Array.from(input.name.trim()).length > 60) return { path: 'name', message: 'name must be at most 60 characters' }
   }
   if ('layout' in input && input.layout !== 'list' && input.layout !== 'board') return { path: 'layout', message: 'layout must be list or board' }
+  if ('groupBy' in input && !GROUP_BYS.includes(input.groupBy as GroupBy)) return { path: 'groupBy', message: `groupBy must be one of ${GROUP_BYS.join(', ')}` }
   if ('sort' in input && !SORTS.includes(input.sort as Sort)) return { path: 'sort', message: 'unknown sort' }
   if ('shared' in input && typeof input.shared !== 'boolean') return { path: 'shared', message: 'shared must be a boolean' }
   if ('filter' in input) {
@@ -1025,6 +1137,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
       ownerSub: state.caller.sub,
       shared: input.shared === true,
       layout: (input.layout as ViewLayout | undefined) ?? 'list',
+      groupBy: (input.groupBy as GroupBy | undefined) ?? 'none',
       filter: (input.filter as Filter | undefined) ?? {},
       sort: (input.sort as Sort | undefined) ?? 'updated',
       position: Math.max(-1, ...state.views.map((candidate) => candidate.position)) + 1,
@@ -1050,6 +1163,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if (input.shared === true && !isAdmin()) return forbidden()
     if (typeof input.name === 'string') view.name = input.name.trim()
     if (input.layout !== undefined) view.layout = input.layout as ViewLayout
+    if (input.groupBy !== undefined) view.groupBy = input.groupBy as GroupBy
     if (input.filter !== undefined) view.filter = (input.filter as Filter | null) ?? {}
     if (input.sort !== undefined) view.sort = input.sort as Sort
     if (typeof input.shared === 'boolean') view.shared = input.shared

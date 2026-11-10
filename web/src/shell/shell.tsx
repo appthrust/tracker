@@ -1,14 +1,14 @@
-// App frame: a Linear-style sidebar (workspace, issues, board, report, the
-// built-in "Reported by me" view with its open count, projects, saved views,
-// settings, keyboard hint, language, app switcher, the signed-in person)
-// beside the page, plus the overlays every page shares (new issue, command
-// palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`. The
-// issues, board and reported links keep the current project scope; a project
-// in the sidebar scopes the list or board to it.
+// App frame: a Linear-style sidebar (workspace, issues, board, epics, report,
+// the built-in "Reported by me" view with its open count, projects, saved
+// views, settings, keyboard hint, language, app switcher, the signed-in
+// person) beside the page, plus the overlays every page shares (new issue,
+// command palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`.
+// The issues, board, epics and reported links keep the current project
+// scope; a project in the sidebar scopes the list, board or epics overview to it.
 import { AppSwitcher } from '@appthrust/app-launcher'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, UserRoundPen, X } from 'lucide-react'
+import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, UserRoundPen, X, Zap } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { REPORTED_OPEN_CAP, reportedOpenQuery } from '../api/queries'
 import { FILTER_INPUT_ID } from '../features/issues/filter-bar'
@@ -68,9 +68,9 @@ export function Shell({ children }: { children: ReactNode }) {
   const reportedOpen = useQuery(reportedOpenQuery).data
   const reportedOpenCount = reportedOpen ? (reportedOpen.nextCursor ? `${REPORTED_OPEN_CAP}+` : String(reportedOpen.items.length)) : undefined
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  // A project in the sidebar scopes the board or "Reported by me" while it is open, else the list.
-  const listPath = pathname === paths.board || pathname === paths.reported ? pathname : paths.home
-  const onList = pathname === paths.home || pathname === paths.board || pathname === paths.reported
+  // A project in the sidebar scopes the board, the epics overview or "Reported by me" while it is open, else the list.
+  const listPath = pathname === paths.board || pathname === paths.reported || pathname === paths.epics ? pathname : paths.home
+  const onList = pathname === paths.home || pathname === paths.board || pathname === paths.reported || pathname === paths.epics
   useGlobalKeys()
 
   const sidebar = (
@@ -113,6 +113,10 @@ export function Shell({ children }: { children: ReactNode }) {
           <HrefLink href={listHref(paths.board, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <Columns3 aria-hidden />
             {t('tracker.nav.board')}
+          </HrefLink>
+          <HrefLink href={listHref(paths.epics, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <Zap aria-hidden />
+            {t('tracker.nav.epics')}
           </HrefLink>
           <HrefLink href={paths.report} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <Bug aria-hidden />
