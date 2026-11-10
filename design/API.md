@@ -149,3 +149,18 @@ Changes to existing shapes:
 Fixture addition (dev seed and SPA mock): 3 projects `Dashboard` (blue),
 `Platform API` (purple), `Builder Console` (orange); roughly two thirds of the
 seeded issues are assigned across them, the rest have `projectId: null`.
+
+## Reporter filter and "Reported by me" (v0.1.2)
+
+- `Filter` gains `reporter?: (string | 'me')[]`: issue `reporter.sub` is one of
+  the given subjects; `'me'` resolves to the caller, exactly like `assignee`.
+  There is no `'none'` (every issue has a reporter). More than 20 entries or an
+  empty string → 400 `invalid` (path `filter.reporter`), same limits as `assignee`.
+- No new routes, no schema change (`tracker_issue.reporter_sub` already exists;
+  add an index only if the list query needs one, as migration 009).
+- "Reported by me" is a built-in view, not a stored `View` row: the SPA offers
+  it to every user with filter `{ "reporter": ["me"] }` and sort `created`.
+  It must exist on installations that have no saved views.
+- Fixture: reporters already rotate across the 3 seeded people; make sure the
+  dev-seed/mock "current user" (`Alex Chen` in the mock, the bearer subject on
+  the server) reports at least 8 of the seeded issues so the view is not empty.
