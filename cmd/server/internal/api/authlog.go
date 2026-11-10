@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -95,4 +97,25 @@ func jsonType(value json.RawMessage) string {
 	default:
 		return "scalar"
 	}
+}
+
+// edgeSessionCookie matches the cookies the edge OIDC filter keeps for this
+// host: its tokens, their HMAC and expiry, and the in-flight sign-in state.
+var edgeSessionCookie = regexp.MustCompile(`^(IdToken|AccessToken|RefreshToken|OauthHMAC|OauthExpires|OauthNonce|CodeVerifier)(-[0-9a-f]+)?$`)
+
+// expireEdgeSession drops the edge's session cookies from the browser and
+// reports how many it expired. The edge only checks its own HMAC and expiry,
+// so it keeps replaying a token this server refuses; without the cookies the
+// next navigation runs sign-in again and mints a new token from the still
+// valid SSO session, which a plain reload does not. Other apps' sessions and
+// the SSO session itself are untouched.
+func expireEdgeSession(w http.ResponseWriter, r *http.Request) int {
+	expired := 0
+	for _, cookie := range r.Cookies() {
+		if edgeSessionCookie.MatchString(cookie.Name) {
+			http.SetCookie(w, &http.Cookie{Name: cookie.Name, Path: "/", MaxAge: -1, Secure: true, HttpOnly: true})
+			expired++
+		}
+	}
+	return expired
 }
