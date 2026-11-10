@@ -199,3 +199,80 @@ seeded issues are assigned across them, the rest have `projectId: null`.
 - Fixture: reporters already rotate across the 3 seeded people; make sure the
   dev-seed/mock "current user" (`Alex Chen` in the mock, the bearer subject on
   the server) reports at least 8 of the seeded issues so the view is not empty.
+
+## Epics and stories (v0.1.6)
+
+Work is bundled in a three-level hierarchy that reuses the existing
+`parent` link; there is no new entity and no new write route.
+
+| Level | `type` | Meaning | Allowed `parent` |
+| --- | --- | --- | --- |
+| 2 | `epic` | a theme or outcome that spans many stories | none (`parent` must be `null`) |
+| 1 | `story` | one user story: who wants what, and why | `null` or an `epic` |
+| 0 | `bug` · `feature` · `task` (work items) | a unit of work | `null`, an `epic`, a `story`, or another work item (sub-task) |
+
+```ts
+type IssueType = 'epic' | 'story' | 'bug' | 'feature' | 'task'
+type Progress  = { total: number; completed: number }
+```
+
+Invariants (pure, `domain.ValidateHierarchy(childType, parentType)`; the SPA
+mirrors them in `web/src/model/issues.ts`):
+
+- `level(epic)=2`, `level(story)=1`, every other type `0`.
+- A parent is valid when `level(child)=0`, or `level(parent) > level(child)`.
+  So: epic→epic, story→story, story under a work item, and epic under
+  anything are rejected with 400 `invalid` (path `parentId`).
+- `PATCH` re-checks both directions when `type` or `parentId` changes: the
+  issue against its (new) parent (path `parentId` when the parent changed,
+  else `type`), and every direct child against the issue's new type
+  (path `type`, e.g. turning an epic that has stories into a story).
+- Cycle detection is unchanged. `report` stays "non-null iff `type==='bug'`".
+- Nothing else distinguishes epics and stories: they have status, assignee,
+  priority, labels, project, comments, and attachments like any issue, and
+  their status is set by people, never derived.
+
+Changes to existing shapes:
+
+- `Issue` and `IssueSummary` gain
+  - `epic: IssueRef | null` — the nearest **strict** ancestor of type `epic`;
+  - `story: IssueRef | null` — the nearest strict ancestor of type `story`;
+  - `progress: Progress | null` — non-null iff `type` is `epic` or `story`:
+    over all descendants (any depth, not deleted) of level 0, `total` counts
+    those whose status category is not `canceled`, `completed` those in
+    `completed`.
+  An epic has `epic: null`; a story has `story: null`. The ancestor walk is
+  bounded to 32 hops.
+- `Filter` gains `epic?: (string | 'none')[]` and `story?: (string | 'none')[]`:
+  the issue's `epic` (resp. `story`) as defined above is one of the ids;
+  `'none'` matches issues without one. An id that is not a ULID → 400
+  `invalid`. `Filter.type` accepts the two new types. `Filter.parent` is
+  unchanged (direct parent).
+- `View` gains `groupBy: 'none' | 'epic' | 'story'` (default `'none'`);
+  `POST /views` and `PATCH /views/{id}` accept `groupBy?`. An unknown value →
+  400 `invalid`.
+- `POST /issues` and `PATCH /issues/{id}` accept the new types; no new fields.
+- No new `Activity.field`: bundling an issue is a `parent` activity, changing
+  its kind a `type` activity.
+
+Grouping is a client-side presentation of the list response: with `groupBy`
+`epic` (resp. `story`), rows are sectioned by `issue.epic?.id`
+(`issue.story?.id`), sections ordered by the group's `number`, the "no
+epic"/"no story" section last. Issues of the grouping type itself, and of a
+higher level, are section headers, not rows (an epic never appears as a card
+inside an epic lane).
+
+Storage (migration `010_epics_stories.sql`): the `type` CHECK admits `epic`
+and `story`; `tracker_view.group_by` is added. `epic`/`story`/`progress` are
+derived at read time from `parent_id` with recursive queries
+(`tracker_issue_parent` index); nothing is denormalized, so re-parenting a
+subtree needs no fan-out write.
+
+Fixture addition (dev seed and SPA mock, identical): 2 epics
+(`Reliable bug intake`, `Faster triage`) and 4 stories (two per epic; titles
+in the "As a …, I want …" form), all in status `In Progress`, created after
+the existing issues so earlier numbers do not move. Existing seeded issues
+`n` (1-based, in seed order) with `n % 5 != 0` get the parent
+`stories[n % 4]`; the rest keep `parent: null`. One shared view
+`By epic` (`layout: 'board'`, `groupBy: 'epic'`, empty filter) is added after
+`Bugs` and `My issues`.
