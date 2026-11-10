@@ -1,0 +1,15 @@
+locales:
+  en:
+    title: Issues
+    tagline: Report and track AppThrust defects and work items on a Linear-style, keyboard-first board.
+    overview: |
+      Issues is the issue tracker for a Project. Report a defect with the environment, surface and version it happened on, triage it on a keyboard-first list or board, and follow it to closure with comments, attachments and a full activity timeline.
+
+      People are resolved through Directory, which is installed automatically as a dependency. Issues and attachments are stored in the Project's own database, and members sign in with their organisation account.
+  ja:
+    title: Issues
+    tagline: 不具合や作業項目を登録し、キーボードで素早く操作できるボードで、対応が終わるまで追えます。
+    overview: |
+      Issues は、プロジェクトの課題管理アプリです。不具合は、起きた環境・画面・バージョンを添えて登録できます。登録した課題は一覧やボードで振り分け、コメント、添付ファイル、変更の履歴とあわせて、対応が終わるまで追えます。操作の多くはキーボードだけで行えます。
+
+      担当者などの人の情報は Directory から取得します。Directory は依存アプリとして自動でインストールされます。課題と添付ファイルはプロジェクト内の専用データベースに保存され、サインインには組織のアカウントを使います。
