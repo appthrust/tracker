@@ -7,7 +7,8 @@ import { Popover } from 'radix-ui'
 import { useId, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { cn } from './cn'
 
-export type PickerOption = { value: string; label: string; icon?: ReactNode; hint?: string; keywords?: string }
+/** `hint`: a digit picks the option while the search is empty (status 1–9, priority 0–4); `detail`: extra right-aligned text (a count), never a shortcut. */
+export type PickerOption = { value: string; label: string; icon?: ReactNode; hint?: string; detail?: string; keywords?: string }
 
 export function Picker({
   label,
@@ -129,6 +130,7 @@ export function Picker({
                 >
                   {option.icon ? <span className="flex shrink-0 items-center">{option.icon}</span> : null}
                   <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  {option.detail ? <span className="shrink-0 text-[11px] text-stone-400 tabular-nums">{option.detail}</span> : null}
                   {option.hint ? <span className="shrink-0 text-[11px] text-stone-400">{option.hint}</span> : null}
                   {isSelected ? <Check aria-hidden className="text-accent" /> : null}
                 </li>

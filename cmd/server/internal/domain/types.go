@@ -34,6 +34,17 @@ type Label struct {
 	Name  string `json:"name"`
 	Color string `json:"color"`
 }
+type Project struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	Color          string    `json:"color"`
+	Archived       bool      `json:"archived"`
+	IssueCount     int       `json:"issueCount"`
+	OpenIssueCount int       `json:"openIssueCount"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
 type Report struct {
 	Environment string `json:"environment"`
 	Surface     string `json:"surface"`
@@ -59,6 +70,7 @@ type IssueSummary struct {
 	Assignee        *Person    `json:"assignee"`
 	Reporter        Person     `json:"reporter"`
 	LabelIDs        []string   `json:"labelIds"`
+	ProjectID       *string    `json:"projectId"`
 	Parent          *IssueRef  `json:"parent"`
 	DueOn           *string    `json:"dueOn"`
 	Report          *Report    `json:"report"`
@@ -112,6 +124,7 @@ type Filter struct {
 	Category     []string `json:"category,omitempty"`
 	Assignee     []string `json:"assignee,omitempty"`
 	Label        []string `json:"label,omitempty"`
+	Project      []string `json:"project,omitempty"`
 	Type         []string `json:"type,omitempty"`
 	Priority     []string `json:"priority,omitempty"`
 	Q            string   `json:"q,omitempty"`

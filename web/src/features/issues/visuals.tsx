@@ -1,8 +1,10 @@
 // Linear-style glyphs: status circle (shape by category, tint by status color),
-// priority bars, type marks and label dots. Purely decorative; every use sits
-// next to the visible or screen-reader name.
+// priority bars, type marks and label/project dots, plus the palette color
+// radio group used wherever a label, status or project gets a color. Glyphs
+// are decorative; every use sits next to the visible or screen-reader name.
 import { Bug, CircleDashed, Lightbulb, ListTodo, TriangleAlert } from 'lucide-react'
 import type { IssueType, LabelColor, Priority, Status } from '../../api/tracker'
+import { useText } from '../../i18n'
 import { cn } from '../../ui'
 
 /** Static class strings so Tailwind sees every palette color. */
@@ -38,6 +40,29 @@ const asColor = (color: string): LabelColor => (color in COLOR_DOT ? (color as L
 
 export function ColorDot({ color, className }: { color: string; className?: string }) {
   return <span aria-hidden className={cn('inline-block size-2.5 shrink-0 rounded-full', COLOR_DOT[asColor(color)], className)} />
+}
+
+/** The palette as a radio group of swatches. */
+export function ColorSelect({ value, onChange, label }: { value: string; onChange: (color: LabelColor) => void; label: string }) {
+  const { t } = useText()
+  return (
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1">
+      {LABEL_COLORS.map((color) => (
+        <button
+          key={color}
+          type="button"
+          role="radio"
+          aria-checked={value === color}
+          aria-label={t(`tracker.color.${color}`)}
+          title={t(`tracker.color.${color}`)}
+          onClick={() => onChange(color)}
+          className={cn('flex size-6 items-center justify-center rounded-full', value === color ? 'ring-2 ring-stone-900 ring-offset-1' : 'hover:ring-1 hover:ring-stone-300')}
+        >
+          <span aria-hidden className={cn('size-3.5 rounded-full', COLOR_DOT[color])} />
+        </button>
+      ))}
+    </div>
+  )
 }
 
 /** Backlog: dashed ring; unstarted: ring; started: half pie; completed: filled check; canceled: filled cross. */

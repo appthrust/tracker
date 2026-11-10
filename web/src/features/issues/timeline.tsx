@@ -1,11 +1,12 @@
 // Activity and comments in one ascending timeline (API.md `TimelineItem`),
 // then the comment composer. Activity values follow the server's encoding
-// (status → status id, labels → label ids, assignee → Person, parent/blocks →
-// IssueRef, attachment → Attachment) and fall back to the raw value.
+// (status → status id, labels → label ids, project → project id, assignee →
+// Person, parent/blocks → IssueRef, attachment → Attachment) and fall back to
+// the raw value.
 import { Pencil, Trash2 } from 'lucide-react'
 import { useRef, useState, type ClipboardEvent, type ReactNode } from 'react'
 import { useAddComment, useDeleteComment, useEditComment } from '../../api/queries'
-import type { Activity, Comment, Label, Status, TimelineItem } from '../../api/tracker'
+import type { Activity, Comment, Label, Project, Status, TimelineItem } from '../../api/tracker'
 import { useText, type Translate } from '../../i18n'
 import { Avatar, Button, ConfirmDialog, formatDateTime, formatRelative, Kbd, Markdown, TextArea, errorMessageId, showToast } from '../../ui'
 import { MOD_KEY } from '../ui-state'
@@ -15,14 +16,16 @@ import { StatusIcon } from './visuals'
 
 const COMMENT_MAX_BYTES = 20_480
 
-type Names = { statusById: Map<string, Status>; labelById: Map<string, Label>; t: Translate }
+type Names = { statusById: Map<string, Status>; labelById: Map<string, Label>; projectById: Map<string, Project>; t: Translate }
 
 /** A readable name for one activity value. */
 function valueText(value: unknown, field: Activity['field'], names: Names): string {
+  if (field === 'project' && (value === null || value === undefined)) return names.t('tracker.project.none')
   if (value === null || value === undefined || value === '') return names.t('tracker.activity.none')
   if (typeof value === 'string') {
     if (field === 'status') return names.statusById.get(value)?.name ?? value
     if (field === 'labels') return names.labelById.get(value)?.name ?? value
+    if (field === 'project') return names.projectById.get(value)?.name ?? names.t('tracker.project.unknown')
     if (field === 'priority') return names.t(`tracker.priority.${value as 'none'}`)
     if (field === 'type') return names.t(`tracker.type.${value as 'bug'}`)
     return value
@@ -88,6 +91,8 @@ function activityText(activity: Activity, names: Names): ReactNode {
       return activity.to ? t('tracker.activity.attached', { actor, name: to }) : t('tracker.activity.detached', { actor, name: from })
     case 'deleted':
       return t('tracker.activity.deleted', { actor })
+    case 'project':
+      return t('tracker.activity.project', { actor, from, to })
     default:
       return t('tracker.activity.changed', { actor, field: String(activity.field) })
   }
@@ -95,8 +100,8 @@ function activityText(activity: Activity, names: Names): ReactNode {
 
 export function Timeline({ issueId, items }: { issueId: string; items: TimelineItem[] }) {
   const { t, locale } = useText()
-  const { statusById, labelById } = useReference()
-  const names: Names = { statusById, labelById, t }
+  const { statusById, labelById, projectById } = useReference()
+  const names: Names = { statusById, labelById, projectById, t }
   return (
     <ol className="space-y-3">
       {items.map((item) =>

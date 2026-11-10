@@ -5,9 +5,10 @@
 import type { DashboardMessageCatalog } from '@appthrust/platform-dashboard-i18n'
 import { commonMessages } from './common'
 import { issueMessages } from './issues'
+import { projectMessages } from './projects'
 import { reportMessages } from './report'
 import { settingsMessages } from './settings'
 
-export const catalogs: readonly DashboardMessageCatalog[] = [commonMessages, issueMessages, reportMessages, settingsMessages]
+export const catalogs: readonly DashboardMessageCatalog[] = [commonMessages, issueMessages, projectMessages, reportMessages, settingsMessages]
 
-export type MessageId = keyof typeof commonMessages | keyof typeof issueMessages | keyof typeof reportMessages | keyof typeof settingsMessages
+export type MessageId = keyof typeof commonMessages | keyof typeof issueMessages | keyof typeof projectMessages | keyof typeof reportMessages | keyof typeof settingsMessages

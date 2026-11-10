@@ -1,15 +1,16 @@
-// Issue property pickers (status, priority, assignee, labels, type) used as
-// compact chips on list rows and board cards and as full rows in the detail
-// sidebar. Every pick is an optimistic PATCH; a refused edit rolls back and
-// says so in a toast.
+// Issue property pickers (status, priority, assignee, labels, type, project)
+// used as compact chips on list rows and board cards and as full rows in the
+// detail sidebar. Every pick is an optimistic PATCH; a refused edit rolls back
+// and says so in a toast.
 import { useQuery } from '@tanstack/react-query'
-import { Tag, UserRound } from 'lucide-react'
+import { CircleDashed, Tag, UserRound } from 'lucide-react'
 import { useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react'
 import { peopleQuery, useUpdateIssue, type IssueEdit } from '../../api/queries'
 import type { IssueSummary, IssueType, Person, Priority } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { ISSUE_TYPES, PRIORITIES } from '../../model/issues'
 import { Avatar, cn, errorDetail, errorMessageId, Picker, showToast, type PickerOption } from '../../ui'
+import { ProjectPicker, ProjectPill, ProjectSwatch } from './projects'
 import { useReference } from './use-reference'
 import { ColorDot, PriorityIcon, StatusIcon, TypeIcon } from './visuals'
 
@@ -215,6 +216,36 @@ export function LabelsPicker({ issue, variant = 'chip' }: { issue: IssueSummary;
         </Trigger>
       )}
     </Picker>
+  )
+}
+
+/** Chip: the project pill, hidden when the issue has none (set it from the detail or ⌘K). Row: swatch and name, or "No project". */
+export function IssueProjectPicker({ issue, variant = 'chip' }: { issue: IssueSummary; variant?: ChipVariant }) {
+  const { t } = useText()
+  const { projectById } = useReference()
+  const { update } = useIssueEditor()
+  const project = issue.projectId ? projectById.get(issue.projectId) : undefined
+  const name = issue.projectId ? (project?.name ?? t('tracker.project.unknown')) : t('tracker.project.none')
+  return (
+    <ProjectPicker
+      value={issue.projectId}
+      onChange={(projectId) => {
+        if (projectId !== issue.projectId) update({ id: issue.id, input: { projectId } })
+      }}
+      align={variant === 'chip' ? 'end' : 'start'}
+    >
+      {variant === 'chip' ? (
+        <button type="button" aria-label={`${t('tracker.project.label')}: ${name}`} onClick={(event) => event.stopPropagation()} className={cn('flex min-w-0 shrink items-center rounded-md', !project && 'hidden')}>
+          {project ? <ProjectPill project={project} /> : null}
+        </button>
+      ) : (
+        <Trigger variant="row" label={`${t('tracker.project.label')}: ${name}`}>
+          {project ? <ProjectSwatch color={project.color} /> : <CircleDashed aria-hidden className="size-3.5 shrink-0 text-stone-400" />}
+          <span className={cn('truncate', !project && 'text-stone-500')}>{name}</span>
+          {project?.archived ? <span className="shrink-0 text-[11px] text-stone-400">{t('tracker.project.archived')}</span> : null}
+        </Trigger>
+      )}
+    </ProjectPicker>
   )
 }
 

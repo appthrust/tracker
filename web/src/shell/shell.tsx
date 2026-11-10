@@ -1,17 +1,20 @@
-// App frame: a Linear-style sidebar (workspace, issues, board, saved views,
-// report, settings, keyboard hint, language, app switcher, the signed-in
-// person) beside the page, plus the overlays every page shares (new issue,
-// command palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`.
+// App frame: a Linear-style sidebar (workspace, issues, board, report,
+// projects, saved views, settings, keyboard hint, language, app switcher, the
+// signed-in person) beside the page, plus the overlays every page shares (new
+// issue, command palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K,
+// `/`. The issues and board links keep the current project scope; a project
+// in the sidebar scopes the list or board to it.
 import { AppSwitcher } from '@appthrust/app-launcher'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { FILTER_INPUT_ID } from '../features/issues/filter-bar'
 import { NewIssueDialog } from '../features/issues/new-issue-dialog'
+import { CreateProjectDialog, ProjectSwatch } from '../features/issues/projects'
 import { CommandPalette } from '../features/palette/command-palette'
-import { insideOverlay, isPlainShortcut, isTypingTarget, MOD_KEY, setUi, uiStore } from '../features/ui-state'
+import { insideOverlay, isPlainShortcut, isTypingTarget, MOD_KEY, setUi, uiStore, useUi } from '../features/ui-state'
 import { setLanguage, useText } from '../i18n'
-import { paths } from '../routes/paths'
+import { listHref, paths } from '../routes/paths'
 import { Avatar, cn, HrefLink, Kbd, Toaster } from '../ui'
 import { useSession } from './use-session'
 
@@ -54,8 +57,15 @@ function useGlobalKeys() {
 
 export function Shell({ children }: { children: ReactNode }) {
   const { t, language } = useText()
-  const { me, workspace, views } = useSession()
+  const { me, workspace, views, activeProjects } = useSession()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [creatingProject, setCreatingProject] = useState(false)
+  const navigate = useNavigate()
+  const scope = useUi((state) => state.scope)
+  const pathname = useRouterState({ select: (state) => state.location.pathname })
+  // A project in the sidebar scopes the board when the board is open, else the list.
+  const listPath = pathname === paths.board ? paths.board : paths.home
+  const onList = pathname === paths.home || pathname === paths.board
   useGlobalKeys()
 
   const sidebar = (
@@ -91,11 +101,11 @@ export function Shell({ children }: { children: ReactNode }) {
       </div>
       <nav aria-label={t('tracker.nav.label')} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
         <div className="space-y-0.5">
-          <HrefLink href={paths.home} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+          <HrefLink href={listHref(paths.home, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <List aria-hidden />
             {t('tracker.nav.issues')}
           </HrefLink>
-          <HrefLink href={paths.board} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+          <HrefLink href={listHref(paths.board, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <Columns3 aria-hidden />
             {t('tracker.nav.board')}
           </HrefLink>
@@ -104,6 +114,50 @@ export function Shell({ children }: { children: ReactNode }) {
             {t('tracker.nav.report')}
             <Kbd className="ml-auto">⇧R</Kbd>
           </HrefLink>
+        </div>
+        <div>
+          <div className="flex items-center justify-between pr-1 pb-1 pl-2">
+            <p className="text-[11px] font-medium text-stone-400">{t('tracker.project.sidebar')}</p>
+            <button
+              type="button"
+              onClick={() => setCreatingProject(true)}
+              aria-label={t('tracker.project.create')}
+              title={t('tracker.project.create')}
+              className="flex size-5 items-center justify-center rounded text-stone-400 hover:bg-stone-200/60 hover:text-stone-700"
+            >
+              <Plus aria-hidden className="size-3.5" />
+            </button>
+          </div>
+          <ul className="space-y-0.5">
+            {activeProjects.map((project) => (
+              <li key={project.id}>
+                <HrefLink
+                  href={listHref(listPath, { project: project.id })}
+                  className={cn(NAV_LINK, onList && scope === project.id && NAV_ACTIVE.className)}
+                  aria-current={onList && scope === project.id ? 'page' : undefined}
+                  activeOptions={{ includeSearch: true }}
+                  title={t('tracker.project.openCount', { count: project.openIssueCount })}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <ProjectSwatch color={project.color} className="ml-0.5 size-2.5" />
+                  <span className="truncate">{project.name}</span>
+                  <span className="ml-auto text-[11px] text-stone-400 tabular-nums">
+                    <span className="sr-only">{t('tracker.project.openCount', { count: project.openIssueCount })}</span>
+                    <span aria-hidden>{project.openIssueCount}</span>
+                  </span>
+                </HrefLink>
+              </li>
+            ))}
+            {activeProjects.length === 0 ? (
+              <li>
+                <button type="button" onClick={() => setCreatingProject(true)} className={cn(NAV_LINK, 'w-full border border-dashed border-stone-300 text-stone-500')}>
+                  <Plus aria-hidden />
+                  {t('tracker.project.create')}
+                </button>
+                <p className="px-2 pt-1 text-[11px] leading-snug text-stone-400">{t('tracker.project.sidebarEmpty')}</p>
+              </li>
+            ) : null}
+          </ul>
         </div>
         <div>
           <p className="px-2 pb-1 text-[11px] font-medium text-stone-400">{t('tracker.nav.views')}</p>
@@ -187,6 +241,7 @@ export function Shell({ children }: { children: ReactNode }) {
         {children}
       </main>
       <NewIssueDialog />
+      <CreateProjectDialog open={creatingProject} onOpenChange={setCreatingProject} onCreated={(project) => void navigate({ to: listPath, search: { project: project.id } } as never)} />
       <CommandPalette />
       <Toaster />
     </div>

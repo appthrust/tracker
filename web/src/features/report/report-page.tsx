@@ -1,7 +1,7 @@
 // `/report`: the bug report form. Creates a `type=bug` issue with the
-// AppThrust report fields, uploads the pasted/dropped screenshots to it, and
-// lands on the new issue. `?version=` (from a link on a release page)
-// prefills the version.
+// AppThrust report fields (and a project, starting as the list/board scope),
+// uploads the pasted/dropped screenshots to it, and lands on the new issue.
+// `?version=` (from a link on a release page) prefills the version.
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, ImagePlus, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react'
@@ -12,7 +12,9 @@ import { ATTACHMENT_TYPES, ATTACHMENTS_PER_ISSUE, attachmentProblem, PRIORITIES,
 import { paths } from '../../routes/paths'
 import { ActionError, Button, cn, Field, HrefLink, Kbd, Notice, SelectInput, TextInput, useDocumentTitle } from '../../ui'
 import { problemText, transferFiles } from '../issues/attachments'
-import { MOD_KEY } from '../ui-state'
+import { ProjectField } from '../issues/projects'
+import { useReference } from '../issues/use-reference'
+import { MOD_KEY, uiStore } from '../ui-state'
 import { EMPTY_REPORT, ReportFields, type ReportProblems } from './report-fields'
 
 type Shot = { file: File; preview: string | null }
@@ -26,6 +28,8 @@ export function ReportPage({ version }: { version?: string }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState('')
   const [priority, setPriority] = useState<Priority>('medium')
+  const { activeProjects } = useReference()
+  const [projectId, setProjectId] = useState<string | null>(() => activeProjects.find((project) => project.id === uiStore.state.scope)?.id ?? null)
   const [draft, setDraft] = useState<ReportDraft>({ ...EMPTY_REPORT, version: version ?? '' })
   const [shots, setShots] = useState<Shot[]>([])
   const [shotError, setShotError] = useState<string | null>(null)
@@ -77,7 +81,7 @@ export function ReportPage({ version }: { version?: string }) {
     event?.preventDefault()
     setSubmitted(true)
     if (Object.keys(all).length > 0 || create.isPending || uploading) return
-    const issue = await create.mutateAsync({ title: title.trim(), type: 'bug', priority, report: toReport(draft) }).catch(() => undefined)
+    const issue = await create.mutateAsync({ title: title.trim(), type: 'bug', priority, report: toReport(draft), projectId: projectId ?? undefined }).catch(() => undefined)
     if (!issue) return
     setUploading(true)
     const failed: string[] = []
@@ -143,15 +147,20 @@ export function ReportPage({ version }: { version?: string }) {
             <TextInput id={`${id}-title`} autoFocus value={title} invalid={submitted && Boolean(titleProblem)} onChange={(event) => setTitle(event.target.value)} placeholder={t('tracker.report.titlePlaceholder')} />
           </Field>
           <ReportFields draft={draft} onChange={setDraft} problems={shown} />
-          <Field id={`${id}-priority`} label={t('tracker.property.priority')} className="sm:w-1/3">
-            <SelectInput id={`${id}-priority`} value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
-              {PRIORITIES.map((value) => (
-                <option key={value} value={value}>
-                  {t(`tracker.priority.${value}`)}
-                </option>
-              ))}
-            </SelectInput>
-          </Field>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field id={`${id}-project`} label={t('tracker.project.label')}>
+              <ProjectField id={`${id}-project`} value={projectId} onChange={setProjectId} />
+            </Field>
+            <Field id={`${id}-priority`} label={t('tracker.property.priority')}>
+              <SelectInput id={`${id}-priority`} value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
+                {PRIORITIES.map((value) => (
+                  <option key={value} value={value}>
+                    {t(`tracker.priority.${value}`)}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+          </div>
 
           <div>
             <div className="flex items-center justify-between">

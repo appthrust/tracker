@@ -34,6 +34,7 @@ type IssueCreate struct {
 	StatusID    string         `json:"statusId"`
 	AssigneeSub *string        `json:"assigneeSub"`
 	LabelIDs    []string       `json:"labelIds"`
+	ProjectID   *string        `json:"projectId"`
 	ParentID    *string        `json:"parentId"`
 	DueOn       *string        `json:"dueOn"`
 	Report      *domain.Report `json:"report"`
@@ -46,6 +47,7 @@ type IssuePatch struct {
 	StatusID    Field[string]        `json:"statusId"`
 	AssigneeSub Field[string]        `json:"assigneeSub"`
 	LabelIDs    Field[[]string]      `json:"labelIds"`
+	ProjectID   Field[string]        `json:"projectId"`
 	ParentID    Field[string]        `json:"parentId"`
 	Blocks      Field[[]string]      `json:"blocks"`
 	DueOn       Field[string]        `json:"dueOn"`
@@ -160,12 +162,15 @@ func (t *Tx) replaceBlocks(id string, ids []string) ([]domain.IssueRef, error) {
 	return items, nil
 }
 func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domain.Person) (domain.Issue, error) {
-	item := domain.Issue{IssueSummary: domain.IssueSummary{ID: ulid.Make().String(), Title: strings.TrimSpace(input.Title), Type: input.Type, Priority: input.Priority, StatusID: input.StatusID, Assignee: assignee, Reporter: actor, DueOn: input.DueOn, Report: input.Report}, Description: input.Description}
+	item := domain.Issue{IssueSummary: domain.IssueSummary{ID: ulid.Make().String(), Title: strings.TrimSpace(input.Title), Type: input.Type, Priority: input.Priority, StatusID: input.StatusID, Assignee: assignee, Reporter: actor, ProjectID: input.ProjectID, DueOn: input.DueOn, Report: input.Report}, Description: input.Description}
 	if item.Priority == "" {
 		item.Priority = "none"
 	}
 	if err := domain.ValidateIssue(item); err != nil {
 		return item, invalid(err.Error())
+	}
+	if err := t.validateProjectAssignment(item.ProjectID); err != nil {
+		return item, err
 	}
 	if item.StatusID == "" {
 		if err := t.SQL.QueryRowContext(t.Context, `SELECT id FROM tracker_status WHERE workspace_id=$1 AND category='backlog' ORDER BY position,id LIMIT 1`, t.WorkspaceID).Scan(&item.StatusID); err != nil {
@@ -197,7 +202,7 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	if item.Parent != nil {
 		parent = item.Parent.ID
 	}
-	if err := t.Exec(`INSERT INTO tracker_issue (id,workspace_id,number,title,description,type,priority,status_id,assignee_sub,assignee_name,reporter_sub,reporter_name,parent_id,due_on,report,completed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, item.ID, t.WorkspaceID, item.Number, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, actor.Sub, actor.Name, parent, item.DueOn, report, item.CompletedAt); err != nil {
+	if err := t.Exec(`INSERT INTO tracker_issue (id,workspace_id,number,title,description,type,priority,status_id,assignee_sub,assignee_name,reporter_sub,reporter_name,parent_id,due_on,report,completed_at,project_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, item.ID, t.WorkspaceID, item.Number, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, actor.Sub, actor.Name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID); err != nil {
 		return item, err
 	}
 	if _, err := t.replaceLabels(item.ID, input.LabelIDs); err != nil {
@@ -230,6 +235,14 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		item.Assignee = nil
 		if assignee != nil {
 			item.Assignee = &domain.Person{Sub: assignee.Sub, Name: assignee.Name}
+		}
+	}
+	if input.ProjectID.Present {
+		item.ProjectID = input.ProjectID.Value
+		if !reflect.DeepEqual(old.ProjectID, item.ProjectID) {
+			if err := t.validateProjectAssignment(item.ProjectID); err != nil {
+				return item, err
+			}
 		}
 	}
 	if input.DueOn.Present {
@@ -286,6 +299,7 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		from, to any
 	}{
 		{"title", old.Title, item.Title}, {"description", old.Description, item.Description}, {"type", old.Type, item.Type}, {"priority", old.Priority, item.Priority}, {"status", old.StatusID, item.StatusID}, {"assignee", old.Assignee, item.Assignee}, {"labels", old.LabelIDs, item.LabelIDs}, {"parent", old.Parent, item.Parent}, {"blocks", old.Blocks, item.Blocks}, {"due", old.DueOn, item.DueOn}, {"report", old.Report, item.Report},
+		{"project", old.ProjectID, item.ProjectID},
 	} {
 		if !reflect.DeepEqual(field.from, field.to) {
 			changed = true
@@ -308,7 +322,7 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	if err != nil {
 		return item, err
 	}
-	if err := t.Exec(`UPDATE tracker_issue SET title=$3,description=$4,type=$5,priority=$6,status_id=$7,assignee_sub=$8,assignee_name=$9,parent_id=$10,due_on=$11,report=$12,completed_at=$13,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, parent, item.DueOn, report, item.CompletedAt); err != nil {
+	if err := t.Exec(`UPDATE tracker_issue SET title=$3,description=$4,type=$5,priority=$6,status_id=$7,assignee_sub=$8,assignee_name=$9,parent_id=$10,due_on=$11,report=$12,completed_at=$13,project_id=$14,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID); err != nil {
 		return item, err
 	}
 	return t.Issue(item.ID)

@@ -92,4 +92,5 @@ export const routeTree = rootRoute.addChildren([
   settingsTab('workspace'),
   settingsTab('statuses'),
   settingsTab('labels'),
+  settingsTab('projects'),
 ])

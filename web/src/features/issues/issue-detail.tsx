@@ -14,7 +14,7 @@ import { Button, cn, ConfirmDialog, EmptyState, formatDate, formatDateTime, form
 import { setUi } from '../ui-state'
 import { ReportFields, type ReportProblems } from '../report/report-fields'
 import { Attachments, markdownFor, transferFiles, useUploader } from './attachments'
-import { AssigneePicker, LabelsPicker, PriorityPicker, StatusPicker, TypePicker, useIssueEditor } from './properties'
+import { AssigneePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, StatusPicker, TypePicker, useIssueEditor } from './properties'
 import { Relations } from './relations'
 import { CommentComposer, insertAtCaret, Timeline } from './timeline'
 import { useReference } from './use-reference'
@@ -355,6 +355,9 @@ function PropertiesBar({ issue }: { issue: Issue }) {
       <div className="w-40">
         <AssigneePicker issue={issue} variant="row" />
       </div>
+      <div className="w-44">
+        <IssueProjectPicker issue={issue} variant="row" />
+      </div>
       <div className="min-w-32 flex-1">
         <LabelsPicker issue={issue} variant="row" />
       </div>
@@ -383,6 +386,7 @@ function PropertiesSidebar({ issue }: { issue: Issue }) {
   return (
     <div className="space-y-1">
       {row(t('tracker.property.status'), <StatusPicker issue={issue} variant="row" />)}
+      {row(t('tracker.project.label'), <IssueProjectPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.priority'), <PriorityPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.assignee'), <AssigneePicker issue={issue} variant="row" />)}
       {row(t('tracker.property.labels'), <LabelsPicker issue={issue} variant="row" />)}

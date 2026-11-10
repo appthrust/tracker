@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { Attachment, Issue, IssuePage, Label, Status, TimelineItem, View } from '../api/tracker'
+import type { Attachment, Issue, IssuePage, Label, Project, Status, TimelineItem, View } from '../api/tracker'
 import { MOCK_PEOPLE, trackerRoutes } from './mock-tracker'
 
 const BASE = '/api/tracker/v1'
@@ -25,6 +25,8 @@ const list = async (query = '') => (await call('GET', `/issues${query}`)).body a
 const filterQuery = (filter: object, extra = '') => `?filter=${encodeURIComponent(JSON.stringify(filter))}${extra}`
 const statuses = async () => (await call('GET', '/statuses')).body.items as Status[]
 const statusNamed = async (name: string) => (await statuses()).find((status) => status.name === name)!
+const projects = async (query = '') => (await call('GET', `/projects${query}`)).body.items as Project[]
+const projectNamed = async (name: string) => (await projects('?includeArchived=true')).find((project) => project.name === name)!
 
 beforeEach(async () => {
   expect(await call('POST', '/__mock/reset')).toMatchObject({ status: 200, body: { reset: true } })
@@ -212,6 +214,104 @@ describe('tracker mock: comments, attachments, timeline', () => {
       [true, false],
       [false, true],
     ])
+  })
+})
+
+describe('tracker mock: projects', () => {
+  test('fixture: three projects by name; issue n has none when n%3==0, else [Dashboard, Platform API, Builder Console][(n%3 + n%2) % 3]', async () => {
+    const items = await projects()
+    expect(items.map((project) => [project.name, project.color, project.archived, project.issueCount])).toEqual([
+      ['Builder Console', 'orange', false, 10],
+      ['Dashboard', 'blue', false, 5],
+      ['Platform API', 'purple', false, 5],
+    ])
+    const byName = Object.fromEntries(items.map((project) => [project.name, project.id]))
+    const order = [byName.Dashboard, byName['Platform API'], byName['Builder Console']]
+    const all = (await list('?sort=number')).items
+    for (const issue of all) expect(issue.projectId, issue.identifier).toBe(issue.number % 3 === 0 ? null : order[((issue.number % 3) + (issue.number % 2)) % 3]!)
+    const closed = new Set((await statuses()).filter((status) => status.category === 'completed' || status.category === 'canceled').map((status) => status.id))
+    for (const project of items) {
+      expect(project.openIssueCount, project.name).toBe(all.filter((issue) => issue.projectId === project.id && !closed.has(issue.statusId)).length)
+    }
+    expect((await call('GET', `/projects/${byName.Dashboard}`)).body).toMatchObject({ name: 'Dashboard', issueCount: 5 })
+    expect((await call('GET', '/projects/nope')).status).toBe(404)
+  })
+
+  test('filter: project ids OR `none`', async () => {
+    const dashboard = await projectNamed('Dashboard')
+    expect((await list(filterQuery({ project: ['none'] }))).items).toHaveLength(10)
+    expect((await list(filterQuery({ project: [dashboard.id] }))).items.every((issue) => issue.projectId === dashboard.id)).toBe(true)
+    expect((await list(filterQuery({ project: [dashboard.id, 'none'] }))).items).toHaveLength(15)
+    expect((await call('GET', `/issues${filterQuery({ project: 'none' })}`)).status).toBe(400)
+  })
+
+  test('create, rename, describe and recolor are open to everyone; names are unique; archiving is Admin only', async () => {
+    await as('dev-sam')
+    const created = await call('POST', '/projects', { name: '  Docs site  ', color: 'teal' })
+    expect(created.status).toBe(201)
+    expect(created.body).toMatchObject({ name: 'Docs site', description: '', color: 'teal', archived: false, issueCount: 0, openIssueCount: 0 })
+    expect((await call('POST', '/projects', { name: 'Docs site' })).status).toBe(409)
+    expect((await call('POST', '/projects', { name: 'Defaults' })).body.color).toBe('gray')
+    for (const bad of [{ name: ' ' }, { name: 'x'.repeat(61) }, { name: 'x', color: 'brown' }, { name: 'x', description: 'x'.repeat(4097) }, { name: 'x', archived: true }]) {
+      expect((await call('POST', '/projects', bad)).status, JSON.stringify(bad).slice(0, 40)).toBe(400)
+    }
+    const id = created.body.id as string
+    expect((await call('PATCH', `/projects/${id}`, { name: 'Docs', description: 'Public docs', color: 'green' })).body).toMatchObject({ name: 'Docs', description: 'Public docs', color: 'green' })
+    expect((await call('PATCH', `/projects/${id}`, { name: 'Dashboard' })).status).toBe(409)
+    expect((await call('PATCH', `/projects/${id}`, { archived: true })).status).toBe(403)
+    await as('dev-alex', 'Admin')
+    expect((await call('PATCH', `/projects/${id}`, { archived: true })).body.archived).toBe(true)
+    expect((await projects()).map((project) => project.name)).not.toContain('Docs')
+    expect((await projects('?includeArchived=true')).map((project) => project.name)).toContain('Docs')
+    expect((await call('PATCH', `/projects/${id}`, { archived: false })).body.archived).toBe(false)
+  })
+
+  test('issues: unknown or archived project is 400, changes record a `project` activity, an unchanged archived project stays', async () => {
+    const dashboard = await projectNamed('Dashboard')
+    const api = await projectNamed('Platform API')
+    expect((await call('POST', '/issues', { title: 'x', type: 'task', projectId: 'nope' })).body.issues[0].path).toBe('projectId')
+    const created = await call('POST', '/issues', { title: 'Scoped', type: 'task', projectId: dashboard.id })
+    expect(created.body.projectId).toBe(dashboard.id)
+    expect((await call('POST', '/issues', { title: 'Unscoped', type: 'task' })).body.projectId).toBeNull()
+    expect((await projectNamed('Dashboard')).issueCount).toBe(6)
+
+    const id = created.body.id as string
+    expect((await call('PATCH', `/issues/${id}`, { projectId: api.id })).body.projectId).toBe(api.id)
+    expect((await call('PATCH', `/issues/${id}`, { projectId: null })).body.projectId).toBeNull()
+    const timeline = (await call('GET', `/issues/${id}/timeline`)).body.items as TimelineItem[]
+    const moves = timeline.flatMap((item) => (item.kind === 'activity' && item.activity.field === 'project' ? [[item.activity.from, item.activity.to]] : []))
+    expect(moves).toEqual([
+      [dashboard.id, api.id],
+      [api.id, null],
+    ])
+
+    await call('PATCH', `/issues/${id}`, { projectId: dashboard.id })
+    await call('PATCH', `/projects/${dashboard.id}`, { archived: true })
+    expect((await call('PATCH', `/issues/${id}`, { title: 'Still scoped' })).body).toMatchObject({ title: 'Still scoped', projectId: dashboard.id })
+    expect((await call('PATCH', `/issues/${id}`, { projectId: dashboard.id })).status).toBe(200)
+    const other = (await call('GET', '/issues/APT-3')).body as Issue
+    const refused = await call('PATCH', `/issues/${other.id}`, { projectId: dashboard.id })
+    expect(refused.status).toBe(400)
+    expect(refused.body.issues[0]).toEqual({ path: 'projectId', message: 'project is archived' })
+    expect((await call('POST', '/issues', { title: 'x', type: 'task', projectId: dashboard.id })).status).toBe(400)
+  })
+
+  test('delete is Admin only and refused while issues reference the project', async () => {
+    const created = (await call('POST', '/projects', { name: 'Temporary' })).body as Project
+    const issue = (await call('POST', '/issues', { title: 'In temporary', type: 'task', projectId: created.id })).body as Issue
+    await as('dev-sam')
+    expect((await call('DELETE', `/projects/${created.id}`)).status).toBe(403)
+    await as('dev-alex', 'Admin')
+    expect((await call('DELETE', `/projects/${created.id}`)).status).toBe(409)
+    await call('PATCH', `/issues/${issue.id}`, { projectId: null })
+    expect((await call('DELETE', `/projects/${created.id}`)).status).toBe(204)
+    expect((await call('GET', `/projects/${created.id}`)).status).toBe(404)
+  })
+
+  test('a workspace without projects (reset with projects: none) has no project on any issue', async () => {
+    await call('POST', '/__mock/reset', { projects: 'none' })
+    expect(await projects('?includeArchived=true')).toEqual([])
+    expect((await list()).items.every((issue) => issue.projectId === null)).toBe(true)
   })
 })
 

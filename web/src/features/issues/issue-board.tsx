@@ -1,6 +1,6 @@
 // One column per status. Cards drag between columns (native drag and drop) to
 // change status; the status chip and the command palette do the same from the
-// keyboard.
+// keyboard. Cards show their project while the board spans projects.
 import { Plus } from 'lucide-react'
 import { useState, type DragEvent } from 'react'
 import type { IssueSummary } from '../../api/tracker'
@@ -9,13 +9,13 @@ import { paths } from '../../routes/paths'
 import { cn, HrefLink } from '../../ui'
 import { setUi, useUi } from '../ui-state'
 import { isPlainClick, type IssueGroup } from './issue-list'
-import { AssigneePicker, LabelPill, PriorityPicker, useIssueEditor } from './properties'
+import { AssigneePicker, IssueProjectPicker, LabelPill, PriorityPicker, useIssueEditor } from './properties'
 import { useReference } from './use-reference'
 import { StatusIcon, TypeIcon } from './visuals'
 
 const DRAG_TYPE = 'application/x-tracker-issue'
 
-export function IssueBoard({ columns, onOpen, onNewIssue }: { columns: IssueGroup[]; onOpen: (issue: IssueSummary) => void; onNewIssue: (statusId: string) => void }) {
+export function IssueBoard({ columns, onOpen, onNewIssue, showProject }: { columns: IssueGroup[]; onOpen: (issue: IssueSummary) => void; onNewIssue: (statusId: string) => void; showProject: boolean }) {
   const { t } = useText()
   const { update } = useIssueEditor()
   const [over, setOver] = useState<string | null>(null)
@@ -61,7 +61,7 @@ export function IssueBoard({ columns, onOpen, onNewIssue }: { columns: IssueGrou
           </h2>
           <ul className="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
             {issues.map((issue) => (
-              <BoardCard key={issue.id} issue={issue} onOpen={onOpen} />
+              <BoardCard key={issue.id} issue={issue} onOpen={onOpen} showProject={showProject} />
             ))}
           </ul>
         </section>
@@ -70,7 +70,7 @@ export function IssueBoard({ columns, onOpen, onNewIssue }: { columns: IssueGrou
   )
 }
 
-function BoardCard({ issue, onOpen }: { issue: IssueSummary; onOpen: (issue: IssueSummary) => void }) {
+function BoardCard({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen: (issue: IssueSummary) => void; showProject: boolean }) {
   const { labelById } = useReference()
   const focused = useUi((state) => state.focusedId === issue.id)
   const selected = useUi((state) => state.selectedIds.includes(issue.id))
@@ -127,6 +127,7 @@ function BoardCard({ issue, onOpen }: { issue: IssueSummary; onOpen: (issue: Iss
         </HrefLink>
         <div className="mt-2 flex flex-wrap items-center gap-1">
           <PriorityPicker issue={issue} />
+          {showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}
           {issue.labelIds.map((id) => {
             const label = labelById.get(id)
             return label ? <LabelPill key={id} name={label.name} color={label.color} /> : null

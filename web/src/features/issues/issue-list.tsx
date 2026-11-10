@@ -1,7 +1,8 @@
 // Dense list grouped by status (category order). Each row: checkbox (X),
-// priority, identifier, status, title, labels, counts, assignee, updated.
-// Rows are roving-focus targets for J/K; clicking a row (or Enter) opens the
-// side panel, the title link opens the full page with a modifier click.
+// priority, identifier, status, title, project (when the list spans
+// projects), labels, counts, assignee, updated. Rows are roving-focus targets
+// for J/K; clicking a row (or Enter) opens the side panel, the title link
+// opens the full page with a modifier click.
 import { MessageSquare, Paperclip, Plus } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import type { IssueSummary, Status } from '../../api/tracker'
@@ -9,7 +10,7 @@ import { useText } from '../../i18n'
 import { paths } from '../../routes/paths'
 import { cn, formatDate, HrefLink } from '../../ui'
 import { setUi, useUi } from '../ui-state'
-import { AssigneePicker, LabelsPicker, PriorityPicker, StatusPicker } from './properties'
+import { AssigneePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, StatusPicker } from './properties'
 import { StatusIcon } from './visuals'
 
 export type IssueGroup = { status: Status; issues: IssueSummary[] }
@@ -17,7 +18,7 @@ export type IssueGroup = { status: Status; issues: IssueSummary[] }
 /** A modified or middle click keeps the browser's own link behavior (new tab, copy). */
 export const isPlainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
 
-export function IssueList({ groups, onOpen, onNewIssue }: { groups: IssueGroup[]; onOpen: (issue: IssueSummary) => void; onNewIssue: (statusId: string) => void }) {
+export function IssueList({ groups, onOpen, onNewIssue, showProject }: { groups: IssueGroup[]; onOpen: (issue: IssueSummary) => void; onNewIssue: (statusId: string) => void; showProject: boolean }) {
   const { t } = useText()
   return (
     <div className="pb-24">
@@ -39,7 +40,7 @@ export function IssueList({ groups, onOpen, onNewIssue }: { groups: IssueGroup[]
           </h2>
           <ul>
             {issues.map((issue) => (
-              <IssueRow key={issue.id} issue={issue} onOpen={onOpen} />
+              <IssueRow key={issue.id} issue={issue} onOpen={onOpen} showProject={showProject} />
             ))}
           </ul>
         </section>
@@ -48,7 +49,7 @@ export function IssueList({ groups, onOpen, onNewIssue }: { groups: IssueGroup[]
   )
 }
 
-function IssueRow({ issue, onOpen }: { issue: IssueSummary; onOpen: (issue: IssueSummary) => void }) {
+function IssueRow({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen: (issue: IssueSummary) => void; showProject: boolean }) {
   const { t, locale } = useText()
   const focused = useUi((state) => state.focusedId === issue.id)
   const selected = useUi((state) => state.selectedIds.includes(issue.id))
@@ -94,6 +95,7 @@ function IssueRow({ issue, onOpen }: { issue: IssueSummary; onOpen: (issue: Issu
           {issue.title}
         </HrefLink>
         <span className="hidden min-w-0 items-center gap-2 md:flex">
+          {showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}
           <LabelsPicker issue={issue} />
           {issue.commentCount > 0 ? (
             <span className="flex items-center gap-0.5 text-xs text-stone-400" title={t('tracker.list.comments', { count: issue.commentCount })}>

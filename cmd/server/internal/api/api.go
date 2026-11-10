@@ -51,6 +51,11 @@ func New(database *store.Store, auth *identity.Authenticator, upstream *platform
 	a.route("POST /labels", true, true, a.labelCreate)
 	a.route("PATCH /labels/{id}", true, true, a.labelPatch)
 	a.route("DELETE /labels/{id}", true, true, a.labelDelete)
+	a.route("GET /projects", false, false, a.projectList)
+	a.route("POST /projects", true, false, a.projectCreate)
+	a.route("GET /projects/{id}", false, false, a.projectGet)
+	a.route("PATCH /projects/{id}", true, true, a.projectPatch)
+	a.route("DELETE /projects/{id}", true, true, a.projectDelete)
 	a.route("GET /issues", false, false, a.issueList)
 	a.route("POST /issues", true, false, a.issueCreate)
 	a.route("GET /issues/{id}", false, false, a.issueGet)
@@ -112,14 +117,14 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			s.actor.Person = a.directory.Enrich(ctx, s.bearer, s.actor.Person)
 		}
 		if err := a.store.EnsureWorkspace(ctx, a.workspace); err != nil {
-			httpx.WriteError(w, storeError(err), "tracker")
+			writeStoreError(w, err)
 			return
 		}
 		var body any
 		var status int
 		err := a.store.InWorkspace(ctx, a.workspace, mutation, func(tx *store.Tx) error { s.tx = tx; var err error; body, status, err = fn(s); return err })
 		if err != nil {
-			httpx.WriteError(w, storeError(err), "tracker")
+			writeStoreError(w, err)
 			return
 		}
 		if status == http.StatusNoContent {
@@ -133,6 +138,18 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 		a.enrich(s, body)
 		httpx.WriteJSON(w, status, body)
 	})
+}
+func writeStoreError(w http.ResponseWriter, err error) {
+	var field *domain.FieldError
+	if errors.As(err, &field) {
+		httpx.WriteJSON(w, 400, struct {
+			Error   string              `json:"error"`
+			Message string              `json:"message"`
+			Issues  []domain.FieldError `json:"issues"`
+		}{Error: "invalid", Message: field.Message, Issues: []domain.FieldError{*field}})
+		return
+	}
+	httpx.WriteError(w, storeError(err), "tracker")
 }
 func storeError(err error) error {
 	var response *httpx.Error

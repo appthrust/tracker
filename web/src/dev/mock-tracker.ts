@@ -2,12 +2,15 @@
 // (`/api/tracker/v1/*`, design/API.md). Fixture shared with the server's dev
 // seed (`TRACKER_DEV_SEED=1`): workspace key APT, the six default statuses,
 // three people (dev-alex Alex Chen, dev-sam Sam Rivera, dev-jordan Jordan
-// Lee), three labels (regression/red, ux/purple, docs/blue), 30 issues across
-// every status, and two shared views (Bugs, My issues).
+// Lee), three labels (regression/red, ux/purple, docs/blue), three projects
+// (Dashboard/blue, Platform API/purple, Builder Console/orange), 30 issues
+// across every status, and two shared views (Bugs, My issues).
 // The caller is Alex Chen as Team Admin; MOCK_ROLE=Editor (or Viewer) makes
 // them a non-admin. `POST /api/tracker/v1/__mock/caller {sub, role?}` switches
 // the signed-in person (role default Editor); `POST /api/tracker/v1/__mock/reset`
-// reseeds all state. MOCK_DIRECTORY=absent makes `GET /people` answer
+// reseeds all state (body `{"projects":"none"}` reseeds without projects).
+// MOCK_PROJECTS=none starts with no projects (a workspace from before v0.2,
+// like the live install). MOCK_DIRECTORY=absent makes `GET /people` answer
 // `source: unavailable`. The issue cursor is base64url(offset), opaque to the SPA.
 import type {
   Activity,
@@ -25,6 +28,7 @@ import type {
   Me,
   Person,
   Priority,
+  Project,
   Report,
   Role,
   Sort,
@@ -45,6 +49,8 @@ import {
   matchesFilter,
   orderStatuses,
   PRIORITIES,
+  PROJECT_DESCRIPTION_MAX_BYTES,
+  PROJECT_NAME_MAX,
   REPORT_TEXT_MAX,
   SORTS,
   SURFACES,
@@ -59,7 +65,20 @@ const PEOPLE_LIMIT = 20
 const DESCRIPTION_MAX_BYTES = 51_200
 const COMMENT_MAX_BYTES = 20_480
 const LABEL_COLORS: readonly LabelColor[] = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink']
-const FILTER_KEYS: Record<keyof Filter, true> = { status: true, category: true, assignee: true, label: true, type: true, priority: true, q: true, createdAfter: true, environment: true, surface: true, parent: true }
+const FILTER_KEYS: Record<keyof Filter, true> = {
+  status: true,
+  category: true,
+  assignee: true,
+  label: true,
+  type: true,
+  priority: true,
+  q: true,
+  createdAfter: true,
+  environment: true,
+  surface: true,
+  parent: true,
+  project: true,
+}
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
@@ -95,6 +114,7 @@ type StoredIssue = {
   assignee: Person | null
   reporter: Person
   labelIds: string[]
+  projectId: string | null
   parentId: string | null
   dueOn: string | null
   report: Report | null
@@ -105,6 +125,7 @@ type StoredIssue = {
 }
 type StoredComment = Comment & { deleted: boolean }
 type StoredAttachment = Attachment & { bytes: Uint8Array<ArrayBuffer>; deleted: boolean }
+type StoredProject = { id: string; name: string; description: string; color: LabelColor; archivedAt: string | null; createdAt: string; updatedAt: string }
 type Block = { blockerId: string; blockedId: string }
 
 const STATUS_SEED: readonly [string, StatusCategory, string][] = [
@@ -121,6 +142,18 @@ const LABEL_SEED: readonly [string, LabelColor][] = [
   ['ux', 'purple'],
   ['docs', 'blue'],
 ]
+
+/** In this order (the server seed's); the issue → project rule below indexes it. */
+const PROJECT_SEED: readonly [string, LabelColor][] = [
+  ['Dashboard', 'blue'],
+  ['Platform API', 'purple'],
+  ['Builder Console', 'orange'],
+]
+
+/** Issue number `n` (1-based): no project when n % 3 == 0, else PROJECT_SEED[(n % 3 + n % 2) % 3]. Same rule as the server seed. */
+export function seedProjectIndex(n: number): number | null {
+  return n % 3 === 0 ? null : ((n % 3) + (n % 2)) % 3
+}
 
 /** Issue titles of the server seed, in order; issue `i` (0-based) gets the modulo-indexed attributes below. */
 const SEED_TITLES: readonly string[] = [
@@ -159,14 +192,18 @@ const SEED_ENVIRONMENTS = ['appthrust.ink', 'craftsman', 'appthrust.dev', 'local
 
 /**
  * Mirrors the server's SeedDev: issue `i` has status i%6, type i%3, priority i%5,
- * label i%3, reporter i%3, assignee (i+1)%3; bugs carry a report with
- * environment i%4 and surface i%7. Creation times are spaced one hour apart.
+ * label i%3, reporter i%3, assignee (i+1)%3, project by `seedProjectIndex(i+1)`;
+ * bugs carry a report with environment i%4 and surface i%7. Creation times are
+ * spaced one hour apart. `withProjects: false` seeds a workspace without projects.
  */
-function seedTracker() {
+function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { withProjects?: boolean } = {}) {
   const at = (hours: number) => new Date(T0 + hours * HOUR).toISOString()
   let seq = 1
   const statuses: Status[] = STATUS_SEED.map(([name, category, color], position) => ({ id: ulid(T0, seq++), name, category, position, color }))
   const labels: (Label & { createdAt: string })[] = LABEL_SEED.map(([name, color]) => ({ id: ulid(T0, seq++), name, color, createdAt: at(0) }))
+  const projects: StoredProject[] = withProjects
+    ? PROJECT_SEED.map(([name, color]) => ({ id: ulid(T0, seq++), name, description: '', color, archivedAt: null, createdAt: at(0), updatedAt: at(0) }))
+    : []
   const people = [MOCK_PEOPLE.alex, MOCK_PEOPLE.sam, MOCK_PEOPLE.jordan]
   const issues: StoredIssue[] = []
   const activities: Activity[] = []
@@ -185,6 +222,7 @@ function seedTracker() {
       assignee: people[(i + 1) % people.length]!,
       reporter: people[i % people.length]!,
       labelIds: [labels[i % labels.length]!.id],
+      projectId: projects[seedProjectIndex(i + 1) ?? -1]?.id ?? null,
       parentId: null,
       dueOn: null,
       report:
@@ -215,6 +253,7 @@ function seedTracker() {
     workspace: { id: MOCK_WORKSPACE_ID, key: 'APT', name: MOCK_WORKSPACE_ID, createdAt: at(0), updatedAt: at(0) },
     statuses,
     labels,
+    projects,
     issues,
     blocks: [] as Block[],
     activities,
@@ -288,6 +327,7 @@ function summary(issue: StoredIssue): IssueSummary {
     assignee: issue.assignee,
     reporter: issue.reporter,
     labelIds: [...issue.labelIds],
+    projectId: issue.projectId,
     parent: parent ? ref(parent) : null,
     dueOn: issue.dueOn,
     report: issue.report,
@@ -337,6 +377,21 @@ function attachmentView({ bytes: _bytes, deleted: _deleted, ...attachment }: Sto
   return attachment
 }
 
+function projectView(project: StoredProject): Project {
+  const issues = live().filter((issue) => issue.projectId === project.id)
+  return {
+    id: project.id,
+    name: project.name,
+    description: project.description,
+    color: project.color,
+    archived: project.archivedAt !== null,
+    issueCount: issues.length,
+    openIssueCount: issues.filter((issue) => !closedStatus(issue.statusId)).length,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  }
+}
+
 // --- validation -------------------------------------------------------------
 
 type Problem = { path: string; message: string }
@@ -378,6 +433,30 @@ function parentCycle(issueId: string, parentId: string): boolean {
     if (cursor.id === issueId) return true
   }
   return false
+}
+
+/** `projectId` on an issue write: null clears; unknown or archived is refused unless it is the issue's current project (an unchanged archived project). */
+function projectRefProblem(value: unknown, current: string | null): Problem | undefined {
+  if (value === null || value === current) return undefined
+  if (typeof value !== 'string') return { path: 'projectId', message: 'projectId must be a string or null' }
+  const project = state.projects.find((candidate) => candidate.id === value)
+  if (!project) return { path: 'projectId', message: 'unknown project' }
+  if (project.archivedAt !== null) return { path: 'projectId', message: 'project is archived' }
+  return undefined
+}
+
+function projectInputProblem(input: Record<string, unknown>, creating: boolean): Problem | undefined {
+  const known = creating ? ['name', 'description', 'color'] : ['name', 'description', 'color', 'archived']
+  const unknownKey = Object.keys(input).find((key) => !known.includes(key))
+  if (unknownKey) return { path: unknownKey, message: `unknown field ${unknownKey}` }
+  if (creating || 'name' in input) {
+    if (typeof input.name !== 'string' || !input.name.trim() || Array.from(input.name.trim()).length > PROJECT_NAME_MAX) return { path: 'name', message: `name must be 1–${PROJECT_NAME_MAX} characters` }
+  }
+  if ('description' in input && (typeof input.description !== 'string' || bytes(input.description) > PROJECT_DESCRIPTION_MAX_BYTES))
+    return { path: 'description', message: `description must be at most ${PROJECT_DESCRIPTION_MAX_BYTES} bytes` }
+  if ('color' in input && !LABEL_COLORS.includes(input.color as LabelColor)) return { path: 'color', message: 'unknown color' }
+  if ('archived' in input && typeof input.archived !== 'boolean') return { path: 'archived', message: 'archived must be a boolean' }
+  return undefined
 }
 
 function parseFilter(raw: string | null): Filter | Problem {
@@ -450,6 +529,10 @@ async function createIssue(request: Request): Promise<Response> {
   if (input.labelIds !== undefined && (!isStringArray(input.labelIds) || input.labelIds.some((id) => !state.labels.some((label) => label.id === id)))) return invalid('labelIds', 'unknown label')
   if (input.parentId !== undefined && input.parentId !== null && (typeof input.parentId !== 'string' || !issueById(input.parentId))) return invalid('parentId', 'unknown parent')
   if (input.dueOn !== undefined && input.dueOn !== null && (typeof input.dueOn !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.dueOn))) return invalid('dueOn', 'dueOn must be YYYY-MM-DD')
+  if (input.projectId !== undefined) {
+    const problem = projectRefProblem(input.projectId, null)
+    if (problem) return invalid(problem.path, problem.message)
+  }
   const time = now()
   const number = Math.max(0, ...state.issues.map((issue) => issue.number)) + 1
   const issue: StoredIssue = {
@@ -463,6 +546,7 @@ async function createIssue(request: Request): Promise<Response> {
     assignee: typeof input.assigneeSub === 'string' ? personFor(input.assigneeSub) : null,
     reporter: state.caller,
     labelIds: [...new Set((input.labelIds as string[] | undefined) ?? [])],
+    projectId: typeof input.projectId === 'string' ? input.projectId : null,
     parentId: (input.parentId as string | undefined) ?? null,
     dueOn: (input.dueOn as string | undefined) ?? null,
     report: type === 'bug' ? cleanReport(input.report as Record<string, unknown>) : null,
@@ -479,7 +563,7 @@ async function createIssue(request: Request): Promise<Response> {
 async function updateIssue(issue: StoredIssue, request: Request): Promise<Response> {
   const input = await body(request)
   if (!input) return invalid('', 'A JSON object is required')
-  const known = ['title', 'description', 'type', 'priority', 'statusId', 'assigneeSub', 'labelIds', 'parentId', 'blocks', 'dueOn', 'report']
+  const known = ['title', 'description', 'type', 'priority', 'statusId', 'assigneeSub', 'labelIds', 'parentId', 'blocks', 'dueOn', 'report', 'projectId']
   const unknownKey = Object.keys(input).find((key) => !known.includes(key))
   if (unknownKey) return invalid(unknownKey, `unknown field ${unknownKey}`)
   if ('title' in input) {
@@ -502,6 +586,10 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
     if (input.blocks.some((id) => state.blocks.some((block) => block.blockerId === id && block.blockedId === issue.id))) return invalid('blocks', 'blocking would create a cycle')
   }
   if ('dueOn' in input && input.dueOn !== null && (typeof input.dueOn !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.dueOn))) return invalid('dueOn', 'dueOn must be YYYY-MM-DD')
+  if ('projectId' in input) {
+    const problem = projectRefProblem(input.projectId, issue.projectId)
+    if (problem) return invalid(problem.path, problem.message)
+  }
   const nextType = (input.type as IssueType | undefined) ?? issue.type
   if ('report' in input && input.report !== null) {
     const problem = reportProblem(input.report)
@@ -572,6 +660,11 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
   if ('dueOn' in input && (input.dueOn ?? null) !== issue.dueOn) {
     change('due', issue.dueOn, input.dueOn ?? null)
     issue.dueOn = (input.dueOn as string | null) ?? null
+  }
+  if ('projectId' in input && (input.projectId ?? null) !== issue.projectId) {
+    const next = (input.projectId as string | null) ?? null
+    change('project', issue.projectId, next)
+    issue.projectId = next
   }
   if (changed) issue.updatedAt = time
   return json(full(issue))
@@ -658,7 +751,8 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
   let match: RegExpMatchArray | null
 
   if (route === 'POST /__mock/reset') {
-    state = seedTracker()
+    const input = await body(request)
+    state = seedTracker(input?.projects === 'none' ? { withProjects: false } : {})
     return json({ reset: true })
   }
   if (route === 'POST /__mock/caller') {
@@ -772,6 +866,50 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if (typeof input.name === 'string') label.name = input.name.trim()
     if (typeof input.color === 'string') label.color = input.color as LabelColor
     return json({ id: label.id, name: label.name, color: label.color } satisfies Label)
+  }
+
+  // Projects (any caller writes; archiving and deleting are Admin only)
+  if (route === 'GET /projects') {
+    const includeArchived = url.searchParams.get('includeArchived') === 'true'
+    const items = state.projects.filter((project) => includeArchived || project.archivedAt === null).sort((a, b) => a.name.localeCompare(b.name))
+    return json({ items: items.map(projectView) })
+  }
+  if (route === 'POST /projects') {
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    const problem = projectInputProblem(input, true)
+    if (problem) return invalid(problem.path, problem.message)
+    const name = (input.name as string).trim()
+    if (state.projects.some((project) => project.name === name)) return conflict('a project with this name exists')
+    const time = now()
+    const project: StoredProject = { id: nextId(), name, description: (input.description as string | undefined) ?? '', color: (input.color as LabelColor | undefined) ?? 'gray', archivedAt: null, createdAt: time, updatedAt: time }
+    state.projects.push(project)
+    return json(projectView(project), 201)
+  }
+  if ((match = route.match(/^(GET|PATCH|DELETE) \/projects\/([^/]+)$/))) {
+    const [, method, rawId] = match
+    const project = state.projects.find((candidate) => candidate.id === decodeURIComponent(rawId!))
+    if (!project) return notFound()
+    if (method === 'GET') return json(projectView(project))
+    if (method === 'DELETE') {
+      if (!isAdmin()) return forbidden()
+      if (live().some((issue) => issue.projectId === project.id)) return conflict('issues still belong to this project; archive it instead')
+      for (const issue of state.issues) if (issue.projectId === project.id) issue.projectId = null
+      state.projects = state.projects.filter((candidate) => candidate !== project)
+      return noContent()
+    }
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    if ('archived' in input && !isAdmin()) return forbidden()
+    const problem = projectInputProblem(input, false)
+    if (problem) return invalid(problem.path, problem.message)
+    if (typeof input.name === 'string' && state.projects.some((other) => other !== project && other.name === (input.name as string).trim())) return conflict('a project with this name exists')
+    if (typeof input.name === 'string') project.name = input.name.trim()
+    if (typeof input.description === 'string') project.description = input.description
+    if (typeof input.color === 'string') project.color = input.color as LabelColor
+    if (typeof input.archived === 'boolean' && input.archived !== (project.archivedAt !== null)) project.archivedAt = input.archived ? now() : null
+    project.updatedAt = now()
+    return json(projectView(project))
   }
 
   // Issues

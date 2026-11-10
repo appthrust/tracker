@@ -1,7 +1,10 @@
-// `/`, `/board` and `/views/<id>`: filter bar, list or board, and the side
-// panel (`?issue=APT-12`). Keys: J/K (or ↓/↑) move, X selects, Enter opens
-// the panel, Esc closes it (then clears the selection). The filter, sort and
-// open issue live in the URL so a link reproduces the screen.
+// `/`, `/board` and `/views/<id>`: project scope switcher, filter bar, list or
+// board, and the side panel (`?issue=APT-12`). Keys: J/K (or ↓/↑) move, X
+// selects, Enter opens the panel, Esc closes it (then clears the selection).
+// The filter, sort, project scope and open issue live in the URL so a link
+// reproduces the screen. On `/` and `/board` a single project in the filter
+// travels as `?project=` (paths.ts) and is the scope new issues default to;
+// on a view it stays inside the view's filter.
 import { useInfiniteQuery, keepPreviousData } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bookmark, Columns3, List, MoreHorizontal, Plus, RotateCcw, Trash2 } from 'lucide-react'
@@ -18,6 +21,7 @@ import { FilterBar } from './filter-bar'
 import { IssueBoard } from './issue-board'
 import { IssuePanel } from './issue-detail'
 import { IssueList, type IssueGroup } from './issue-list'
+import { NO_PROJECT, ProjectScopeSwitcher } from './projects'
 import { SaveViewDialog } from './save-view-dialog'
 import { useReference } from './use-reference'
 
@@ -28,13 +32,20 @@ const sameFilter = (a: Filter, b: Filter) => JSON.stringify(compactFilter(a)) ==
 export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path: string; search: ListSearch }) {
   const { t } = useText()
   const navigate = useNavigate()
-  const { statuses } = useReference()
+  const { statuses, projectById } = useReference()
   const view = page.kind === 'view' ? page.view : undefined
-  const filter = useMemo(() => parseFilterParam(search.filter) ?? view?.filter ?? {}, [search.filter, view])
+  const filter = useMemo(() => {
+    const base = parseFilterParam(search.filter) ?? view?.filter ?? {}
+    return !view && search.project ? { ...base, project: [search.project] } : base
+  }, [search.filter, search.project, view])
   const sort: Sort = parseSortParam(search.sort) ?? view?.sort ?? 'updated'
   const layout: ViewLayout = page.kind === 'board' ? 'board' : page.kind === 'all' ? 'list' : (parseLayoutParam(search.layout) ?? view!.layout)
   const title = view ? view.name : page.kind === 'board' ? t('tracker.nav.board') : t('tracker.nav.issues')
-  useDocumentTitle(title)
+  // One project in the filter is the scope; several show as "N projects" and keep the project chips on rows.
+  const scope = filter.project?.length === 1 ? filter.project[0]! : null
+  const scopeProject = scope && scope !== NO_PROJECT ? projectById.get(scope) : undefined
+  const scopeName = scope === NO_PROJECT ? t('tracker.project.none') : scope ? (scopeProject?.name ?? t('tracker.project.unknown')) : undefined
+  useDocumentTitle(scopeName ? `${scopeName} · ${title}` : title)
 
   const setSearch = useCallback(
     (patch: Partial<ListSearch>, replace = true) => {
@@ -44,7 +55,20 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
     },
     [navigate, path, search]
   )
-  const onFilter = useCallback((next: Filter) => setSearch({ filter: filterParam(next) ?? (view && !isEmptyFilter(view.filter) ? '{}' : undefined) }), [setSearch, view])
+  const onFilter = useCallback(
+    (next: Filter) => {
+      if (view) return setSearch({ filter: filterParam(next) ?? (!isEmptyFilter(view.filter) ? '{}' : undefined) })
+      const single = next.project?.length === 1 ? next.project[0] : undefined
+      setSearch({ project: single, filter: filterParam(single ? { ...next, project: undefined } : next) })
+    },
+    [setSearch, view]
+  )
+  const onScope = (next: string | null) => onFilter({ ...filter, project: next ? [next] : undefined })
+
+  // `/` and `/board` hand their scope to the shell: new issues (C) default to it and the sidebar's list links keep it.
+  useEffect(() => {
+    if (!view) setUi({ scope: search.project ?? null })
+  }, [view, search.project])
 
   const query = useInfiniteQuery({ ...issuesQuery(filter, sort), placeholderData: keepPreviousData })
   const items = useMemo(() => query.data?.pages.flatMap((pageData) => pageData.items) ?? [], [query.data])
@@ -106,15 +130,18 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
 
   const selectedCount = useUi((state) => state.selectedIds.length)
   const [saving, setSaving] = useState(false)
-  const newIssue = (statusId?: string) => setUi({ newIssue: { statusId } })
+  // New issues land in the scoped project while it is active; "No project", archived or several projects give none.
+  const newIssue = (statusId?: string) => setUi({ newIssue: { statusId, projectId: scopeProject && !scopeProject.archived ? scopeProject.id : null } })
   const dirty = view !== undefined && ((search.filter !== undefined && !sameFilter(filter, view.filter)) || (search.sort !== undefined && sort !== view.sort) || (search.layout !== undefined && layout !== view.layout))
+  const onlyScope = scope !== null && Object.keys(compactFilter(filter)).length === 1
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-white px-4 sm:px-6">
-        <h1 className="min-w-0 truncate text-[15px] font-semibold text-stone-900">{title}</h1>
+        <h1 className="min-w-0 shrink-0 truncate text-[15px] font-semibold text-stone-900">{title}</h1>
         {view?.shared ? <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-500">{t('tracker.view.shared')}</span> : null}
-        <span className="text-xs text-stone-400 tabular-nums">{query.data ? t('tracker.list.count', { count: items.length }) : null}</span>
+        <ProjectScopeSwitcher value={scope} many={filter.project?.length ?? 0} onChange={onScope} />
+        <span className="shrink-0 text-xs text-stone-400 tabular-nums max-sm:hidden">{query.data ? t('tracker.list.count', { count: items.length }) : null}</span>
         <div className="ml-auto flex items-center gap-1.5">
           <LayoutSwitch page={page} layout={layout} search={search} setSearch={setSearch} />
           {view ? <ViewMenu view={view} dirty={dirty} filter={filter} sort={sort} layout={layout} reset={() => setSearch({ filter: undefined, sort: undefined, layout: undefined })} /> : null}
@@ -157,24 +184,40 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
             </div>
           ) : items.length === 0 && layout === 'list' ? (
             <div className="p-6">
-              <EmptyState
-                title={isEmptyFilter(filter) ? t('tracker.list.emptyTitle') : t('tracker.list.noMatchTitle')}
-                body={isEmptyFilter(filter) ? t('tracker.list.emptyBody') : t('tracker.list.noMatchBody')}
-                action={
-                  isEmptyFilter(filter) ? (
-                    <Button tone="primary" icon={<Plus />} onClick={() => newIssue()}>
-                      {t('tracker.nav.newIssue')}
-                    </Button>
-                  ) : (
-                    <Button onClick={() => onFilter({})}>{t('tracker.filter.clear')}</Button>
-                  )
-                }
-              />
+              {onlyScope ? (
+                <EmptyState
+                  title={scope === NO_PROJECT ? t('tracker.project.noneEmptyTitle') : t('tracker.project.emptyTitle', { name: scopeName ?? '' })}
+                  body={scope === NO_PROJECT ? undefined : t('tracker.project.emptyBody')}
+                  action={
+                    scope === NO_PROJECT ? (
+                      <Button onClick={() => onScope(null)}>{t('tracker.project.all')}</Button>
+                    ) : (
+                      <Button tone="primary" icon={<Plus />} onClick={() => newIssue()}>
+                        {t('tracker.nav.newIssue')}
+                      </Button>
+                    )
+                  }
+                />
+              ) : (
+                <EmptyState
+                  title={isEmptyFilter(filter) ? t('tracker.list.emptyTitle') : t('tracker.list.noMatchTitle')}
+                  body={isEmptyFilter(filter) ? t('tracker.list.emptyBody') : t('tracker.list.noMatchBody')}
+                  action={
+                    isEmptyFilter(filter) ? (
+                      <Button tone="primary" icon={<Plus />} onClick={() => newIssue()}>
+                        {t('tracker.nav.newIssue')}
+                      </Button>
+                    ) : (
+                      <Button onClick={() => onFilter({})}>{t('tracker.filter.clear')}</Button>
+                    )
+                  }
+                />
+              )}
             </div>
           ) : layout === 'list' ? (
-            <IssueList groups={groups} onOpen={open} onNewIssue={newIssue} />
+            <IssueList groups={groups} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
           ) : (
-            <IssueBoard columns={groups} onOpen={open} onNewIssue={newIssue} />
+            <IssueBoard columns={groups} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
           )}
           {query.hasNextPage ? (
             <div className="flex justify-center py-4">
@@ -207,6 +250,7 @@ function LayoutSwitch({ page, layout, search, setSearch }: { page: IssuesPageKin
     const query = new URLSearchParams()
     if (search.filter) query.set('filter', search.filter)
     if (search.sort) query.set('sort', search.sort)
+    if (search.project) query.set('project', search.project)
     const href = query.toString() ? `${target}?${query}` : target
     return (
       <HrefLink href={href} aria-label={label} title={label} aria-current={layout === value ? 'page' : undefined} className={className}>

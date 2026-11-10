@@ -1,13 +1,15 @@
 // Filter bar over a list or board. Every control maps to one API.md `Filter`
 // facet: text (`q`, focused by `/`), status/category, assignee, priority,
-// label, type, environment, surface, created-after and top-level only
-// (`parent: none`). Facets combine with AND, values within a facet with OR.
-import { ArrowDownUp, CalendarDays, Circle, Globe, Layers, ListTree, MonitorSmartphone, Search, SignalHigh, Tag, UserRound, X } from 'lucide-react'
+// label, project (shown once the workspace has projects), type, environment,
+// surface, created-after and top-level only (`parent: none`). Facets combine
+// with AND, values within a facet with OR.
+import { ArrowDownUp, CalendarDays, Circle, CircleDashed, FolderKanban, Globe, Layers, ListTree, MonitorSmartphone, Search, SignalHigh, Tag, UserRound, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Filter, IssueType, Priority, Sort, StatusCategory, Surface } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { CATEGORIES, ENVIRONMENT_SUGGESTIONS, isEmptyFilter, ISSUE_TYPES, PRIORITIES, SORTS, SURFACES } from '../../model/issues'
 import { Avatar, cn, Kbd, Picker, type PickerOption } from '../../ui'
+import { NO_PROJECT, ProjectSwatch } from './projects'
 import { assigneeValue, usePeopleOptions } from './properties'
 import { useReference } from './use-reference'
 import { ColorDot, PriorityIcon, StatusIcon, TypeIcon } from './visuals'
@@ -33,7 +35,7 @@ const toggle = <T extends string>(values: readonly T[] | undefined, value: T): T
 
 export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter: Filter; sort: Sort; onFilter: (filter: Filter) => void; onSort: (sort: Sort) => void; actions?: ReactNode }) {
   const { t, locale } = useText()
-  const { statuses, labels, me } = useReference()
+  const { statuses, labels, me, projects } = useReference()
   const [q, setQ] = useState(filter.q ?? '')
   const [peopleQuery, setPeopleQuery] = useState('')
   const [peopleOpen, setPeopleOpen] = useState(false)
@@ -59,6 +61,14 @@ export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter:
   const environments = [...new Set([...ENVIRONMENT_SUGGESTIONS, ...(filter.environment ?? [])])]
   const createdOptions: PickerOption[] = [1, 7, 30, 90].map((days) => ({ value: String(days), label: t('tracker.filter.lastDays', { count: days }) }))
   const createdSelected = filter.createdAfter ? [String(Math.round((Date.now() - Date.parse(filter.createdAfter)) / DAY_MS))] : []
+  // Active projects plus any archived one the filter (a saved view) still names.
+  const projectOptions: PickerOption[] = [
+    ...projects
+      .filter((project) => !project.archived || filter.project?.includes(project.id))
+      .map((project) => ({ value: project.id, label: project.name, icon: <ProjectSwatch color={project.color} />, detail: project.archived ? t('tracker.project.archived') : undefined })),
+    { value: NO_PROJECT, label: t('tracker.project.none'), icon: <CircleDashed className="text-stone-400" /> },
+  ]
+  const showProjects = projects.some((project) => !project.archived) || (filter.project?.length ?? 0) > 0
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 border-b border-line bg-stone-50/60 px-4 py-2 sm:px-6">
@@ -126,6 +136,18 @@ export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter:
       >
         <FacetButton icon={<Tag />} label={t('tracker.property.labels')} count={filter.label?.length ?? 0} />
       </Picker>
+      {showProjects ? (
+        <Picker
+          label={t('tracker.filter.project')}
+          options={projectOptions}
+          selected={filter.project ?? []}
+          multiple
+          onPick={(value) => onFilter({ ...filter, project: toggle(filter.project, value) })}
+          empty={t('tracker.project.noMatch')}
+        >
+          <FacetButton icon={<FolderKanban />} label={t('tracker.project.label')} count={filter.project?.length ?? 0} />
+        </Picker>
+      ) : null}
       <Picker
         label={t('tracker.filter.type')}
         options={ISSUE_TYPES.map((type) => ({ value: type, label: t(`tracker.type.${type}`), icon: <TypeIcon type={type} /> }))}

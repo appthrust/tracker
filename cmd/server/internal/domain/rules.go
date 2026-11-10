@@ -74,6 +74,10 @@ const (
 	DeleteAttachment Action = "delete_attachment"
 	CreateView       Action = "create_view"
 	ManageView       Action = "manage_view"
+	CreateProject    Action = "create_project"
+	EditProject      Action = "edit_project"
+	ArchiveProject   Action = "archive_project"
+	DeleteProject    Action = "delete_project"
 )
 
 type Target struct {
@@ -87,9 +91,9 @@ func Can(actor Actor, action Action, target Target) bool {
 	}
 	admin := actor.Role == "Admin"
 	switch action {
-	case Read, Create, EditIssue:
+	case Read, Create, EditIssue, CreateProject, EditProject:
 		return true
-	case ManageWorkspace, DeleteIssue:
+	case ManageWorkspace, DeleteIssue, ArchiveProject, DeleteProject:
 		return admin
 	case EditComment:
 		return actor.Sub == target.OwnerSub
@@ -154,6 +158,27 @@ func ValidateIssue(issue Issue) error {
 	}
 	return ValidateReport(issue.Type, issue.Report)
 }
+
+// FieldError identifies invalid input at the API boundary.
+type FieldError struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+func (e *FieldError) Error() string { return e.Message }
+
+func ValidateProject(project Project) error {
+	if !Text(project.Name, 1, 60) {
+		return errors.New("Project name must contain 1 to 60 characters")
+	}
+	if !utf8.ValidString(project.Description) || len(project.Description) > 4096 {
+		return errors.New("Project description must be valid UTF-8 and at most 4096 bytes")
+	}
+	if !slices.Contains(Colors, project.Color) {
+		return errors.New("Project color must be in the palette")
+	}
+	return nil
+}
 func ValidateFilter(filter Filter) error {
 	for _, field := range []struct {
 		name            string
@@ -172,6 +197,11 @@ func ValidateFilter(filter Filter) error {
 			if !ValidID(id) {
 				return errors.New("Filter contains an invalid resource ID")
 			}
+		}
+	}
+	for _, id := range filter.Project {
+		if id != "none" && !ValidID(id) {
+			return errors.New("Invalid project filter")
 		}
 	}
 	for _, values := range [][]string{filter.Assignee, filter.Environment} {

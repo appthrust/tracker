@@ -20,6 +20,7 @@ const issue = (number: number, patch: Partial<IssueSummary> = {}): IssueSummary 
   assignee: null,
   reporter: { sub: 'dev-alex', name: 'Alex Chen' },
   labelIds: [],
+  projectId: null,
   parent: null,
   dueOn: null,
   report: null,
@@ -59,6 +60,11 @@ describe('issue rules', () => {
     expect(matchesFilter(bug, { parent: 'id-1' }, context)).toBe(true)
     expect(matchesFilter(bug, { q: 'apt-2 issue' }, context)).toBe(true)
     expect(matchesFilter(bug, { createdAfter: '2026-10-02T00:00:00Z' }, context)).toBe(false)
+    const scoped = issue(3, { projectId: 'p-dash' })
+    expect(matchesFilter(scoped, { project: ['p-dash'] }, context)).toBe(true)
+    expect(matchesFilter(scoped, { project: ['none'] }, context)).toBe(false)
+    expect(matchesFilter(mine, { project: ['none', 'p-api'] }, context)).toBe(true)
+    expect(matchesFilter(mine, { project: ['p-api'] }, context)).toBe(false)
     expect(compactFilter({ status: [], q: '', label: ['ux'] })).toEqual({ label: ['ux'] })
   })
 

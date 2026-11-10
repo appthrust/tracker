@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ const issueColumns = `i.id,w.key,i.number,i.title,i.type,i.priority,i.status_id,
 	(SELECT json_build_object('id',p.id,'identifier',w.key||'-'||p.number,'title',p.title,'statusId',p.status_id) FROM tracker_issue p WHERE p.id=i.parent_id AND p.workspace_id=i.workspace_id AND p.deleted_at IS NULL),
 	to_char(i.due_on,'YYYY-MM-DD'),i.report,
 	(SELECT count(*) FROM tracker_comment c WHERE c.issue_id=i.id AND c.deleted_at IS NULL),
-	(SELECT count(*) FROM tracker_attachment a WHERE a.issue_id=i.id),i.created_at,i.updated_at,i.completed_at`
+	(SELECT count(*) FROM tracker_attachment a WHERE a.issue_id=i.id),i.created_at,i.updated_at,i.completed_at,i.project_id`
 const issueFrom = ` FROM tracker_issue i JOIN tracker_workspace w ON w.id=i.workspace_id JOIN tracker_status s ON s.id=i.status_id `
 const prioritySQL = `(CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END)`
 
@@ -32,7 +33,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	item.Children = []domain.IssueRef{}
 	item.Blocks = []domain.IssueRef{}
 	item.BlockedBy = []domain.IssueRef{}
-	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.Description)
+	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &item.Description)
 	if err != nil {
 		return item, err
 	}
@@ -186,6 +187,13 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		condition := "i.assignee_sub=ANY(" + bind(pq.Array(values)) + ")"
 		if none {
 			condition += " OR i.assignee_sub IS NULL"
+		}
+		clauses = append(clauses, "("+condition+")")
+	}
+	if len(f.Project) > 0 {
+		condition := "i.project_id=ANY(" + bind(pq.Array(f.Project)) + ")"
+		if slices.Contains(f.Project, "none") {
+			condition += " OR i.project_id IS NULL"
 		}
 		clauses = append(clauses, "("+condition+")")
 	}

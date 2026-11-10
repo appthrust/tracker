@@ -2,7 +2,7 @@
 // `queryOptions()` / `infiniteQueryOptions()` factory so route loaders
 // (`ensureQueryData`) and components share one key and fetcher. Freshness:
 // every query refetches every 15 s while the tab is visible and on window
-// focus (no push in v1). Issue edits (status, priority, assignee, labels, …)
+// focus (no push in v1). Issue edits (status, priority, assignee, labels, project, …)
 // are optimistic: lists and the open issue change at once and roll back on
 // failure.
 import { infiniteQueryOptions, QueryClient, queryOptions, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
@@ -11,6 +11,7 @@ import {
   trackerApi,
   TrackerApiError,
   type CreateIssueInput,
+  type CreateProjectInput,
   type CreateViewInput,
   type Filter,
   type Issue,
@@ -19,9 +20,11 @@ import {
   type Label,
   type LabelColor,
   type Person,
+  type Project,
   type Sort,
   type StatusCategory,
   type UpdateIssueInput,
+  type UpdateProjectInput,
   type UpdateViewInput,
 } from './tracker'
 
@@ -55,6 +58,8 @@ export const workspaceQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'workspa
 export const statusesQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'statuses'], queryFn: () => trackerApi.statuses.list() })
 export const labelsQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'labels'], queryFn: () => trackerApi.labels.list() })
 export const viewsQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'views'], queryFn: () => trackerApi.views.list() })
+/** Every project, archived included: issues keep showing an archived project's name; pickers offer active ones only. */
+export const projectsQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'projects'], queryFn: () => trackerApi.projects.list({ includeArchived: true }) })
 
 /** Lists load the server maximum per page; "もっと見る" fetches the next cursor page. */
 export const ISSUE_PAGE_SIZE = 200
@@ -99,6 +104,7 @@ export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateI
   if (input.labelIds !== undefined) next.labelIds = input.labelIds
   if (input.dueOn !== undefined) next.dueOn = input.dueOn
   if (input.report !== undefined) next.report = input.report
+  if (input.projectId !== undefined) next.projectId = input.projectId
   if (input.assigneeSub !== undefined) next.assignee = input.assigneeSub === null ? null : (assignee ?? issue.assignee)
   if ('description' in next && input.description !== undefined) (next as unknown as Issue).description = input.description
   return next
@@ -138,6 +144,8 @@ export function useUpdateIssue() {
       void client.invalidateQueries({ queryKey: ISSUES_KEY })
       void client.invalidateQueries({ queryKey: ISSUE_KEY })
       void client.invalidateQueries({ queryKey: [...TRACKER_KEY, 'timeline', id] })
+      // Project and status changes move the per-project counts.
+      void client.invalidateQueries({ queryKey: projectsQuery.queryKey })
     },
   })
 }
@@ -156,6 +164,7 @@ const invalidateIssues = (client: QueryClient) =>
     client.invalidateQueries({ queryKey: ISSUES_KEY }),
     client.invalidateQueries({ queryKey: ISSUE_KEY }),
     client.invalidateQueries({ queryKey: workspaceQuery.queryKey }),
+    client.invalidateQueries({ queryKey: projectsQuery.queryKey }),
   ])
 
 export function useCreateIssue() {
@@ -248,5 +257,28 @@ export function useLabelMutations() {
     create: useMutation({ mutationFn: (input: { name: string; color: LabelColor }) => trackerApi.labels.create(input), onSuccess }),
     update: useMutation({ mutationFn: ({ id, input }: { id: string; input: { name?: string; color?: LabelColor } }) => trackerApi.labels.update(id, input), onSuccess }),
     remove: useMutation({ mutationFn: (id: Label['id']) => trackerApi.labels.remove(id), onSuccess }),
+  }
+}
+
+export function useProjectMutations() {
+  const client = useQueryClient()
+  const onSuccess = () => void client.invalidateQueries({ queryKey: projectsQuery.queryKey })
+  return {
+    create: useMutation({
+      mutationFn: (input: CreateProjectInput) => trackerApi.projects.create(input),
+      // Pickers select the new project at once; it must already be in the cache.
+      onSuccess: (project) => {
+        client.setQueryData(projectsQuery.queryKey, (projects) => [...(projects ?? []).filter((candidate) => candidate.id !== project.id), project])
+        onSuccess()
+      },
+    }),
+    update: useMutation({
+      mutationFn: ({ id, input }: { id: string; input: UpdateProjectInput }) => trackerApi.projects.update(id, input),
+      onSuccess: (project) => {
+        client.setQueryData(projectsQuery.queryKey, (projects) => (projects ?? []).map((candidate) => (candidate.id === project.id ? project : candidate)))
+        onSuccess()
+      },
+    }),
+    remove: useMutation({ mutationFn: (id: Project['id']) => trackerApi.projects.remove(id), onSuccess }),
   }
 }

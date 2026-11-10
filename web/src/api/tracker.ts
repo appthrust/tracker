@@ -14,6 +14,22 @@ export type StatusCategory = 'backlog' | 'unstarted' | 'started' | 'completed' |
 export type Status = { id: string; name: string; category: StatusCategory; position: number; color: string }
 export type LabelColor = 'gray' | 'red' | 'orange' | 'yellow' | 'green' | 'teal' | 'blue' | 'indigo' | 'purple' | 'pink'
 export type Label = { id: string; name: string; color: LabelColor }
+/** A workspace-internal grouping of issues (product area, workstream); unrelated to the AppThrust Project the app runs in. */
+export type Project = {
+  id: string
+  /** 1–60 characters, unique per workspace. */
+  name: string
+  /** ≤ 4096 bytes. */
+  description: string
+  color: LabelColor
+  archived: boolean
+  /** Non-deleted issues in the project. */
+  issueCount: number
+  /** Issues whose status category is neither completed nor canceled. */
+  openIssueCount: number
+  createdAt: string
+  updatedAt: string
+}
 
 export type IssueType = 'bug' | 'feature' | 'task'
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none'
@@ -36,6 +52,8 @@ export type Issue = {
   assignee: Person | null
   reporter: Person
   labelIds: string[]
+  /** The tracker project, or null for "no project". */
+  projectId: string | null
   parent: IssueRef | null
   children: IssueRef[]
   blocks: IssueRef[]
@@ -69,6 +87,7 @@ export type ActivityField =
   | 'report'
   | 'attachment'
   | 'deleted'
+  | 'project'
 export type Activity = { id: string; issueId: string; actor: Person; field: ActivityField; from: unknown; to: unknown; createdAt: string }
 export type TimelineItem = { kind: 'activity'; activity: Activity } | { kind: 'comment'; comment: Comment }
 
@@ -86,6 +105,8 @@ export type Filter = {
   surface?: Surface[]
   /** An issue id or `none`. */
   parent?: string
+  /** Project ids, or `none` for issues without a project. */
+  project?: string[]
 }
 /** updated/created: desc; priority: urgent→none then updated desc; number: asc. */
 export type Sort = 'updated' | 'created' | 'priority' | 'number'
@@ -107,6 +128,7 @@ export type CreateIssueInput = {
   parentId?: string
   dueOn?: string
   report?: Report
+  projectId?: string
 }
 export type UpdateIssueInput = Partial<{
   title: string
@@ -120,10 +142,15 @@ export type UpdateIssueInput = Partial<{
   blocks: string[]
   dueOn: string | null
   report: Report | null
+  /** null clears the project. */
+  projectId: string | null
 }>
 export type CreateViewInput = { name: string; layout?: ViewLayout; filter?: Filter; sort?: Sort; shared?: boolean }
 export type UpdateViewInput = Partial<CreateViewInput>
 export type IssueListParams = { filter?: Filter; sort?: Sort; cursor?: string | null; limit?: number }
+export type CreateProjectInput = { name: string; description?: string; color?: LabelColor }
+/** `archived` is Admin only. */
+export type UpdateProjectInput = Partial<{ name: string; description: string; color: LabelColor; archived: boolean }>
 
 /**
  * Non-2xx tracker response. `code` is the server's stable snake_case error.
@@ -178,6 +205,15 @@ export interface TrackerApi {
     list(): Promise<Label[]>
     create(input: { name: string; color: LabelColor }): Promise<Label>
     update(id: string, input: { name?: string; color?: LabelColor }): Promise<Label>
+    remove(id: string): Promise<void>
+  }
+  projects: {
+    /** Ordered by name; archived ones only with `includeArchived`. */
+    list(options?: { includeArchived?: boolean }): Promise<Project[]>
+    get(id: string): Promise<Project>
+    create(input: CreateProjectInput): Promise<Project>
+    update(id: string, input: UpdateProjectInput): Promise<Project>
+    /** 409 `conflict` while any issue references the project. */
     remove(id: string): Promise<void>
   }
   issues: {
@@ -271,6 +307,13 @@ export function createTrackerApi(fetcher: Fetcher = (input, init) => fetch(input
       create: (input) => send<Label>('POST', '/labels', input),
       update: (labelId, input) => send<Label>('PATCH', `/labels/${id(labelId)}`, input),
       remove: (labelId) => send<void>('DELETE', `/labels/${id(labelId)}`),
+    },
+    projects: {
+      list: (options) => list<Project>(`/projects${options?.includeArchived ? '?includeArchived=true' : ''}`),
+      get: (projectId) => send<Project>('GET', `/projects/${id(projectId)}`),
+      create: (input) => send<Project>('POST', '/projects', input),
+      update: (projectId, input) => send<Project>('PATCH', `/projects/${id(projectId)}`, input),
+      remove: (projectId) => send<void>('DELETE', `/projects/${id(projectId)}`),
     },
     issues: {
       list: (params) => send<IssuePage>('GET', `/issues${issueSearch(params)}`),

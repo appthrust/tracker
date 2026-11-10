@@ -6,8 +6,10 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=$(mktemp -d)
 schema="tracker_smoke_$(date +%s)_$$"
 server_pid=""
+platform_pid=""
 cleanup() {
   if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; fi
+  if [[ -n "$platform_pid" ]]; then kill "$platform_pid" 2>/dev/null || true; wait "$platform_pid" 2>/dev/null || true; fi
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS $schema CASCADE" >/dev/null
   rm -rf -- "$work"
 }
@@ -30,8 +32,34 @@ PY
 )
 cd "$root"
 go build -o "$work/tracker-server" ./cmd/server
+# Serve only this disposable installation's role lookup for Admin-only operations.
+python3 - "$work/platform-port" <<'PY' >"$work/platform.log" 2>&1 &
+import http.server, json, pathlib, sys
+class Platform(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != '/api/v1/projects/pj-smoke/access' or not self.headers.get('Authorization', '').startswith('Bearer '):
+            self.send_error(404)
+            return
+        body = json.dumps({'projectId': 'pj-smoke', 'member': True, 'role': 'Admin'}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+with http.server.HTTPServer(('127.0.0.1', 0), Platform) as server:
+    pathlib.Path(sys.argv[1]).write_text(str(server.server_port))
+    server.serve_forever()
+PY
+platform_pid=$!
+for ((attempt=0; attempt<50; attempt++)); do
+  if [[ -s "$work/platform-port" ]]; then break; fi
+  if ! kill -0 "$platform_pid" 2>/dev/null; then cat "$work/platform.log"; exit 1; fi
+  sleep 0.1
+done
+if [[ ! -s "$work/platform-port" ]]; then cat "$work/platform.log"; echo 'Platform fixture did not become ready' >&2; exit 1; fi
+platform_port=$(cat "$work/platform-port")
 PLATFORM_OIDC_ISSUER= PLATFORM_OIDC_ISSUER_CA_PEM= PLATFORM_ACCESS_ISSUER= \
-  PLATFORM_API_URL=http://127.0.0.1:1 PLATFORM_PROJECT_ID=pj-smoke \
+  PLATFORM_API_URL="http://127.0.0.1:$platform_port" PLATFORM_PROJECT_ID=pj-smoke \
   TRACKER_PUBLIC_URL= TRACKER_DIRECTORY_URL= TRACKER_DIRECTORY_PUBLIC_URL= \
   TRACKER_DATABASE_URL="$scoped_dsn" TRACKER_DEV_SEED=1 \
   "$work/tracker-server" --listen "127.0.0.1:$port" --static-dir "$work" >"$work/server.log" 2>&1 &
@@ -53,9 +81,16 @@ PY
 auth="Authorization: Bearer $token"
 request() { curl -fsS -H "$auth" -H 'Content-Type: application/json' "$@"; }
 request "$base/workspace" | jq -e '.key == "APT" and .issueCount == 30' >/dev/null
-issue=$(request -X POST "$base/issues" --data '{"title":"Smoke bug","type":"bug","report":{"environment":"local","surface":"apth","steps":"Run smoke","expected":"Success","actual":"Under investigation"}}')
+project=$(request -X POST "$base/projects" --data '{"name":"Smoke project","color":"blue"}')
+project_id=$(jq -er '.id' <<<"$project")
+issue=$(request -X POST "$base/issues" --data "{\"title\":\"Smoke bug\",\"type\":\"bug\",\"projectId\":\"$project_id\",\"report\":{\"environment\":\"local\",\"surface\":\"apth\",\"steps\":\"Run smoke\",\"expected\":\"Success\",\"actual\":\"Under investigation\"}}")
 id=$(jq -er '.id' <<<"$issue")
 jq -e '.identifier == "APT-31" and .report.environment == "local" and .reporter.sub == "dev-alex"' <<<"$issue" >/dev/null
+jq -e --arg project "$project_id" '.projectId == $project' <<<"$issue" >/dev/null
+request --get "$base/issues" --data-urlencode "filter={\"project\":[\"$project_id\"]}" | jq -e --arg id "$id" --arg project "$project_id" '.items | length == 1 and .[0].id == $id and .[0].projectId == $project' >/dev/null
+code=$(curl -sS -o "$work/conflict.json" -w '%{http_code}' -H "$auth" -X DELETE "$base/projects/$project_id")
+[[ "$code" == 409 ]]
+jq -e '.error == "conflict"' "$work/conflict.json" >/dev/null
 request -X POST "$base/issues/$id/comments" --data '{"body":"Smoke comment"}' | jq -e '.body == "Smoke comment"' >/dev/null
 printf 'Tracker smoke attachment\n' >"$work/note.txt"
 attachment=$(curl -fsS -H "$auth" -F "file=@$work/note.txt;type=text/plain" "$base/issues/$id/attachments")
@@ -67,4 +102,10 @@ request -X PATCH "$base/issues/$id" --data "{\"statusId\":\"$status\"}" | jq -e 
 request "$base/issues/$id/timeline" | jq -e '[.items[].kind] | (map(select(. == "comment")) | length) == 1' >/dev/null
 request "$base/issues/$id/timeline" | jq -e '[.items[] | select(.kind == "activity") | .activity.field] | index("created") != null and index("attachment") != null and index("status") != null' >/dev/null
 request --get "$base/issues" --data-urlencode 'filter={"type":["bug"],"q":"Smoke bug","environment":["local"],"category":["completed"]}' | jq -e --arg id "$id" '.items | length == 1 and .[0].id == $id' >/dev/null
-printf 'Tracker smoke passed: create → comment → attachment → status → timeline → filtered list\n'
+request -X PATCH "$base/issues/$id" --data '{"projectId":null}' | jq -e 'has("projectId") and .projectId == null' >/dev/null
+request --get "$base/issues" --data-urlencode "filter={\"project\":[\"$project_id\"]}" | jq -e '.items | length == 0' >/dev/null
+request --get "$base/issues" --data-urlencode 'filter={"project":["none"],"q":"Smoke bug"}' | jq -e --arg id "$id" '.items | length == 1 and .[0].id == $id and .[0].projectId == null' >/dev/null
+request "$base/issues/$id/timeline" | jq -e --arg project "$project_id" '[.items[] | select(.kind == "activity" and .activity.field == "project") | .activity] | length == 1 and .[0].from == $project and .[0].to == null' >/dev/null
+code=$(curl -sS -o "$work/deleted" -w '%{http_code}' -H "$auth" -X DELETE "$base/projects/$project_id")
+[[ "$code" == 204 && ! -s "$work/deleted" ]]
+printf 'Tracker smoke passed: project → issue → referenced delete conflict → comment → attachment → status → timeline → project filter → no project → project delete\n'

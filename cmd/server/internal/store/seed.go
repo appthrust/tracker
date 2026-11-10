@@ -22,6 +22,15 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 			return nil
 		}
 		people := []domain.Person{{Sub: "dev-alex", Name: "Alex Chen"}, {Sub: "dev-sam", Name: "Sam Rivera"}, {Sub: "dev-jordan", Name: "Jordan Lee"}}
+		admin := domain.Actor{Person: people[0], Role: "Admin"}
+		projects := make([]domain.Project, 0, 3)
+		for _, input := range []domain.Project{{Name: "Dashboard", Color: "blue"}, {Name: "Platform API", Color: "purple"}, {Name: "Builder Console", Color: "orange"}} {
+			item, err := tx.CreateProject(ProjectCreate{Name: input.Name, Color: &input.Color}, admin)
+			if err != nil {
+				return err
+			}
+			projects = append(projects, item)
+		}
 		labels := []domain.Label{}
 		for _, input := range []domain.Label{{Name: "regression", Color: "red"}, {Name: "ux", Color: "purple"}, {Name: "docs", Color: "blue"}} {
 			item, err := tx.CreateLabel(input.Name, input.Color)
@@ -38,6 +47,10 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 		for i, title := range titles {
 			kind := domain.Types[i%len(domain.Types)]
 			input := IssueCreate{Title: title, Description: fmt.Sprintf("Track and investigate this AppThrust work item.\n\nFixture issue %d.", i+1), Type: kind, Priority: domain.Priorities[i%len(domain.Priorities)], StatusID: statuses[i%len(statuses)].ID, LabelIDs: []string{labels[i%len(labels)].ID}}
+			n := i + 1
+			if n%3 != 0 {
+				input.ProjectID = &projects[(n%3+n%2)%3].ID
+			}
 			if kind == "bug" {
 				input.Report = &domain.Report{Environment: []string{"appthrust.ink", "craftsman", "appthrust.dev", "local"}[i%4], Surface: domain.Surfaces[i%len(domain.Surfaces)], Version: "0.1.0", Steps: "Open the affected surface and repeat the action.", Expected: "The action completes successfully.", Actual: "The observed behavior differs from the expected result."}
 			}
@@ -46,7 +59,6 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 				return err
 			}
 		}
-		admin := domain.Actor{Person: people[0], Role: "Admin"}
 		for _, input := range []ViewCreate{{Name: "Bugs", Shared: true, Filter: domain.Filter{Type: []string{"bug"}}}, {Name: "My issues", Shared: true, Filter: domain.Filter{Assignee: []string{"me"}}}} {
 			if _, err := tx.CreateView(input, admin); err != nil {
 				return err

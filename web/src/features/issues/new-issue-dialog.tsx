@@ -1,6 +1,8 @@
-// "New issue" (C): title, Markdown description, type, status, priority,
-// assignee and labels. Choosing "bug" asks for the two required report fields;
-// the full report form is `/report` (Shift+R). ⌘/Ctrl+Enter creates.
+// "New issue" (C): project, title, Markdown description, type, status,
+// priority, assignee and labels. The project starts as the list/board scope
+// (or the one the opener passes). Choosing "bug" asks for the two required
+// report fields; the full report form is `/report` (Shift+R). ⌘/Ctrl+Enter
+// creates.
 import { useNavigate } from '@tanstack/react-router'
 import { useState, type FormEvent } from 'react'
 import { useCreateIssue } from '../../api/queries'
@@ -10,21 +12,22 @@ import { ISSUE_TYPES, PRIORITIES, reportProblems, TITLE_MAX, toReport, type Repo
 import { paths } from '../../routes/paths'
 import { ActionError, Button, Dialog, Field, HrefLink, Kbd, SelectInput, TextArea, TextInput } from '../../ui'
 import { EMPTY_REPORT, ReportFields } from '../report/report-fields'
-import { MOD_KEY, setUi, useUi } from '../ui-state'
+import { MOD_KEY, setUi, uiStore, useUi } from '../ui-state'
 import { ColorDot } from './visuals'
+import { ProjectField } from './projects'
 import { assigneeValue, usePeopleOptions } from './properties'
 import { useReference } from './use-reference'
 
 export function NewIssueDialog() {
   const defaults = useUi((state) => state.newIssue)
   // Remount per opening so every dialog starts empty with its own defaults.
-  return defaults ? <NewIssueForm key={JSON.stringify(defaults)} statusId={defaults.statusId} /> : null
+  return defaults ? <NewIssueForm key={JSON.stringify(defaults)} statusId={defaults.statusId} projectId={defaults.projectId} /> : null
 }
 
-function NewIssueForm({ statusId: initialStatus }: { statusId?: string }) {
+function NewIssueForm({ statusId: initialStatus, projectId: requestedProject }: { statusId?: string; projectId?: string | null }) {
   const { t } = useText()
   const navigate = useNavigate()
-  const { statuses, labels } = useReference()
+  const { statuses, labels, activeProjects } = useReference()
   const create = useCreateIssue()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -34,6 +37,11 @@ function NewIssueForm({ statusId: initialStatus }: { statusId?: string }) {
   const [assignee, setAssignee] = useState('')
   const [labelIds, setLabelIds] = useState<string[]>([])
   const [report, setReport] = useState<ReportDraft>(EMPTY_REPORT)
+  // The opener's choice, else the list/board scope; only an active project counts.
+  const [projectId, setProjectId] = useState(() => {
+    const initial = requestedProject !== undefined ? requestedProject : uiStore.state.scope
+    return initial && activeProjects.some((project) => project.id === initial) ? initial : null
+  })
   const [submitted, setSubmitted] = useState(false)
   const people = usePeopleOptions('', true, [])
 
@@ -55,6 +63,7 @@ function NewIssueForm({ statusId: initialStatus }: { statusId?: string }) {
         statusId: statusId || undefined,
         assigneeSub: sub ?? undefined,
         labelIds: labelIds.length > 0 ? labelIds : undefined,
+        projectId: projectId ?? undefined,
         report: type === 'bug' ? toReport(report) : undefined,
       },
       {
@@ -86,6 +95,9 @@ function NewIssueForm({ statusId: initialStatus }: { statusId?: string }) {
         }}
         className="space-y-4"
       >
+        <Field id="new-issue-project" label={t('tracker.project.label')} className="sm:w-1/2">
+          <ProjectField id="new-issue-project" value={projectId} onChange={setProjectId} />
+        </Field>
         <Field
           id="new-issue-title"
           label={t('tracker.issue.title')}

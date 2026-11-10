@@ -1,24 +1,26 @@
-// ⌘/Ctrl+K command palette: navigate (lists, views, report, settings, issues
-// by identifier or title) and, when issues are focused or X-selected, change
-// their status, priority, assignee or labels. ↑/↓ move, Enter runs, Backspace
-// on an empty query goes back, Escape closes.
+// ⌘/Ctrl+K command palette: navigate (lists, projects, views, report,
+// settings, issues by identifier or title) and, when issues are focused or
+// X-selected, change their status, priority, assignee, labels or project
+// (typing a new name offers to create that project and move them into it).
+// ↑/↓ move, Enter runs, Backspace on an empty query goes back, Escape closes.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Bookmark, Bug, ChevronLeft, Circle, Columns3, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound } from 'lucide-react'
+import { ArrowRight, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound } from 'lucide-react'
 import { Dialog as RDialog } from 'radix-ui'
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { issueSearchQuery, useUpdateIssues } from '../../api/queries'
+import { issueSearchQuery, useProjectMutations, useUpdateIssues } from '../../api/queries'
 import type { IssueSummary, Person } from '../../api/tracker'
 import { setLanguage, useText } from '../../i18n'
 import { PRIORITIES } from '../../model/issues'
-import { paths } from '../../routes/paths'
-import { cn, errorDetail, errorMessageId, Kbd, showToast } from '../../ui'
+import { listHref, paths } from '../../routes/paths'
+import { cn, errorDetail, errorMessageId, Kbd, showToast, splitHref } from '../../ui'
 import { assigneeValue, usePeopleOptions } from '../issues/properties'
+import { nextProjectColor, ProjectSwatch } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
 import { ColorDot, PriorityIcon, StatusIcon } from '../issues/visuals'
 import { commandTargets, setUi, uiStore, useUi } from '../ui-state'
 
-type Page = 'root' | 'status' | 'priority' | 'assignee' | 'labels'
+type Page = 'root' | 'status' | 'priority' | 'assignee' | 'labels' | 'project'
 type Command = { id: string; group: string; label: string; icon?: ReactNode; hint?: string; checked?: boolean; run: () => 'close' | 'stay' }
 
 export function CommandPalette() {
@@ -29,7 +31,8 @@ export function CommandPalette() {
 function Palette() {
   const { t, language } = useText()
   const navigate = useNavigate()
-  const { statuses, labels, views } = useReference()
+  const { statuses, labels, views, projects, activeProjects } = useReference()
+  const createProject = useProjectMutations().create
   const context = useUi((state) => state.context)
   // Snapshot the targets at open: commands keep applying to them while the list re-renders.
   const [targetIds] = useState(() => commandTargets(uiStore.state).map((issue) => issue.id))
@@ -44,7 +47,8 @@ function Palette() {
 
   const close = () => setUi({ palette: false })
   const go = (href: string) => () => {
-    void navigate({ to: href } as never)
+    const { to, search: params } = splitHref(href)
+    void navigate({ to, search: params } as never)
     return 'close' as const
   }
   const apply = (input: Parameters<typeof updates.run>[1], assignee?: Person | null) => {
@@ -110,6 +114,52 @@ function Palette() {
           },
         }
       })
+    if (page === 'project') {
+      const typed = query.trim()
+      const moveTo = (projectId: string | null) => apply({ projectId })
+      return [
+        {
+          id: 'project-none',
+          group: groupActions,
+          label: t('tracker.project.none'),
+          icon: <CircleDashed />,
+          checked: current.length > 0 && current.every((issue) => issue.projectId === null),
+          run: () => (moveTo(null), 'close'),
+        },
+        ...activeProjects.map((project) => ({
+          id: `project-${project.id}`,
+          group: groupActions,
+          label: project.name,
+          icon: <ProjectSwatch color={project.color} />,
+          checked: current.length > 0 && current.every((issue) => issue.projectId === project.id),
+          run: () => (moveTo(project.id), 'close' as const),
+        })),
+        ...(typed && !projects.some((project) => project.name === typed)
+          ? [
+              {
+                id: 'project-create',
+                group: groupActions,
+                label: t('tracker.project.createNamed', { name: typed }),
+                icon: <Plus />,
+                run: () => {
+                  // The palette closes (unmounts) at once, which drops per-call `mutate` callbacks; the promise still settles.
+                  void createProject.mutateAsync({ name: typed, color: nextProjectColor(projects) }).then(
+                    (project) => {
+                      showToast({ tone: 'success', title: t('tracker.project.created', { name: project.name }) })
+                      moveTo(project.id)
+                    },
+                    (error: unknown) => {
+                      const known = errorMessageId(error)
+                      showToast({ tone: 'error', title: t('tracker.project.createFailed'), detail: [known ? t(known) : undefined, errorDetail(error)].filter(Boolean).join(' ') || undefined })
+                    }
+                  )
+                  return 'close' as const
+                },
+              },
+            ]
+          : []),
+      ]
+    }
 
     const list: Command[] = []
     if (current.length > 0) {
@@ -123,7 +173,8 @@ function Palette() {
         { id: 'act-status', group: groupActions, label: t('tracker.property.changeStatus'), icon: <Circle />, run: sub('status') },
         { id: 'act-priority', group: groupActions, label: t('tracker.property.changePriority'), icon: <SignalHigh />, run: sub('priority') },
         { id: 'act-assignee', group: groupActions, label: t('tracker.property.changeAssignee'), icon: <UserRound />, run: sub('assignee') },
-        { id: 'act-labels', group: groupActions, label: t('tracker.property.changeLabels'), icon: <Tag />, run: sub('labels') }
+        { id: 'act-labels', group: groupActions, label: t('tracker.property.changeLabels'), icon: <Tag />, run: sub('labels') },
+        { id: 'act-project', group: groupActions, label: t('tracker.project.change'), icon: <FolderKanban />, run: sub('project') }
       )
       if (current.length === 1) list.push({ id: 'act-open', group: groupActions, label: t('tracker.palette.openIssue', { identifier: current[0]!.identifier }), icon: <ArrowRight />, run: go(paths.issue(current[0]!.identifier)) })
     }
@@ -133,10 +184,18 @@ function Palette() {
       { id: 'nav-report', group: nav, label: t('tracker.nav.report'), icon: <Bug />, hint: '⇧R', run: go(paths.report) },
       { id: 'nav-issues', group: nav, label: t('tracker.nav.issues'), icon: <List />, run: go(paths.home) },
       { id: 'nav-board', group: nav, label: t('tracker.nav.board'), icon: <Columns3 />, run: go(paths.board) },
+      ...activeProjects.map((project) => ({
+        id: `nav-project-${project.id}`,
+        group: nav,
+        label: t('tracker.palette.goProject', { name: project.name }),
+        icon: <ProjectSwatch color={project.color} />,
+        run: go(listHref(paths.home, { project: project.id })),
+      })),
       ...views.map((view) => ({ id: `nav-view-${view.id}`, group: nav, label: t('tracker.palette.goView', { name: view.name }), icon: <Bookmark />, run: go(paths.view(view.id)) })),
       { id: 'nav-settings-workspace', group: nav, label: t('tracker.settings.workspace'), icon: <Settings />, run: go(paths.settingsWorkspace) },
       { id: 'nav-settings-statuses', group: nav, label: t('tracker.settings.statuses'), icon: <Settings />, run: go(paths.settingsStatuses) },
       { id: 'nav-settings-labels', group: nav, label: t('tracker.property.labels'), icon: <Settings />, run: go(paths.settingsLabels) },
+      { id: 'nav-settings-projects', group: nav, label: t('tracker.project.sidebar'), icon: <Settings />, run: go(paths.settingsProjects) },
       {
         id: 'nav-language',
         group: nav,

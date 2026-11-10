@@ -1,20 +1,25 @@
 // App-wide UI state outside the URL: which overlay is open and which issues
 // keyboard commands act on. List/board/detail screens publish the issues on
 // screen (`context`), the focused one (J/K) and the X-selected ones; the
-// command palette edits the selection, else the focused issue.
+// command palette edits the selection, else the focused issue. `/` and
+// `/board` publish their project scope (`?project=`), which stays while the
+// person moves elsewhere: new issues default to it and the sidebar's list
+// links keep it.
 import { Store, useSelector } from '@tanstack/react-store'
 import type { IssueSummary } from '../api/tracker'
 
 type UiState = {
   palette: boolean
-  /** Open "new issue" dialog with its defaults, or null. */
-  newIssue: { statusId?: string } | null
+  /** Open "new issue" dialog with its defaults, or null. `projectId` undefined = the project scope; null = no project. */
+  newIssue: { statusId?: string; projectId?: string | null } | null
   context: IssueSummary[]
   focusedId: string | null
   selectedIds: string[]
+  /** Last project scope of `/` or `/board`: a project id, `none`, or null for all projects. */
+  scope: string | null
 }
 
-export const uiStore = new Store<UiState>({ palette: false, newIssue: null, context: [], focusedId: null, selectedIds: [] })
+export const uiStore = new Store<UiState>({ palette: false, newIssue: null, context: [], focusedId: null, selectedIds: [], scope: null })
 
 export function useUi<T>(select: (state: UiState) => T): T {
   return useSelector(uiStore, select)
