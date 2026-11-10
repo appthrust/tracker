@@ -112,3 +112,40 @@ Moving to a `completed`/`canceled` status sets `completedAt`; leaving clears it.
 Dev seed (`TRACKER_DEV_SEED=1`) and the SPA mock use the same fixture: ~30
 issues across all statuses, 3 labels (`regression`, `ux`, `docs`), 2 shared
 views (`Bugs`, `My issues`), 3 people.
+
+## Projects (v0.2)
+
+A project groups issues inside the workspace (product area or workstream, e.g.
+"Dashboard", "Builder Console"). It is a tracker concept, unrelated to the
+AppThrust Project the app is installed in. An issue belongs to at most one
+project; `null` means "no project".
+
+```ts
+type Project = {
+  id: string; name: string /* 1–60, unique per workspace */; description: string /* ≤ 4096 bytes */
+  color: string /* same palette as Label */; archived: boolean
+  issueCount: number /* not deleted */; openIssueCount: number /* status category not completed/canceled */
+  createdAt: string; updatedAt: string
+}
+```
+
+Changes to existing shapes:
+
+- `Issue` and `IssueSummary` gain `projectId: string | null`.
+- `POST /issues` accepts `projectId?`; `PATCH /issues/{id}` accepts `projectId` (`null` clears).
+  An unknown or archived project → 400 `invalid` (path `projectId`). Keeping an
+  already-assigned archived project on an unrelated PATCH is allowed.
+- `Filter` gains `project?: (string | 'none')[]`.
+- `Activity.field` gains `'project'`; `from`/`to` are the project id or `null`.
+
+| Method & path | Body → Response | Authz |
+| --- | --- | --- |
+| `GET /projects?includeArchived=true` | → `{ items: Project[] }` ordered by name; archived omitted unless requested | any |
+| `POST /projects` | `{ name, description?, color? }` → `Project` 201; duplicate name → 409 | any |
+| `GET /projects/{id}` | → `Project` | any |
+| `PATCH /projects/{id}` | `{ name?, description?, color?, archived? }` → `Project` | any; `archived` Admin |
+| `DELETE /projects/{id}` | 204; 409 `conflict` when any (non-deleted) issue references it — archive instead | Admin |
+
+Fixture addition (dev seed and SPA mock): 3 projects `Dashboard` (blue),
+`Platform API` (purple), `Builder Console` (orange); roughly two thirds of the
+seeded issues are assigned across them, the rest have `projectId: null`.
