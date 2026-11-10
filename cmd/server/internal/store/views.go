@@ -69,6 +69,9 @@ func (t *Tx) CreateView(input ViewCreate, actor domain.Actor) (domain.View, erro
 		item.Sort = domain.SortUpdated
 	}
 	if err := domain.ValidateView(item); err != nil {
+		if _, ok := err.(*domain.FieldError); ok {
+			return item, err
+		}
 		return item, invalid(err.Error())
 	}
 	var count int
@@ -120,6 +123,9 @@ func (t *Tx) PatchView(id string, input ViewPatch, actor domain.Actor) (domain.V
 		item.Position = *input.Position
 	}
 	if err := domain.ValidateView(item); err != nil {
+		if _, ok := err.(*domain.FieldError); ok {
+			return item, err
+		}
 		return item, invalid(err.Error())
 	}
 	filter, err := jsonValue(item.Filter)

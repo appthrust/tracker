@@ -96,6 +96,8 @@ export type Filter = {
   category?: StatusCategory[]
   /** A subject, `me` or `none`. */
   assignee?: string[]
+  /** Reporter subjects or `me` (no `none`: every issue has a reporter); at most 20. */
+  reporter?: string[]
   label?: string[]
   type?: IssueType[]
   priority?: Priority[]

@@ -4,11 +4,14 @@
 // three people (dev-alex Alex Chen, dev-sam Sam Rivera, dev-jordan Jordan
 // Lee), three labels (regression/red, ux/purple, docs/blue), three projects
 // (Dashboard/blue, Platform API/purple, Builder Console/orange), 30 issues
-// across every status, and two shared views (Bugs, My issues).
+// across every status (Alex Chen reports 10 of them, so "Reported by me" is
+// not empty), and two shared views (Bugs, My issues).
 // The caller is Alex Chen as Team Admin; MOCK_ROLE=Editor (or Viewer) makes
 // them a non-admin. `POST /api/tracker/v1/__mock/caller {sub, role?}` switches
-// the signed-in person (role default Editor); `POST /api/tracker/v1/__mock/reset`
-// reseeds all state (body `{"projects":"none"}` reseeds without projects).
+// the signed-in person (role default Editor); a `sub` outside the seed needs a
+// `name` and signs in someone who has reported and been assigned nothing.
+// `POST /api/tracker/v1/__mock/reset` reseeds all state (body
+// `{"projects":"none"}` reseeds without projects).
 // MOCK_PROJECTS=none starts with no projects (a workspace from before v0.2,
 // like the live install). MOCK_DIRECTORY=absent makes `GET /people` answer
 // `source: unavailable`. The issue cursor is base64url(offset), opaque to the SPA.
@@ -62,6 +65,8 @@ const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 200
 const MAX_VIEWS = 50
 const PEOPLE_LIMIT = 20
+/** Most subjects one `reporter` filter may name (API.md, same limit as `assignee`). */
+const REPORTER_FILTER_MAX = 20
 const DESCRIPTION_MAX_BYTES = 51_200
 const COMMENT_MAX_BYTES = 20_480
 const LABEL_COLORS: readonly LabelColor[] = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink']
@@ -69,6 +74,7 @@ const FILTER_KEYS: Record<keyof Filter, true> = {
   status: true,
   category: true,
   assignee: true,
+  reporter: true,
   label: true,
   type: true,
   priority: true,
@@ -478,6 +484,9 @@ function parseFilter(raw: string | null): Filter | Problem {
     (filter[key] as string[] | undefined)?.some((value) => !allowed.includes(value)) ? { path: `filter.${key}`, message: `${key} must be one of ${allowed.join(', ')}` } : undefined
   const problem = enumProblem('category', CATEGORIES) ?? enumProblem('type', ISSUE_TYPES) ?? enumProblem('priority', PRIORITIES) ?? enumProblem('surface', SURFACES)
   if (problem) return problem
+  const reporter = filter.reporter as string[] | undefined
+  if (reporter && (reporter.length > REPORTER_FILTER_MAX || reporter.some((value) => value.length === 0 || value.length > 4096)))
+    return { path: 'filter.reporter', message: `reporter must list at most ${REPORTER_FILTER_MAX} subjects of 1 to 4096 characters` }
   if (typeof filter.createdAfter === 'string' && Number.isNaN(Date.parse(filter.createdAfter))) return { path: 'filter.createdAfter', message: 'createdAfter must be RFC 3339' }
   return filter as Filter
 }
@@ -757,8 +766,10 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
   }
   if (route === 'POST /__mock/caller') {
     const input = await body(request)
-    const person = Object.values(MOCK_PEOPLE).find((candidate) => candidate.sub === input?.sub)
-    if (!person) return invalid('sub', 'sub must name a seeded person')
+    const seeded = Object.values(MOCK_PEOPLE).find((candidate) => candidate.sub === input?.sub)
+    const newcomer = typeof input?.sub === 'string' && input.sub && typeof input.name === 'string' && input.name.trim() ? { sub: input.sub, name: input.name.trim() } : undefined
+    const person = seeded ?? newcomer
+    if (!person) return invalid('sub', 'sub must name a seeded person, or come with a name')
     state.caller = person
     state.role = input?.role === 'Admin' || input?.role === 'Viewer' ? input.role : 'Editor'
     return json({ sub: person.sub, role: state.role })

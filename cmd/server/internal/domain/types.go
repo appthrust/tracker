@@ -123,6 +123,7 @@ type Filter struct {
 	Status       []string `json:"status,omitempty"`
 	Category     []string `json:"category,omitempty"`
 	Assignee     []string `json:"assignee,omitempty"`
+	Reporter     []string `json:"reporter,omitempty"`
 	Label        []string `json:"label,omitempty"`
 	Project      []string `json:"project,omitempty"`
 	Type         []string `json:"type,omitempty"`

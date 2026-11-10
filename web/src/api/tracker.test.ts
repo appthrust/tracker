@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { trackerRoutes } from '../dev/mock-tracker'
+import { listHref, parseFilterParam } from '../routes/paths'
 import { applyIssuePatch, retryQuery } from './queries'
 import { createTrackerApi, isTrackerError, issueSearch, TrackerApiError } from './tracker'
 
@@ -48,6 +49,21 @@ describe('tracker API client', () => {
       expect(new Headers(call.init.headers).has('Authorization')).toBe(false)
     }
     expect(issueSearch({ filter: {} })).toBe('')
+  })
+
+  test('the reporter filter travels as JSON, survives the page URL, and a bad one is a field error', async () => {
+    const { api, calls } = mockApi()
+    const page = await api.issues.list({ filter: { reporter: ['me'] }, sort: 'created' })
+    expect(calls.at(-1)?.input).toBe(`/api/tracker/v1/issues?filter=${encodeURIComponent('{"reporter":["me"]}')}&sort=created`)
+    expect(page.items.length).toBeGreaterThanOrEqual(8)
+    expect(page.items.every((issue) => issue.reporter.sub === 'dev-alex')).toBe(true)
+    const href = listHref('/reported', { filter: { reporter: ['me', 'dev-sam'], type: ['bug'] }, project: 'P1' })
+    const search = new URLSearchParams(href.slice(href.indexOf('?') + 1))
+    expect(parseFilterParam(search.get('filter') ?? undefined)).toEqual({ reporter: ['me', 'dev-sam'], type: ['bug'] })
+    expect(search.get('project')).toBe('P1')
+    const error = await rejection(api.issues.list({ filter: { reporter: [''] } }))
+    expect(error).toMatchObject({ status: 400, code: 'invalid' })
+    expect(error.issues?.[0]?.path).toBe('filter.reporter')
   })
 
   test('writes send JSON; uploads send multipart without a JSON content type; deletes answer 204', async () => {

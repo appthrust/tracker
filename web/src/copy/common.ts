@@ -10,6 +10,7 @@ export const commonMessages = defineDashboardMessages({
   'tracker.nav.issues': { defaultMessage: 'All issues', translations: { ja: 'すべての課題' } },
   'tracker.nav.board': { defaultMessage: 'Board', translations: { ja: 'ボード' } },
   'tracker.nav.report': { defaultMessage: 'Report a bug', translations: { ja: '不具合を報告' } },
+  'tracker.nav.reported': { defaultMessage: 'Reported by me', translations: { ja: '自分が報告した課題' } },
   'tracker.nav.newIssue': { defaultMessage: 'New issue', translations: { ja: '新しい課題' } },
   'tracker.nav.views': { defaultMessage: 'Views', translations: { ja: 'ビュー' } },
   'tracker.nav.noViews': { defaultMessage: 'No saved views yet', translations: { ja: '保存したビューはありません' } },
@@ -70,5 +71,6 @@ export const commonMessages = defineDashboardMessages({
   'tracker.palette.groupIssues': { defaultMessage: 'Matching issues', translations: { ja: '一致する課題' } },
   'tracker.palette.openIssue': { defaultMessage: 'Open {identifier}', translations: { ja: '{identifier} を開く' } },
   'tracker.palette.goView': { defaultMessage: 'View: {name}', translations: { ja: 'ビュー: {name}' } },
+  'tracker.palette.goReported': { defaultMessage: 'Open issues I reported', translations: { ja: '自分が報告した課題を開く' } },
   'tracker.palette.language': { defaultMessage: 'Switch language to {language}', translations: { ja: '表示言語を {language} にする' } },
 })

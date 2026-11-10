@@ -28,6 +28,15 @@ export const boardRoute = createRoute({
   },
 })
 
+export const reportedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reported',
+  validateSearch: validateListSearch,
+  component: function ReportedRoute() {
+    return <IssuesPage page={{ kind: 'reported' }} path={paths.reported} search={reportedRoute.useSearch()} />
+  },
+})
+
 export const viewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/views/$viewId',
@@ -85,6 +94,7 @@ const settingsTab = (tab: SettingsTab) =>
 export const routeTree = rootRoute.addChildren([
   listRoute,
   boardRoute,
+  reportedRoute,
   viewRoute,
   issueRoute,
   reportRoute,

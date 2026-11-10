@@ -1,9 +1,9 @@
 // Filter bar over a list or board. Every control maps to one API.md `Filter`
-// facet: text (`q`, focused by `/`), status/category, assignee, priority,
-// label, project (shown once the workspace has projects), type, environment,
-// surface, created-after and top-level only (`parent: none`). Facets combine
-// with AND, values within a facet with OR.
-import { ArrowDownUp, CalendarDays, Circle, CircleDashed, FolderKanban, Globe, Layers, ListTree, MonitorSmartphone, Search, SignalHigh, Tag, UserRound, X } from 'lucide-react'
+// facet: text (`q`, focused by `/`), status/category, assignee, reporter,
+// priority, label, project (shown once the workspace has projects), type,
+// environment, surface, created-after and top-level only (`parent: none`).
+// Facets combine with AND, values within a facet with OR.
+import { ArrowDownUp, CalendarDays, Circle, CircleDashed, FolderKanban, Globe, Layers, ListTree, MonitorSmartphone, Search, SignalHigh, Tag, UserRound, UserRoundPen, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Filter, IssueType, Priority, Sort, StatusCategory, Surface } from '../../api/tracker'
 import { useText } from '../../i18n'
@@ -39,6 +39,8 @@ export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter:
   const [q, setQ] = useState(filter.q ?? '')
   const [peopleQuery, setPeopleQuery] = useState('')
   const [peopleOpen, setPeopleOpen] = useState(false)
+  const [reporterQuery, setReporterQuery] = useState('')
+  const [reporterOpen, setReporterOpen] = useState(false)
 
   // Typing settles before it narrows the list; an outside change (a saved view, clear) resets the box.
   useEffect(() => setQ(filter.q ?? ''), [filter.q])
@@ -57,6 +59,12 @@ export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter:
   const assigneeOptions: PickerOption[] = [
     { value: 'me', label: t('tracker.filter.me'), icon: <Avatar name={me.name} size="xs" /> },
     ...people.options.map((option) => (option.value === assigneeValue(option.value) ? option : { ...option, value: 'none' })),
+  ]
+  // Every issue has a reporter, so there is no "unassigned" choice; "me" follows whoever is signed in.
+  const reporters = usePeopleOptions(reporterQuery, reporterOpen, [])
+  const reporterOptions: PickerOption[] = [
+    { value: 'me', label: t('tracker.filter.me'), icon: <Avatar name={me.name} size="xs" /> },
+    ...reporters.options.filter((option) => assigneeValue(option.value) !== null),
   ]
   const environments = [...new Set([...ENVIRONMENT_SUGGESTIONS, ...(filter.environment ?? [])])]
   const createdOptions: PickerOption[] = [1, 7, 30, 90].map((days) => ({ value: String(days), label: t('tracker.filter.lastDays', { count: days }) }))
@@ -115,6 +123,19 @@ export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter:
         empty={t('tracker.picker.noPeople')}
       >
         <FacetButton icon={<UserRound />} label={t('tracker.property.assignee')} count={filter.assignee?.length ?? 0} />
+      </Picker>
+      <Picker
+        label={t('tracker.filter.reporter')}
+        options={reporterOptions}
+        selected={filter.reporter ?? []}
+        multiple
+        open={reporterOpen}
+        onOpenChange={setReporterOpen}
+        onQueryChange={setReporterQuery}
+        onPick={(value) => onFilter({ ...filter, reporter: toggle(filter.reporter, value) })}
+        empty={t('tracker.picker.noPeople')}
+      >
+        <FacetButton icon={<UserRoundPen />} label={t('tracker.property.reporter')} count={filter.reporter?.length ?? 0} />
       </Picker>
       <Picker
         label={t('tracker.filter.priority')}

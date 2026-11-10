@@ -96,6 +96,38 @@ describe('tracker mock: issues', () => {
     }
   })
 
+  test('reporter filter: subjects OR `me` (the caller), newest first; more than 20 or an empty subject is 400 invalid', async () => {
+    const mine = (await list(`${filterQuery({ reporter: ['me'] })}&sort=created`)).items
+    expect(mine.length).toBeGreaterThanOrEqual(8)
+    expect(mine.every((issue) => issue.reporter.sub === MOCK_PEOPLE.alex.sub)).toBe(true)
+    expect(mine.map((issue) => issue.createdAt)).toEqual(mine.map((issue) => issue.createdAt).sort().reverse())
+    expect((await list(filterQuery({ reporter: ['dev-alex'] }))).items).toHaveLength(mine.length)
+    const either = (await list(filterQuery({ reporter: ['me', 'dev-sam'] }))).items
+    expect(new Set(either.map((issue) => issue.reporter.sub))).toEqual(new Set(['dev-alex', 'dev-sam']))
+    const bugs = (await list(filterQuery({ reporter: ['me'], type: ['bug'] }))).items
+    expect(bugs.length).toBeGreaterThan(0)
+    expect(bugs.every((issue) => issue.type === 'bug' && issue.reporter.sub === 'dev-alex')).toBe(true)
+
+    // A new issue is reported by whoever is signed in; a newcomer has reported nothing yet.
+    await as('dev-sam')
+    expect((await list(filterQuery({ reporter: ['me'] }))).items.every((issue) => issue.reporter.sub === 'dev-sam')).toBe(true)
+    expect((await call('POST', '/__mock/caller', { sub: 'dev-riley' })).status).toBe(400)
+    expect((await call('POST', '/__mock/caller', { sub: 'dev-riley', name: 'Riley Park' })).status).toBe(200)
+    expect((await list(filterQuery({ reporter: ['me'] }))).items).toEqual([])
+    const created = (await call('POST', '/issues', { title: 'First report', type: 'bug', report: { environment: 'craftsman', surface: 'dashboard' } })).body as Issue
+    expect(created.reporter).toEqual({ sub: 'dev-riley', name: 'Riley Park' })
+    expect((await list(filterQuery({ reporter: ['me'] }))).items.map((issue) => issue.identifier)).toEqual([created.identifier])
+
+    const subjects = Array.from({ length: 21 }, (_, i) => `dev-${i}`)
+    for (const bad of [{ reporter: subjects }, { reporter: [''] }, { reporter: 'me' }]) {
+      const { status, body } = await call('GET', `/issues${filterQuery(bad)}`)
+      expect(status, JSON.stringify(bad)).toBe(400)
+      expect(body).toMatchObject({ error: 'invalid', issues: [{ path: 'filter.reporter' }] })
+    }
+    expect((await list(filterQuery({ reporter: subjects.slice(0, 20) }))).items).toEqual([])
+    expect((await call('POST', '/views', { name: 'Bad', filter: { reporter: [''] } })).status).toBe(400)
+  })
+
   test('GET by identifier (any case) or id; unknown is 404', async () => {
     const issue = (await call('GET', '/issues/apt-3')).body as Issue
     expect(issue).toMatchObject({ identifier: 'APT-3', children: [], blocks: [], blockedBy: [] })

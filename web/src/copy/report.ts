@@ -26,6 +26,8 @@ export const reportMessages = defineDashboardMessages({
   'tracker.report.screenshotsHint': { defaultMessage: 'Paste with {mod}+V or drop files here', translations: { ja: '{mod}+V で貼り付け、またはここへドロップ' } },
   'tracker.report.chooseFile': { defaultMessage: 'Choose file', translations: { ja: 'ファイルを選ぶ' } },
   'tracker.report.submit': { defaultMessage: 'Report bug', translations: { ja: '報告する' } },
+  'tracker.report.submitted': { defaultMessage: 'Reported {identifier}', translations: { ja: '{identifier} を報告しました' } },
+  'tracker.report.seeReported': { defaultMessage: 'See everything I reported', translations: { ja: '自分が報告した課題を見る' } },
   'tracker.report.uploadFailedTitle': { defaultMessage: '{identifier} was created, but some screenshots were not attached', translations: { ja: '{identifier} を作成しましたが、一部のスクリーンショットを添付できませんでした' } },
   'tracker.report.uploadFailedBody': { defaultMessage: 'Not attached: {files}. Attach them again from the issue.', translations: { ja: '未添付: {files}。課題の画面からもう一度添付してください。' } },
 })

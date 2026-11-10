@@ -204,6 +204,17 @@ func ValidateFilter(filter Filter) error {
 			return errors.New("Invalid project filter")
 		}
 	}
+	if len(filter.Reporter) > 20 {
+		return &FieldError{Path: "filter.reporter", Message: "Reporter filter must contain at most 20 entries"}
+	}
+	for _, sub := range filter.Reporter {
+		if !Text(sub, 1, 4096) {
+			return &FieldError{Path: "filter.reporter", Message: "Filter values must contain 1 to 4096 characters"}
+		}
+		if sub == "none" {
+			return &FieldError{Path: "filter.reporter", Message: "Reporter filter does not support none"}
+		}
+	}
 	for _, values := range [][]string{filter.Assignee, filter.Environment} {
 		for _, value := range values {
 			if !Text(value, 1, 4096) {

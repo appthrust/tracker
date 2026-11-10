@@ -74,6 +74,13 @@ export const issuesQuery = (filter: Filter, sort: Sort) => {
   })
 }
 
+/** The sidebar's open count for "Reported by me" reads one capped page; a next cursor means "more than the cap". */
+export const REPORTED_OPEN_CAP = 99
+export const reportedOpenQuery = queryOptions({
+  queryKey: [...ISSUES_KEY, 'reported-open'],
+  queryFn: () => trackerApi.issues.list({ filter: { reporter: ['me'], category: ['backlog', 'unstarted', 'started'] }, limit: REPORTED_OPEN_CAP }),
+})
+
 /** Issue search for the palette and relation pickers (title/identifier words). */
 export const issueSearchQuery = (q: string) =>
   queryOptions({

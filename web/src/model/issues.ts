@@ -60,6 +60,7 @@ export function matchesFilter(issue: IssueSummary, filter: Filter, context: Filt
     )
     if (!ok) return false
   }
+  if (filter.reporter && filter.reporter.length > 0 && !filter.reporter.some((value) => issue.reporter.sub === (value === 'me' ? context.me : value))) return false
   if (filter.label && filter.label.length > 0 && !filter.label.some((label) => issue.labelIds.includes(label))) return false
   if (!has(filter.type, issue.type)) return false
   if (!has(filter.priority, issue.priority)) return false

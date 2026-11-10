@@ -75,7 +75,7 @@ if [[ "$ready" != 1 ]]; then cat "$work/server.log"; echo 'Server did not become
 token=$(python3 - <<'PY'
 import base64, json
 def enc(value): return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
-print(enc({'alg':'none'})+'.'+enc({'sub':'dev-alex','name':'Alex Chen','email':'alex@example.test'})+'.')
+print(enc({'alg':'none'})+'.'+enc({'sub':'smoke-reporter','name':'Smoke Reporter','email':'smoke@example.test'})+'.')
 PY
 )
 auth="Authorization: Bearer $token"
@@ -85,9 +85,13 @@ project=$(request -X POST "$base/projects" --data '{"name":"Smoke project","colo
 project_id=$(jq -er '.id' <<<"$project")
 issue=$(request -X POST "$base/issues" --data "{\"title\":\"Smoke bug\",\"type\":\"bug\",\"projectId\":\"$project_id\",\"report\":{\"environment\":\"local\",\"surface\":\"apth\",\"steps\":\"Run smoke\",\"expected\":\"Success\",\"actual\":\"Under investigation\"}}")
 id=$(jq -er '.id' <<<"$issue")
-jq -e '.identifier == "APT-31" and .report.environment == "local" and .reporter.sub == "dev-alex"' <<<"$issue" >/dev/null
+jq -e '.identifier == "APT-31" and .report.environment == "local" and .reporter.sub == "smoke-reporter"' <<<"$issue" >/dev/null
 jq -e --arg project "$project_id" '.projectId == $project' <<<"$issue" >/dev/null
 request --get "$base/issues" --data-urlencode "filter={\"project\":[\"$project_id\"]}" | jq -e --arg id "$id" --arg project "$project_id" '.items | length == 1 and .[0].id == $id and .[0].projectId == $project' >/dev/null
+request --get "$base/issues" --data-urlencode 'filter={"reporter":["me"]}' | jq -e --arg id "$id" '.items | length == 1 and .[0].id == $id and .[0].reporter.sub == "smoke-reporter"' >/dev/null
+code=$(curl -sS -o "$work/invalid-reporter.json" -w '%{http_code}' -H "$auth" --get "$base/issues" --data-urlencode 'filter={"reporter":[""]}')
+[[ "$code" == 400 ]]
+jq -e '.error == "invalid" and .issues[0].path == "filter.reporter"' "$work/invalid-reporter.json" >/dev/null
 code=$(curl -sS -o "$work/conflict.json" -w '%{http_code}' -H "$auth" -X DELETE "$base/projects/$project_id")
 [[ "$code" == 409 ]]
 jq -e '.error == "conflict"' "$work/conflict.json" >/dev/null
@@ -108,4 +112,4 @@ request --get "$base/issues" --data-urlencode 'filter={"project":["none"],"q":"S
 request "$base/issues/$id/timeline" | jq -e --arg project "$project_id" '[.items[] | select(.kind == "activity" and .activity.field == "project") | .activity] | length == 1 and .[0].from == $project and .[0].to == null' >/dev/null
 code=$(curl -sS -o "$work/deleted" -w '%{http_code}' -H "$auth" -X DELETE "$base/projects/$project_id")
 [[ "$code" == 204 && ! -s "$work/deleted" ]]
-printf 'Tracker smoke passed: project → issue → referenced delete conflict → comment → attachment → status → timeline → project filter → no project → project delete\n'
+printf 'Tracker smoke passed: project → issue → reporter filter → invalid reporter → referenced delete conflict → comment → attachment → status → timeline → project filter → no project → project delete\n'

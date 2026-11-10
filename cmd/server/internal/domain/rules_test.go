@@ -93,6 +93,45 @@ func TestReportAndFilters(t *testing.T) {
 		require.True(t, found)
 	}
 }
+
+func TestReporterFilterValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reporter []string
+		message  string
+	}{
+		{name: "omitted"},
+		{name: "empty list", reporter: []string{}},
+		{name: "caller", reporter: []string{"me"}},
+		{name: "explicit subject", reporter: []string{"alex"}},
+		{name: "multiple subjects", reporter: []string{"me", "other"}},
+		{name: "20 entries", reporter: strings.Fields(strings.Repeat("alex ", 20))},
+		{name: "4096 characters", reporter: []string{strings.Repeat("あ", 4096)}},
+		{name: "too many entries", reporter: strings.Fields(strings.Repeat("alex ", 21)), message: "Reporter filter must contain at most 20 entries"},
+		{name: "empty subject", reporter: []string{""}, message: "Filter values must contain 1 to 4096 characters"},
+		{name: "blank subject", reporter: []string{" \t\n"}, message: "Filter values must contain 1 to 4096 characters"},
+		{name: "long subject", reporter: []string{strings.Repeat("あ", 4097)}, message: "Filter values must contain 1 to 4096 characters"},
+		{name: "invalid UTF-8", reporter: []string{"\xff"}, message: "Filter values must contain 1 to 4096 characters"},
+		{name: "none", reporter: []string{"none"}, message: "Reporter filter does not support none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := Filter{Reporter: tc.reporter}
+			for _, err := range []error{
+				ValidateFilter(filter),
+				ValidateView(View{Name: "Reported", Layout: "list", Sort: SortCreated, Filter: filter}),
+			} {
+				if tc.message == "" {
+					require.NoError(t, err)
+					continue
+				}
+				var field *FieldError
+				require.ErrorAs(t, err, &field)
+				require.Equal(t, "filter.reporter", field.Path)
+				require.Equal(t, tc.message, field.Message)
+			}
+		})
+	}
+}
 func TestIssueAndAttachmentLimits(t *testing.T) {
 	item := Issue{IssueSummary: IssueSummary{Title: "Valid", Type: "task", Priority: "none"}}
 	require.NoError(t, ValidateIssue(item))

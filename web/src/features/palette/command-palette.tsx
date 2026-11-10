@@ -1,11 +1,11 @@
-// ⌘/Ctrl+K command palette: navigate (lists, projects, views, report,
-// settings, issues by identifier or title) and, when issues are focused or
+// ⌘/Ctrl+K command palette: navigate (lists, "Reported by me", projects,
+// views, report, settings, issues by identifier or title) and, when issues are focused or
 // X-selected, change their status, priority, assignee, labels or project
 // (typing a new name offers to create that project and move them into it).
 // ↑/↓ move, Enter runs, Backspace on an empty query goes back, Escape closes.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound } from 'lucide-react'
+import { ArrowRight, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound, UserRoundPen } from 'lucide-react'
 import { Dialog as RDialog } from 'radix-ui'
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { issueSearchQuery, useProjectMutations, useUpdateIssues } from '../../api/queries'
@@ -184,6 +184,7 @@ function Palette() {
       { id: 'nav-report', group: nav, label: t('tracker.nav.report'), icon: <Bug />, hint: '⇧R', run: go(paths.report) },
       { id: 'nav-issues', group: nav, label: t('tracker.nav.issues'), icon: <List />, run: go(paths.home) },
       { id: 'nav-board', group: nav, label: t('tracker.nav.board'), icon: <Columns3 />, run: go(paths.board) },
+      { id: 'nav-reported', group: nav, label: t('tracker.palette.goReported'), icon: <UserRoundPen />, run: go(paths.reported) },
       ...activeProjects.map((project) => ({
         id: `nav-project-${project.id}`,
         group: nav,

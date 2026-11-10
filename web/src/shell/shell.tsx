@@ -1,13 +1,16 @@
-// App frame: a Linear-style sidebar (workspace, issues, board, report,
-// projects, saved views, settings, keyboard hint, language, app switcher, the
-// signed-in person) beside the page, plus the overlays every page shares (new
-// issue, command palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K,
-// `/`. The issues and board links keep the current project scope; a project
+// App frame: a Linear-style sidebar (workspace, issues, board, report, the
+// built-in "Reported by me" view with its open count, projects, saved views,
+// settings, keyboard hint, language, app switcher, the signed-in person)
+// beside the page, plus the overlays every page shares (new issue, command
+// palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`. The
+// issues, board and reported links keep the current project scope; a project
 // in the sidebar scopes the list or board to it.
 import { AppSwitcher } from '@appthrust/app-launcher'
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, X } from 'lucide-react'
+import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, UserRoundPen, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
+import { REPORTED_OPEN_CAP, reportedOpenQuery } from '../api/queries'
 import { FILTER_INPUT_ID } from '../features/issues/filter-bar'
 import { NewIssueDialog } from '../features/issues/new-issue-dialog'
 import { CreateProjectDialog, ProjectSwatch } from '../features/issues/projects'
@@ -62,10 +65,12 @@ export function Shell({ children }: { children: ReactNode }) {
   const [creatingProject, setCreatingProject] = useState(false)
   const navigate = useNavigate()
   const scope = useUi((state) => state.scope)
+  const reportedOpen = useQuery(reportedOpenQuery).data
+  const reportedOpenCount = reportedOpen ? (reportedOpen.nextCursor ? `${REPORTED_OPEN_CAP}+` : String(reportedOpen.items.length)) : undefined
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  // A project in the sidebar scopes the board when the board is open, else the list.
-  const listPath = pathname === paths.board ? paths.board : paths.home
-  const onList = pathname === paths.home || pathname === paths.board
+  // A project in the sidebar scopes the board or "Reported by me" while it is open, else the list.
+  const listPath = pathname === paths.board || pathname === paths.reported ? pathname : paths.home
+  const onList = pathname === paths.home || pathname === paths.board || pathname === paths.reported
   useGlobalKeys()
 
   const sidebar = (
@@ -113,6 +118,16 @@ export function Shell({ children }: { children: ReactNode }) {
             <Bug aria-hidden />
             {t('tracker.nav.report')}
             <Kbd className="ml-auto">⇧R</Kbd>
+          </HrefLink>
+          <HrefLink href={listHref(paths.reported, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <UserRoundPen aria-hidden />
+            <span className="truncate">{t('tracker.nav.reported')}</span>
+            {reportedOpenCount !== undefined ? (
+              <span className="ml-auto text-[11px] text-stone-400 tabular-nums" title={t('tracker.project.openCount', { count: reportedOpenCount })}>
+                <span className="sr-only">{t('tracker.project.openCount', { count: reportedOpenCount })}</span>
+                <span aria-hidden>{reportedOpenCount}</span>
+              </span>
+            ) : null}
           </HrefLink>
         </div>
         <div>

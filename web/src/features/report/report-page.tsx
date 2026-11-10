@@ -1,7 +1,8 @@
 // `/report`: the bug report form. Creates a `type=bug` issue with the
 // AppThrust report fields (and a project, starting as the list/board scope),
-// uploads the pasted/dropped screenshots to it, and lands on the new issue.
-// `?version=` (from a link on a release page) prefills the version.
+// uploads the pasted/dropped screenshots to it, and lands on the new issue
+// with a toast linking to "Reported by me" (`/reported`). `?version=` (from a
+// link on a release page) prefills the version.
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, ImagePlus, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react'
@@ -10,7 +11,7 @@ import { useCreateIssue } from '../../api/queries'
 import { useText } from '../../i18n'
 import { ATTACHMENT_TYPES, ATTACHMENTS_PER_ISSUE, attachmentProblem, PRIORITIES, reportProblems, TITLE_MAX, toReport, type ReportDraft } from '../../model/issues'
 import { paths } from '../../routes/paths'
-import { ActionError, Button, cn, Field, HrefLink, Kbd, Notice, SelectInput, TextInput, useDocumentTitle } from '../../ui'
+import { ActionError, Button, cn, Field, HrefLink, Kbd, Notice, SelectInput, showToast, TextInput, useDocumentTitle } from '../../ui'
 import { problemText, transferFiles } from '../issues/attachments'
 import { ProjectField } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
@@ -95,6 +96,7 @@ export function ReportPage({ version }: { version?: string }) {
     setUploading(false)
     if (failed.length > 0) return setUploadFailure({ identifier: issue.identifier, failed })
     void navigate({ to: paths.issue(issue.identifier) } as never)
+    showToast({ tone: 'success', title: t('tracker.report.submitted', { identifier: issue.identifier }), action: { label: t('tracker.report.seeReported'), href: paths.reported } })
   }
 
   if (uploadFailure) {
@@ -104,9 +106,14 @@ export function ReportPage({ version }: { version?: string }) {
           tone="warning"
           title={t('tracker.report.uploadFailedTitle', { identifier: uploadFailure.identifier })}
           actions={
-            <HrefLink href={paths.issue(uploadFailure.identifier)} className="text-sm font-medium underline">
-              {t('tracker.palette.openIssue', { identifier: uploadFailure.identifier })}
-            </HrefLink>
+            <>
+              <HrefLink href={paths.issue(uploadFailure.identifier)} className="text-sm font-medium underline">
+                {t('tracker.palette.openIssue', { identifier: uploadFailure.identifier })}
+              </HrefLink>
+              <HrefLink href={paths.reported} className="text-sm font-medium underline">
+                {t('tracker.report.seeReported')}
+              </HrefLink>
+            </>
           }
         >
           {t('tracker.report.uploadFailedBody', { files: uploadFailure.failed.join(', ') })}

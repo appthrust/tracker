@@ -151,6 +151,9 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		return page, invalid("Invalid limit or sort")
 	}
 	if err := domain.ValidateFilter(options.Filter); err != nil {
+		if _, ok := err.(*domain.FieldError); ok {
+			return page, err
+		}
 		return page, invalid(err.Error())
 	}
 	args := []any{t.WorkspaceID}
@@ -190,6 +193,16 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		}
 		clauses = append(clauses, "("+condition+")")
 	}
+	reporters := f.Reporter
+	if slices.Contains(reporters, "me") {
+		reporters = slices.Clone(reporters)
+		for i, sub := range reporters {
+			if sub == "me" {
+				reporters[i] = options.Subject
+			}
+		}
+	}
+	anyOf("i.reporter_sub", reporters)
 	if len(f.Project) > 0 {
 		condition := "i.project_id=ANY(" + bind(pq.Array(f.Project)) + ")"
 		if slices.Contains(f.Project, "none") {

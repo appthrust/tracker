@@ -1,8 +1,9 @@
-// Every tracker URL. List-like pages (`/`, `/board`, `/views/<id>`) carry their
-// state in the query: `filter` (API.md Filter as JSON), `sort`, `layout`
-// (views only), `issue` (the identifier open in the side panel) and, on `/`
-// and `/board`, `project` — the project scope (a project id or `none`; absent
-// = all projects), kept out of `filter` so a scoped link stays readable.
+// Every tracker URL. List-like pages (`/`, `/board`, `/reported`,
+// `/views/<id>`) carry their state in the query: `filter` (API.md Filter as
+// JSON), `sort`, `layout` (`/reported` and views), `issue` (the identifier
+// open in the side panel) and, on `/`, `/board` and `/reported`, `project` —
+// the project scope (a project id or `none`; absent = all projects), kept out
+// of `filter` so a scoped link stays readable.
 import type { Filter, Sort, ViewLayout } from '../api/tracker'
 import { compactFilter, SORTS } from '../model/issues'
 
@@ -11,6 +12,8 @@ export type ListSearch = { filter?: string; sort?: string; layout?: string; issu
 export const paths = {
   home: '/',
   board: '/board',
+  /** Built-in "Reported by me" view (issues-page.tsx `REPORTED_VIEW`); not a stored View. */
+  reported: '/reported',
   view: (viewId: string) => `/views/${encodeURIComponent(viewId)}`,
   issue: (identifier: string) => `/issues/${encodeURIComponent(identifier)}`,
   report: '/report',
