@@ -200,7 +200,7 @@ seeded issues are assigned across them, the rest have `projectId: null`.
   dev-seed/mock "current user" (`Alex Chen` in the mock, the bearer subject on
   the server) reports at least 8 of the seeded issues so the view is not empty.
 
-## Epics and stories (v0.1.6)
+## Epics and stories (v0.1.7)
 
 Work is bundled in a three-level hierarchy that reuses the existing
 `parent` link; there is no new entity and no new write route.

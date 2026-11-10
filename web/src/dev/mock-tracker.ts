@@ -211,7 +211,7 @@ const SEED_TITLES: readonly string[] = [
   'Document workspace settings',
 ]
 const SEED_ENVIRONMENTS = ['appthrust.ink', 'craftsman', 'appthrust.dev', 'local'] as const
-/** API.md v0.1.6 fixture, in creation order after the seed issues (same titles and order as the server seed). */
+/** API.md v0.1.7 fixture, in creation order after the seed issues (same titles and order as the server seed). */
 const EPIC_SEED: readonly string[] = ['Reliable bug intake', 'Faster triage']
 /** Story `s` belongs to EPIC_SEED[floor(s / 2)]. */
 const STORY_SEED: readonly string[] = [

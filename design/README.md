@@ -26,7 +26,7 @@ In scope (v1):
 
 - One workspace per installation (= the installing Project).
 - Issues with identifier `KEY-n`, title, Markdown description, type, priority,
-  status, assignee, labels, due date, parent/child, blocking links; since 0.1.6 the parent link also
+  status, assignee, labels, due date, parent/child, blocking links; since 0.1.7 the parent link also
   carries epics and user stories (epic › story › work item, [API.md](./API.md)
   "Epics and stories").
 - A structured **bug report** form that fills the AppThrust-specific
