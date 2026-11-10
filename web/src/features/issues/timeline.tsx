@@ -107,7 +107,7 @@ export function Timeline({ issueId, items }: { issueId: string; items: TimelineI
       {items.map((item) =>
         item.kind === 'activity' ? (
           <li key={item.activity.id} className="flex items-start gap-2 pl-1 text-xs text-stone-500">
-            <span aria-hidden className="mt-1.5 size-1.5 shrink-0 rounded-full bg-stone-300" />
+            <Avatar person={item.activity.actor} size="xs" />
             <p className="min-w-0 flex-1">
               {activityText(item.activity, names)}
               <span aria-hidden> · </span>
@@ -138,7 +138,7 @@ function CommentCard({ issueId, comment }: { issueId: string; comment: Comment }
   return (
     <article className="rounded-lg border border-line bg-white" aria-label={t('tracker.comment.by', { name: comment.author.name })}>
       <header className="flex items-center gap-2 px-3 pt-2.5 text-xs text-stone-500">
-        <Avatar name={comment.author.name} size="xs" />
+        <Avatar person={comment.author} size="xs" />
         <span className="font-medium text-stone-800">{comment.author.name}</span>
         <time dateTime={comment.createdAt} title={formatDateTime(comment.createdAt, locale)}>
           {formatRelative(comment.createdAt, locale)}
@@ -245,7 +245,7 @@ export function CommentComposer({ issueId, attachmentCount }: { issueId: string;
       }}
       className="flex gap-2"
     >
-      <Avatar name={me.name} size="sm" />
+      <Avatar person={me} size="sm" />
       <div className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white focus-within:border-accent">
         <label htmlFor={`comment-${issueId}`} className="sr-only">
           {t('tracker.comment.label')}

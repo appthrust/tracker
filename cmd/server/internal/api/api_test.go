@@ -202,6 +202,7 @@ func TestOpenAPIRouteInventory(t *testing.T) {
 			require.Contains(t, document.Paths[path], method, "%s %s", method, path)
 		}
 	}
+	require.Contains(t, document.Paths["/people/{id}/avatar"], "get")
 	w := httptest.NewRecorder()
 	Unavailable().ServeHTTP(w, httptest.NewRequest("GET", "/api/tracker/v1/openapi.json", nil))
 	require.Equal(t, 200, w.Code)
@@ -217,4 +218,16 @@ func TestProjectionPreservesIndividualSnapshots(t *testing.T) {
 	a.enrich(s, page)
 	require.Equal(t, "Earlier snapshot", page.Items[0].Reporter.Name)
 	require.Equal(t, "Later snapshot", page.Items[1].Reporter.Name)
+}
+
+func TestProjectionDropsStaleActivityAvatar(t *testing.T) {
+	a := &API{directory: directory.New(nil, "")}
+	s := &request{r: httptest.NewRequest("GET", "/", nil)}
+	person := map[string]any{"sub": "alex", "name": "Alex", "avatarUrl": "https://directory.example.test/old-avatar"}
+	timeline := &items[domain.TimelineItem]{Items: []domain.TimelineItem{
+		{Activity: &domain.Activity{Field: "assignee", To: person}},
+	}}
+	a.enrich(s, timeline)
+	require.NotContains(t, person, "avatarUrl")
+	require.Equal(t, "Alex", person["name"])
 }

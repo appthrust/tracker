@@ -210,7 +210,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <span lang={language === 'ja' ? 'en' : 'ja'}>{t(language === 'ja' ? 'tracker.language.en' : 'tracker.language.ja')}</span>
         </button>
         <div className="flex h-9 items-center gap-2 px-2 text-[13px] text-stone-700">
-          <Avatar name={me.name} size="xs" />
+          <Avatar person={me} size="xs" />
           <span className="min-w-0 flex-1 truncate">
             <span className="sr-only">{t('tracker.nav.you')}: </span>
             {me.name}

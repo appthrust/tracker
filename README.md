@@ -22,7 +22,7 @@ module path `github.com/appthrust/tracker`.
 
 The public Go SDK is `github.com/appthrust/appserver-go v0.3.0`; no platform checkout,
 module replacement, or private Go credential is required. The launcher and i18n
-packages use the published `^0.1.0` GitHub Packages versions rather than workspace
+packages use the published `^0.1.3` GitHub Packages versions rather than workspace
 packages. Tailwind scans the installed launcher package for its classes.
 
 ## Develop
@@ -44,6 +44,13 @@ For local UI development, run `bun run mock` and `bun run dev` in separate termi
 in `web/`. The mock defaults to port 5236 and Vite to port 5238. To use a real server,
 set `TRACKER_API_UPSTREAM` plus `TRACKER_DEV_BEARER` or `TRACKER_DEV_COOKIE_FILE` as described in
 `web/vite.config.ts`.
+
+The mock gives Alex a same-origin Directory PNG avatar and leaves the other
+people without photos. Avatars on cards, account rows, people pickers, reporter
+properties and timeline entries use the same image/initials component.
+Production avatar reads go through Tracker using the caller's existing bearer;
+no Directory browser session is needed. Limits and caching are in
+[`design/API.md`](design/API.md#directory-avatars-v014).
 
 Run the server with `go run ./cmd/server --static-dir web/dist`. Configure:
 
@@ -83,11 +90,14 @@ a required BuildKit secret, never through build arguments or committed files.
 
 ## Catalog and release
 
-`catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`) creates
-`versions[]` with the built image `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
-stream `0.1`; later tags append.
+The next app release is **0.1.4**, also recorded in `web/package.json`.
+`catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`)
+created `versions[]` with `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
+stream `0.1`; later tags append at publication time. Do not add a version with
+an unbuilt or placeholder image digest. OpenAPI's `info.version` describes the
+API schema, not the app release. This repository has no hand-maintained changelog.
 
-After the release prerequisites are available, push a SemVer tag such as `v0.1.0`.
+After the release prerequisites are available, push the SemVer tag `v0.1.4`.
 The tag workflow:
 
 1. Performs one multi-platform build on `ubuntu-24.04` for Linux amd64 and arm64,
@@ -107,8 +117,8 @@ The tag workflow:
 Publication commands used by the workflow:
 
 ```sh
-bun hack/publish-entry.ts submit --version 0.1.0 --digest sha256:<image-index-digest>
-bun hack/publish-entry.ts await --version 0.1.0 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts submit --version 0.1.4 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts await --version 0.1.4 --digest sha256:<image-index-digest>
 ```
 
 Writers are serialized by `tracker-catalog-publish`; the workflow is guarded to
@@ -124,6 +134,14 @@ public after its first publication.
 `https://github.com/appthrust/cloud/.github/workflows/catalog-publish.yml@refs/heads/main`,
 issued by `https://token.actions.githubusercontent.com`. It does not require the Cloud
 admin token.
+
+After publication, each estate's `AppCatalogSource` syncs the signed catalog.
+Install Issues from the Project Marketplace (Directory is an automatic
+dependency). Existing `follow` installations on stream `0.1` roll to the new
+version; `pinned` installations show `UpdateAvailable` and require an explicit
+version update. Confirm the installation is Ready, `/releasez` reports `0.1.4`,
+and a signed-in Tracker page shows Directory avatars. These are release steps,
+not actions performed by a source-only version bump.
 
 Migration authority:
 [First-party app repositories](https://github.com/appthrust/platform/blob/main/design/platform/marketplace-apps/first-party-app-repositories.md).

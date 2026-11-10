@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import type { Person } from '../api/tracker'
 import { cn } from './cn'
 
 const AVATAR_SIZE = { xs: 'size-5 text-[9px]', sm: 'size-6 text-[10px]', md: 'size-8 text-xs', lg: 'size-16 text-xl' } as const
@@ -14,18 +16,18 @@ export function initialsOf(name: string): string {
   return /^[A-Za-z]$/.test(first) && second && /^[A-Za-z]$/.test(second) ? `${first}${second}`.toUpperCase() : first.toUpperCase()
 }
 
-/**
- * An author's initials in a neutral circle. No image is fetched (a Directory
- * photo is cross-origin and would hit the OIDC edge). Decorative; the name is
- * always shown next to it.
- */
-export function Avatar({ name, size = 'md' }: { name: string; size?: keyof typeof AVATAR_SIZE }) {
+/** Directory image with the existing initials badge as its error/absence fallback. */
+export function Avatar({ person, size = 'md' }: { person: Pick<Person, 'name' | 'avatarUrl'>; size?: keyof typeof AVATAR_SIZE }) {
+  const [failedUrl, setFailedUrl] = useState<string>()
+  const showImage = person.avatarUrl && person.avatarUrl !== failedUrl
   return (
     <span
-      aria-hidden
-      className={cn('inline-flex shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-accent-strong ring-1 ring-accent-line ring-inset', AVATAR_SIZE[size])}
+      aria-hidden={showImage ? undefined : true}
+      className={cn('inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-soft font-semibold text-accent-strong ring-1 ring-accent-line ring-inset', AVATAR_SIZE[size])}
     >
-      {initialsOf(name)}
+      {showImage ? (
+        <img src={person.avatarUrl} alt={person.name} loading="lazy" className="size-full rounded-full object-cover" onError={() => setFailedUrl(person.avatarUrl)} />
+      ) : initialsOf(person.name)}
     </span>
   )
 }

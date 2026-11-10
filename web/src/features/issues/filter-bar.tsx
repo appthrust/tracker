@@ -57,13 +57,13 @@ export function FilterBar({ filter, sort, onFilter, onSort, actions }: { filter:
   const statusSelected = [...(filter.status ?? []), ...(filter.category ?? []).map((category) => `category:${category}`)]
   const people = usePeopleOptions(peopleQuery, peopleOpen, [])
   const assigneeOptions: PickerOption[] = [
-    { value: 'me', label: t('tracker.filter.me'), icon: <Avatar name={me.name} size="xs" /> },
+    { value: 'me', label: t('tracker.filter.me'), icon: <Avatar person={me} size="xs" /> },
     ...people.options.map((option) => (option.value === assigneeValue(option.value) ? option : { ...option, value: 'none' })),
   ]
   // Every issue has a reporter, so there is no "unassigned" choice; "me" follows whoever is signed in.
   const reporters = usePeopleOptions(reporterQuery, reporterOpen, [])
   const reporterOptions: PickerOption[] = [
-    { value: 'me', label: t('tracker.filter.me'), icon: <Avatar name={me.name} size="xs" /> },
+    { value: 'me', label: t('tracker.filter.me'), icon: <Avatar person={me} size="xs" /> },
     ...reporters.options.filter((option) => assigneeValue(option.value) !== null),
   ]
   const environments = [...new Set([...ENVIRONMENT_SUGGESTIONS, ...(filter.environment ?? [])])]

@@ -134,7 +134,7 @@ export function usePeopleOptions(query: string, enabled: boolean, extra: (Person
     ...[...byId.values()].map((person) => ({
       value: person.sub,
       label: person.name,
-      icon: <Avatar name={person.name} size="xs" />,
+      icon: <Avatar person={person} size="xs" />,
       hint: person.sub === me.sub ? t('tracker.nav.you') : undefined,
     })),
   ]
@@ -167,7 +167,7 @@ export function AssigneePicker({ issue, variant = 'chip' }: { issue: IssueSummar
       align={variant === 'chip' ? 'end' : 'start'}
     >
       <Trigger variant={variant} label={`${t('tracker.property.assignee')}: ${name}`} className={variant === 'chip' ? 'px-0.5' : undefined}>
-        {issue.assignee ? <Avatar name={issue.assignee.name} size="xs" /> : <UserRound aria-hidden className="size-4 text-stone-400" />}
+        {issue.assignee ? <Avatar person={issue.assignee} size="xs" /> : <UserRound aria-hidden className="size-4 text-stone-400" />}
         {variant === 'row' ? <span className={cn('truncate', !issue.assignee && 'text-stone-500')}>{name}</span> : null}
       </Trigger>
     </Picker>

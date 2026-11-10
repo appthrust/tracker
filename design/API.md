@@ -8,9 +8,10 @@ Conventions (SDK `httpx`): success bodies are the resource or
 `{ "items": [...], "nextCursor": string|null }`; errors are
 `{ "error": "<code>", "message": "...", "issues"?: [{path, message}] }` with
 codes `invalid` (400), `unauthenticated` (401), `forbidden` (403),
-`not_found` (404), `conflict` (409), `tracker_store_unavailable` (503),
-`identity_unavailable` (503). Timestamps RFC 3339 UTC. IDs are ULIDs unless
-noted. All routes require the edge bearer; `GET /openapi.json` does not.
+`not_found` (404), `conflict` (409), `directory_avatar_unavailable` (502),
+`tracker_store_unavailable` (503), `identity_unavailable` (503). Timestamps
+RFC 3339 UTC. IDs are ULIDs unless noted. All routes require the edge bearer;
+`GET /openapi.json` does not.
 
 ## Shapes
 
@@ -101,6 +102,7 @@ Admin. `PATCH /views/{id}` accepts `{ name?, layout?, filter?, sort?, shared?, p
 | `POST /views` | `{ name, layout?, filter?, sort?, shared? }` → `View` 201; `shared:true` Admin only | any |
 | `PATCH /views/{id}` · `DELETE /views/{id}` | | owner; shared views Admin |
 | `GET /people?q=` | → `{ items: Person[], source: 'directory' \| 'unavailable' }`; ≤ 20; Directory proxied with caller's bearer, 60 s cache; `[]`+`unavailable` when Directory absent | any |
+| `GET /people/{id}/avatar?v=<avatarVersion>` | Directory image bytes (PNG, JPEG, WebP), ≤ 512 KiB; 404 when the person/avatar is absent; 502 for invalid or unavailable upstream content | any |
 | `GET /openapi.json` | OpenAPI 3.1 document | none |
 
 Default statuses seeded per workspace (name / category / color):
@@ -112,6 +114,39 @@ Moving to a `completed`/`canceled` status sets `completedAt`; leaving clears it.
 Dev seed (`TRACKER_DEV_SEED=1`) and the SPA mock use the same fixture: ~30
 issues across all statuses, 3 labels (`regression`, `ux`, `docs`), 2 shared
 views (`Bugs`, `My issues`), 3 people.
+
+### Directory avatars (v0.1.4)
+
+`Person.avatarUrl`, when present, is a relative, same-origin
+`/api/tracker/v1/people/{id}/avatar?v=<URL-encoded Directory avatarVersion>`.
+The id is Directory's person id, not the OIDC subject. `profileUrl` remains
+the Directory browser URL. No avatar URL is emitted without an avatar version.
+
+The browser authenticates only to Tracker's edge. Tracker authenticates the
+request, then uses its existing Directory link client to forward the caller's
+`Authorization` header verbatim to the internal Directory binding. There is no
+service credential and no client-supplied upstream URL. Direct browser images
+from Directory are unreliable: that host has its own OIDC session, and its
+avatar route requires a bearer. Cross-origin image embedding does not itself
+require CORS, but it cannot supply Tracker's bearer or establish a Directory session.
+
+Only Directory's `image/png`, `image/jpeg`, and `image/webp` content types
+are accepted. The SDK transport refuses redirects and bounds reads to 4 MiB;
+Tracker rejects empty or greater-than-512-KiB bodies before writing any image
+bytes. Invalid content, oversized responses, and Directory outages return
+502 `directory_avatar_unavailable`; missing Directory/person/avatar returns
+404 `not_found`; upstream authorization denials remain 401/403.
+The avatar route needs no Tracker database transaction.
+
+Images have `X-Content-Type-Options: nosniff`, a version-and-content-keyed
+`ETag`, and `Cache-Control: private, max-age=86400` when `v` is present
+(`private, no-cache` otherwise). Matching `If-None-Match` returns 304 only
+after authentication and a successful upstream fetch. The version is a cache
+key, not a historical-image selector, so responses are not marked immutable.
+Errors retain `no-store`. The SPA uses the shared avatar component everywhere
+a person badge appears, with lazy images, name alt text, and initials on missing
+URLs or image errors. The local mock gives Alex a PNG avatar; the other people
+exercise the no-avatar fallback.
 
 ## Projects (v0.2)
 

@@ -3314,6 +3314,50 @@
         ]
       }
     },
+    "/people/{id}/avatar": {
+      "get": {
+        "operationId": "getPersonAvatar",
+        "summary": "Read a Directory avatar through Tracker",
+        "description": "Requires the Tracker bearer and forwards it to the internal Directory binding. Accepts only PNG, JPEG or WebP, 1 byte to 512 KiB. Redirects are refused; transport reads are bounded to 4 MiB. Never accepts an upstream URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Directory person id (not the OIDC subject).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "description": "Directory avatarVersion, used as a cache key, not a historical-image selector.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Directory image bytes",
+            "headers": {
+              "Cache-Control": { "schema": { "type": "string" }, "description": "private, max-age=86400 with v; private, no-cache otherwise. Not immutable." },
+              "ETag": { "schema": { "type": "string" }, "description": "Validator keyed by version and image content." },
+              "X-Content-Type-Options": { "schema": { "type": "string", "const": "nosniff" } }
+            },
+            "content": {
+              "image/png": { "schema": { "type": "string", "format": "binary" } },
+              "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
+              "image/webp": { "schema": { "type": "string", "format": "binary" } }
+            }
+          },
+          "304": { "description": "If-None-Match matches after authentication and upstream fetch." },
+          "400": { "description": "Invalid person id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "403": { "description": "Directory denied access", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Directory, person or avatar absent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "502": { "description": "directory_avatar_unavailable: invalid content, oversized response or upstream failure", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "Identity or Tracker store unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
     "/openapi.json": {
       "get": {
         "operationId": "getOpenAPI",
@@ -3414,7 +3458,8 @@
             "type": "string"
           },
           "avatarUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Same-origin /api/tracker/v1/people/{id}/avatar?v=<Directory avatarVersion>; omitted without an avatar."
           },
           "email": {
             "type": "string"
@@ -3439,7 +3484,8 @@
             "type": "string"
           },
           "avatarUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Same-origin /api/tracker/v1/people/{id}/avatar?v=<Directory avatarVersion>; omitted without an avatar."
           },
           "email": {
             "type": "string"

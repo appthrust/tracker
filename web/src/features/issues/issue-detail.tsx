@@ -10,7 +10,7 @@ import { isTrackerError, type Issue, type Report } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { attachmentsOf, reportProblems, toReport, TITLE_MAX, type ReportDraft } from '../../model/issues'
 import { paths } from '../../routes/paths'
-import { Button, cn, ConfirmDialog, EmptyState, formatDate, formatDateTime, formatRelative, HrefLink, Loading, LoadFailed, Markdown, showToast, TextArea, useDocumentTitle } from '../../ui'
+import { Avatar, Button, cn, ConfirmDialog, EmptyState, formatDate, formatDateTime, formatRelative, HrefLink, Loading, LoadFailed, Markdown, showToast, TextArea, useDocumentTitle } from '../../ui'
 import { setUi } from '../ui-state'
 import { ReportFields, type ReportProblems } from '../report/report-fields'
 import { Attachments, markdownFor, transferFiles, useUploader } from './attachments'
@@ -402,7 +402,7 @@ function PropertiesSidebar({ issue }: { issue: Issue }) {
         />
       )}
       <div className="my-3 border-t border-line" />
-      {row(t('tracker.property.reporter'), <span className="px-2 text-[13px] text-stone-700">{issue.reporter.name}</span>)}
+      {row(t('tracker.property.reporter'), <span className="flex items-center gap-2 px-2 text-[13px] text-stone-700"><Avatar person={issue.reporter} size="xs" />{issue.reporter.name}</span>)}
       {row(t('tracker.property.created'), stamp(issue.createdAt))}
       {row(t('tracker.property.updated'), stamp(issue.updatedAt))}
       {issue.completedAt ? row(t('tracker.property.completed'), <span className="px-2 text-[13px] text-stone-700">{formatDate(issue.completedAt, locale)}</span>) : null}

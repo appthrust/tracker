@@ -73,6 +73,7 @@ func New(database *store.Store, auth *identity.Authenticator, upstream *platform
 	a.route("PATCH /views/{id}", true, true, a.viewPatch)
 	a.route("DELETE /views/{id}", true, true, a.viewDelete)
 	a.route("GET /people", false, false, a.people)
+	a.mux.HandleFunc("GET /api/tracker/v1/people/{id}/avatar", a.avatar)
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { httpx.WriteError(w, httpx.NotFound(), "tracker") })
 	return a
 }

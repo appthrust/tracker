@@ -63,6 +63,8 @@ func (a *API) enrich(s *request, body any) {
 		}
 		if p.AvatarURL != "" {
 			m["avatarUrl"] = p.AvatarURL
+		} else {
+			delete(m, "avatarUrl")
 		}
 		if p.ProfileURL != "" {
 			m["profileUrl"] = p.ProfileURL

@@ -4,6 +4,8 @@ package directory
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
+	"mime"
 	"net/url"
 	"strings"
 	"sync"
@@ -76,9 +78,9 @@ func (c *Client) list(ctx context.Context, bearer string, query url.Values) ([]d
 		}
 		if c.publicURL != "" {
 			projected.ProfileURL = c.publicURL + "/people/" + url.PathEscape(person.ID)
-			if person.AvatarVersion != nil {
-				projected.AvatarURL = c.publicURL + "/api/directory/v1/people/" + url.PathEscape(person.ID) + "/avatar?v=" + url.QueryEscape(person.AvatarVersion.Format(time.RFC3339Nano))
-			}
+		}
+		if person.AvatarVersion != nil {
+			projected.AvatarURL = "/api/tracker/v1/people/" + url.PathEscape(person.ID) + "/avatar?v=" + url.QueryEscape(person.AvatarVersion.Format(time.RFC3339Nano))
 		}
 		people = append(people, projected)
 		if len(people) == 20 {
@@ -101,4 +103,27 @@ func (c *Client) list(ctx context.Context, bearer string, query url.Values) ([]d
 	c.cache[key] = cacheEntry{people, now.Add(60 * time.Second)}
 	c.mu.Unlock()
 	return people, nil
+}
+
+// Avatar uses the same internal binding and caller bearer as people reads.
+// Fetch refuses redirects and limits transport reads to 4 MiB; the stricter
+// Directory photo limit is checked before the handler sends any image bytes.
+func (c *Client) Avatar(ctx context.Context, bearer, personID, version string) ([]byte, string, error) {
+	if c == nil || c.links == nil {
+		return nil, "", link.ErrAbsent
+	}
+	data, contentType, err := c.links.Fetch(ctx, bearer, link.Operation{
+		Definition: "directory", Method: "GET", Base: "/api/directory/v1", Path: "/people/{id}/avatar",
+	}, link.Params{Path: map[string]string{"id": personID}, Query: url.Values{"v": {version}}})
+	if err != nil {
+		return nil, "", err
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || (mediaType != "image/png" && mediaType != "image/jpeg" && mediaType != "image/webp") {
+		return nil, "", fmt.Errorf("%w: invalid avatar content type", link.ErrUnavailable)
+	}
+	if len(data) == 0 || len(data) > 512<<10 {
+		return nil, "", fmt.Errorf("%w: avatar must contain 1 byte to 512 KiB", link.ErrUnavailable)
+	}
+	return data, mediaType, nil
 }

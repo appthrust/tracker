@@ -99,10 +99,13 @@ function ulid(time: number, seq: number): string {
 
 const T0 = Date.parse('2026-10-20T00:00:00Z')
 const HOUR = 3_600_000
+const AVATAR_VERSION = '2026-11-10T00:00:00Z'
+// A 32×32 PNG profile fixture, served through the same route as Directory photos.
+const AVATAR_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAATElEQVR4nGN4eOsrTRHDqAWjFtDNgjTvfZiIahZgNZ1IOwhbgMd0YuwYtWDUAnpYgN8OgnoHR06mBA17CwgmIYKRMWrBqAWjFgwHCwBMkYSMWumRBwAAAABJRU5ErkJggg==', 'base64')
 
 /** The seed's people, in the server seed's order (cmd/server/internal/store/seed.go). */
 export const MOCK_PEOPLE = {
-  alex: { sub: 'dev-alex', name: 'Alex Chen' },
+  alex: { sub: 'dev-alex', name: 'Alex Chen', avatarUrl: `${BASE}/people/person-alex/avatar?v=${encodeURIComponent(AVATAR_VERSION)}` },
   sam: { sub: 'dev-sam', name: 'Sam Rivera' },
   jordan: { sub: 'dev-jordan', name: 'Jordan Lee' },
 } as const satisfies Record<string, Person>
@@ -1055,6 +1058,14 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
   }
 
   // People
+  if ((match = route.match(/^GET \/people\/([^/]+)\/avatar$/))) {
+    if (match[1] !== 'person-alex' || process.env.MOCK_DIRECTORY === 'absent') return notFound()
+    const version = url.searchParams.get('v') ?? ''
+    const etag = `"${new Bun.CryptoHasher('sha256').update(version).update(new Uint8Array([0])).update(AVATAR_PNG).digest('hex')}"`
+    const headers = { 'ETag': etag, 'Cache-Control': version ? 'private, max-age=86400' : 'private, no-cache', 'X-Content-Type-Options': 'nosniff' }
+    if (request.headers.get('If-None-Match') === etag) return new Response(null, { status: 304, headers })
+    return new Response(AVATAR_PNG, { headers: { ...headers, 'Content-Type': 'image/png' } })
+  }
   if (route === 'GET /people') {
     if (process.env.MOCK_DIRECTORY === 'absent') return json({ items: [], source: 'unavailable' })
     const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()

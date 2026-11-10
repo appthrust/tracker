@@ -34,7 +34,7 @@ beforeEach(async () => {
 
 describe('tracker mock: fixture shared with the server dev seed', () => {
   test('caller, workspace, statuses, labels, views and people', async () => {
-    expect((await call('GET', '/me')).body).toEqual({ sub: 'dev-alex', name: 'Alex Chen', role: 'Admin', isAdmin: true })
+    expect((await call('GET', '/me')).body).toEqual({ ...MOCK_PEOPLE.alex, role: 'Admin', isAdmin: true })
     expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 30 })
     expect((await statuses()).map((status) => [status.name, status.category, status.color, status.position])).toEqual([
       ['Backlog', 'backlog', 'gray', 0],
@@ -56,6 +56,20 @@ describe('tracker mock: fixture shared with the server dev seed', () => {
     ])
     expect((await call('GET', '/people?q=sam')).body).toEqual({ items: [MOCK_PEOPLE.sam], source: 'directory' })
     expect((await call('GET', '/people')).body.items).toHaveLength(3)
+  })
+
+  test('Directory avatars use the authenticated same-origin route and versioned private caching', async () => {
+    const path = MOCK_PEOPLE.alex.avatarUrl.slice(BASE.length)
+    const image = await call('GET', path)
+    expect(image.status).toBe(200)
+    expect(image.headers.get('Content-Type')).toBe('image/png')
+    expect(image.headers.get('Cache-Control')).toBe('private, max-age=86400')
+    expect(new Uint8Array(image.body).slice(0, 4)).toEqual(new Uint8Array([137, 80, 78, 71]))
+    const url = new URL(`${BASE}${path}`, 'http://mock.test')
+    const cached = await trackerRoutes(new Request(url, { headers: { 'If-None-Match': image.headers.get('ETag')! } }), url)
+    expect(cached?.status).toBe(304)
+    expect((await call('GET', '/people/person-alex/avatar')).headers.get('Cache-Control')).toBe('private, no-cache')
+    expect(await call('GET', '/people/person-sam/avatar')).toMatchObject({ status: 404, body: { error: 'not_found' } })
   })
 
   test('issue i follows the seed formula: status i%6, type i%3, priority i%5, reporter i%3, assignee (i+1)%3', async () => {
