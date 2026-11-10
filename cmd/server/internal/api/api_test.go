@@ -43,7 +43,7 @@ func newHarness(t *testing.T) *harness {
 		if r.Header.Get("Authorization") == "Bearer "+token("admin") {
 			role = "Admin"
 		}
-		httpx.WriteJSON(w, 200, map[string]any{"member": true, "role": role})
+		httpx.WriteJSON(w, 200, map[string]any{"member": true, "roles": []string{role}, "actions": []string{}})
 	}))
 	t.Cleanup(upstream.Close)
 	issuer := testutil.NewOIDCIssuer(t)
