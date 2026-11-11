@@ -1,8 +1,8 @@
 // Activity and comments in one ascending timeline (API.md `TimelineItem`),
 // then the comment composer. Activity values follow the server's encoding
 // (status → status id, labels → label ids, project → project id, assignee →
-// Person, parent/blocks → IssueRef, attachment → Attachment) and fall back to
-// the raw value.
+// Person, parent/blocks → IssueRef, attachment → Attachment, estimate → the
+// size, sprint → SprintRef) and fall back to the raw value.
 import { Pencil, Trash2 } from 'lucide-react'
 import { useRef, useState, type ClipboardEvent, type ReactNode } from 'react'
 import { useAddComment, useDeleteComment, useEditComment } from '../../api/queries'
@@ -93,6 +93,10 @@ function activityText(activity: Activity, names: Names): ReactNode {
       return t('tracker.activity.deleted', { actor })
     case 'project':
       return t('tracker.activity.project', { actor, from, to })
+    case 'estimate':
+      return activity.to ? t('tracker.activity.estimate', { actor, to }) : t('tracker.activity.estimateCleared', { actor })
+    case 'sprint':
+      return activity.to ? t('tracker.activity.sprint', { actor, to }) : t('tracker.activity.sprintCleared', { actor })
     default:
       return t('tracker.activity.changed', { actor, field: String(activity.field) })
   }

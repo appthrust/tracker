@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
+	"github.com/oklog/ulid/v2"
 )
 
 // SeedDev only fills an installation with no allocated issues, including deleted
@@ -94,6 +96,127 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 				return err
 			}
 		}
-		return nil
+		return tx.seedSprints(admin.Person, statuses)
 	})
+}
+
+// seedSprints mirrors the sprint fixture shared with the SPA mock. Historical
+// ledger entries are intentionally inserted at their event instants, not now.
+func (t *Tx) seedSprints(actor domain.Person, statuses []domain.Status) error {
+	var completed string
+	for _, status := range statuses {
+		if status.Category == "completed" {
+			completed = status.ID
+		}
+	}
+	for _, input := range []IssueCreate{
+		{Title: "Speed up issue search", Type: "task"},
+		{Title: "Add bulk status change", Type: "feature"},
+		{Title: "Tidy up the settings layout", Type: "task"},
+		{Title: "Show issue counts per project", Type: "feature"},
+	} {
+		input.Priority = "medium"
+		input.StatusID = completed
+		if _, err := t.CreateIssue(input, actor, nil); err != nil {
+			return err
+		}
+	}
+	// Match the original mock's issue timestamps without moving issue numbers.
+	if err := t.Exec(`UPDATE tracker_issue SET created_at='2026-10-20T00:00:00Z'::timestamptz+number*interval '1 hour', updated_at='2026-10-20T00:00:00Z'::timestamptz+number*interval '1 hour', completed_at=CASE WHEN completed_at IS NOT NULL THEN '2026-10-20T00:00:00Z'::timestamptz+number*interval '1 hour' END WHERE workspace_id=$1`, t.WorkspaceID); err != nil {
+		return err
+	}
+	sizes := map[int]string{8: "XS", 16: "XS", 3: "S", 10: "S", 30: "S", 2: "M", 4: "M", 14: "M", 11: "L", 17: "L", 37: "L", 5: "XL", 23: "XL", 29: "XL", 38: "XL", 39: "XL", 40: "XL"}
+	for number, size := range sizes {
+		if err := t.Exec(`UPDATE tracker_issue SET estimate=$3 WHERE workspace_id=$1 AND number=$2`, t.WorkspaceID, number, size); err != nil {
+			return err
+		}
+	}
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		return err
+	}
+	now := t.now().In(loc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	at := func(offset, hour int) time.Time {
+		return today.AddDate(0, 0, offset).Add(time.Duration(hour) * time.Hour).UTC()
+	}
+	fixtures := []struct {
+		start, weeks int
+		goal         string
+		members      []int
+	}{
+		{-24, 1, "Bug intake basics", []int{5, 11, 17}},
+		{-17, 1, "Triage flow", []int{23, 29, 37}},
+		{-10, 1, "Board polish", []int{38, 39, 40}},
+		{-3, 2, "Sprint planning and burndown", []int{2, 3, 4, 10, 15, 30, 34}},
+		{11, 1, "", []int{8, 14, 26}},
+	}
+	ids := make([]string, len(fixtures))
+	for i, f := range fixtures {
+		id := ulid.Make().String()
+		ids[i] = id
+		start := today.AddDate(0, 0, f.start)
+		end := start.AddDate(0, 0, 7*f.weeks-1)
+		created := at(f.start-1, 15)
+		updated := created
+		var started, closed *time.Time
+		if i < 4 {
+			v := at(f.start, 9)
+			started = &v
+			updated = v
+		}
+		if i < 3 {
+			v := at(f.start+6, 18)
+			closed = &v
+			updated = v
+		}
+		if i == 4 {
+			created = at(-1, 10)
+			updated = created
+		}
+		if err := t.Exec(`INSERT INTO tracker_sprint (id,workspace_id,number,name,goal,length_weeks,starts_on,ends_on,started_at,closed_at,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, t.WorkspaceID, i+1, fmt.Sprintf("Sprint %d", i+1), f.goal, f.weeks, start.Format("2006-01-02"), end.Format("2006-01-02"), started, closed, created, updated); err != nil {
+			return err
+		}
+		for _, number := range f.members {
+			if err := t.Exec(`UPDATE tracker_issue SET sprint_id=$3 WHERE workspace_id=$1 AND number=$2`, t.WorkspaceID, number, id); err != nil {
+				return err
+			}
+		}
+	}
+	rows := []struct {
+		sprint    int
+		kind      string
+		numbers   []int
+		day, hour int
+	}{
+		{1, "join", []int{5, 11, 17, 2}, -25, 15},
+		{1, "done", []int{5}, -22, 16}, {1, "done", []int{11}, -20, 11}, {1, "done", []int{17}, -18, 17},
+		{2, "join", []int{23, 29, 37}, -18, 15}, {2, "join", []int{2}, -18, 18},
+		{2, "done", []int{23}, -16, 16}, {2, "done", []int{37}, -14, 11}, {2, "done", []int{29}, -12, 17},
+		{3, "join", []int{38, 39, 40}, -11, 15}, {3, "join", []int{2}, -11, 18},
+		{3, "done", []int{38}, -9, 16}, {3, "done", []int{39}, -7, 11}, {3, "done", []int{40}, -4, 10},
+		{4, "join", []int{3, 4, 15, 30, 34}, -4, 14}, {4, "join", []int{2}, -4, 18},
+		{4, "join", []int{10}, -2, 11}, {4, "cancel", []int{30}, -1, 15},
+		{5, "join", []int{8, 14, 26}, -1, 10},
+	}
+	for _, row := range rows {
+		for _, number := range row.numbers {
+			after := domain.SprintStanding{SprintID: ids[row.sprint-1], Size: sizes[number], Category: "started"}
+			before := domain.SprintStanding{}
+			if row.kind != "join" {
+				before = after
+				if row.kind == "done" {
+					after.Category = "completed"
+				} else {
+					after.Category = "canceled"
+				}
+			}
+			for sprint, d := range domain.SprintDeltas(before, after) {
+				if err := t.Exec(`INSERT INTO tracker_sprint_event (id,sprint_id,issue_id,at,scope_points,scope_issues,done_points,done_issues) SELECT $1,$2,id,$4,$5,$6,$7,$8 FROM tracker_issue WHERE workspace_id=$9 AND number=$3`, ulid.Make().String(), sprint, number, at(row.day, row.hour), d.ScopePoints, d.ScopeIssues, d.DonePoints, d.DoneIssues, t.WorkspaceID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return t.Exec(`UPDATE tracker_workspace SET sprint_seq=5 WHERE id=$1`, t.WorkspaceID)
 }

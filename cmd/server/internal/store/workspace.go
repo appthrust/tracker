@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
@@ -40,10 +41,10 @@ func (t *Tx) EnsureWorkspace() error {
 }
 func (t *Tx) Workspace() (domain.Workspace, error) {
 	var w domain.Workspace
-	err := t.SQL.QueryRowContext(t.Context, `SELECT id,key,name,(SELECT count(*) FROM tracker_issue WHERE workspace_id=$1 AND deleted_at IS NULL),created_at,updated_at FROM tracker_workspace WHERE id=$1`, t.WorkspaceID).Scan(&w.ID, &w.Key, &w.Name, &w.IssueCount, &w.CreatedAt, &w.UpdatedAt)
+	err := t.SQL.QueryRowContext(t.Context, `SELECT id,key,name,(SELECT count(*) FROM tracker_issue WHERE workspace_id=$1 AND deleted_at IS NULL),created_at,updated_at,sprint_length_weeks,timezone FROM tracker_workspace WHERE id=$1`, t.WorkspaceID).Scan(&w.ID, &w.Key, &w.Name, &w.IssueCount, &w.CreatedAt, &w.UpdatedAt, &w.SprintLengthWeeks, &w.Timezone)
 	return w, err
 }
-func (t *Tx) PatchWorkspace(key, name *string) (domain.Workspace, error) {
+func (t *Tx) PatchWorkspace(key, name *string, lengthWeeks *int, timezone *string) (domain.Workspace, error) {
 	w, err := t.Workspace()
 	if err != nil {
 		return w, err
@@ -54,10 +55,22 @@ func (t *Tx) PatchWorkspace(key, name *string) (domain.Workspace, error) {
 	if name != nil {
 		w.Name = strings.TrimSpace(*name)
 	}
+	if lengthWeeks != nil {
+		w.SprintLengthWeeks = *lengthWeeks
+	}
+	if timezone != nil {
+		w.Timezone = *timezone
+	}
+	if w.SprintLengthWeeks != 1 && w.SprintLengthWeeks != 2 {
+		return w, &domain.FieldError{Path: "sprintLengthWeeks", Message: "Sprint length must be 1 or 2 weeks"}
+	}
+	if _, err := time.LoadLocation(w.Timezone); err != nil || w.Timezone == "" || w.Timezone == "Local" {
+		return w, &domain.FieldError{Path: "timezone", Message: "Timezone must be an IANA timezone name"}
+	}
 	if !domain.ValidKey(w.Key) || !domain.Text(w.Name, 1, 100) {
 		return w, invalid("Workspace requires a key of 2 to 6 uppercase letters/digits and a name of 1 to 100 characters")
 	}
-	err = t.Exec(`UPDATE tracker_workspace SET key=$2,name=$3,updated_at=now() WHERE id=$1`, t.WorkspaceID, w.Key, w.Name)
+	err = t.Exec(`UPDATE tracker_workspace SET key=$2,name=$3,sprint_length_weeks=$4,timezone=$5,updated_at=now() WHERE id=$1`, t.WorkspaceID, w.Key, w.Name, w.SprintLengthWeeks, w.Timezone)
 	if err != nil {
 		return w, err
 	}

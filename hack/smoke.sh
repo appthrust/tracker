@@ -80,12 +80,12 @@ PY
 )
 auth="Authorization: Bearer $token"
 request() { curl -fsS -H "$auth" -H 'Content-Type: application/json' "$@"; }
-request "$base/workspace" | jq -e '.key == "APT" and .issueCount == 36' >/dev/null
+request "$base/workspace" | jq -e '.key == "APT" and .issueCount == 40' >/dev/null
 project=$(request -X POST "$base/projects" --data '{"name":"Smoke project","color":"blue"}')
 project_id=$(jq -er '.id' <<<"$project")
 issue=$(request -X POST "$base/issues" --data "{\"title\":\"Smoke bug\",\"type\":\"bug\",\"projectId\":\"$project_id\",\"report\":{\"environment\":\"local\",\"surface\":\"apth\",\"steps\":\"Run smoke\",\"expected\":\"Success\",\"actual\":\"Under investigation\"}}")
 id=$(jq -er '.id' <<<"$issue")
-jq -e '.identifier == "APT-37" and .report.environment == "local" and .reporter.sub == "smoke-reporter"' <<<"$issue" >/dev/null
+jq -e '.identifier == "APT-41" and .report.environment == "local" and .reporter.sub == "smoke-reporter"' <<<"$issue" >/dev/null
 jq -e --arg project "$project_id" '.projectId == $project' <<<"$issue" >/dev/null
 request --get "$base/issues" --data-urlencode "filter={\"project\":[\"$project_id\"]}" | jq -e --arg id "$id" --arg project "$project_id" '.items | length == 1 and .[0].id == $id and .[0].projectId == $project' >/dev/null
 request --get "$base/issues" --data-urlencode 'filter={"reporter":["me"]}' | jq -e --arg id "$id" '.items | length == 1 and .[0].id == $id and .[0].reporter.sub == "smoke-reporter"' >/dev/null
@@ -119,4 +119,18 @@ request --get "$base/issues" --data-urlencode 'filter={"project":["none"],"q":"S
 request "$base/issues/$id/timeline" | jq -e --arg project "$project_id" '[.items[] | select(.kind == "activity" and .activity.field == "project") | .activity] | length == 1 and .[0].from == $project and .[0].to == null' >/dev/null
 code=$(curl -sS -o "$work/deleted" -w '%{http_code}' -H "$auth" -X DELETE "$base/projects/$project_id")
 [[ "$code" == 204 && ! -s "$work/deleted" ]]
-printf 'Tracker smoke passed: project → issue → reporter filter → invalid reporter → epic → story → parent patch → ancestry → progress → referenced delete conflict → comment → attachment → status → timeline → project filter → no project → project delete\n'
+# Finish the dev fixture's active sprint before exercising a fresh lifecycle.
+active=$(request "$base/sprints?state=active" | jq -er '.items[0].id')
+request -X POST "$base/sprints/$active/close" --data '{"moveIncompleteTo":null}' | jq -e '.state == "closed"' >/dev/null
+sprint=$(request -X POST "$base/sprints" --data '{"name":"Smoke sprint","lengthWeeks":1}')
+sprint_id=$(jq -er '.id' <<<"$sprint")
+first=$(request -X POST "$base/issues" --data "{\"title\":\"Sprint first\",\"type\":\"task\",\"estimate\":\"M\",\"sprintId\":\"$sprint_id\"}")
+first_id=$(jq -er '.id' <<<"$first")
+request -X POST "$base/issues" --data "{\"title\":\"Sprint second\",\"type\":\"feature\",\"estimate\":\"L\",\"sprintId\":\"$sprint_id\"}" | jq -e '.estimate == "L"' >/dev/null
+request -X POST "$base/sprints/$sprint_id/start" | jq -e '.state == "active" and .commitment.scopePoints == 8 and .commitment.scopeIssues == 2' >/dev/null
+request "$base/sprints/$sprint_id/burndown?unit=points" | jq -e '. as $chart | [.points[] | select(.day == $chart.today)][0].remaining == 8' >/dev/null
+request -X PATCH "$base/issues/$first_id" --data "{\"statusId\":\"$status\"}" | jq -e '.completedAt != null' >/dev/null
+request "$base/sprints/$sprint_id/burndown?unit=points" | jq -e '. as $chart | [.points[] | select(.day == $chart.today)][0] | .remaining == 5 and .done == 3 and .scope == 8' >/dev/null
+request -X POST "$base/sprints/$sprint_id/close" --data '{"moveIncompleteTo":null}' | jq -e '.state == "closed" and .current.donePoints == 3' >/dev/null
+request "$base/velocity?unit=points&limit=1" | jq -e --arg id "$sprint_id" '.items | length == 1 and .[0].sprint.id == $id and .[0].committed == 8 and .[0].completed == 3' >/dev/null
+printf 'Tracker smoke passed: project → issue → reporter filter → invalid reporter → epic → story → parent patch → ancestry → progress → referenced delete conflict → comment → attachment → status → timeline → project filter → no project → project delete → sprint → estimates → start → burndown drop → close → velocity\n'

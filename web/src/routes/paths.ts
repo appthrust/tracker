@@ -1,11 +1,11 @@
 // Every tracker URL. List-like pages (`/`, `/board`, `/reported`,
-// `/views/<id>`) carry their state in the query: `filter` (API.md Filter as
-// JSON), `sort`, `layout` (`/reported` and views), `group` (`epic` or
-// `story`; absent = the page's default, `none` overrides a view's grouping),
-// `issue` (the identifier open in the side panel) and, on `/`, `/board`,
-// `/reported` and `/epics`, `project` — the project scope (a project id or
-// `none`; absent = all projects), kept out of `filter` so a scoped link stays
-// readable.
+// `/current-sprint`, `/sprints/<id>`, `/views/<id>`) carry their state in the
+// query: `filter` (API.md Filter as JSON), `sort`, `layout` (built-in views,
+// sprints and views), `group` (`epic`, `story` or `sprint`; absent = the
+// page's default, `none` overrides a view's grouping), `issue` (the
+// identifier open in the side panel) and, on `/`, `/board`, `/reported` and
+// `/epics`, `project` — the project scope (a project id or `none`; absent =
+// all projects), kept out of `filter` so a scoped link stays readable.
 import type { Filter, GroupBy, Sort, ViewLayout } from '../api/tracker'
 import { compactFilter, GROUP_BYS, SORTS } from '../model/issues'
 
@@ -18,6 +18,11 @@ export const paths = {
   reported: '/reported',
   /** Epics overview: every epic with its stories and progress. */
   epics: '/epics',
+  /** Sprints overview: the active sprint, planned and closed ones, velocity. */
+  sprints: '/sprints',
+  sprint: (sprintId: string) => `/sprints/${encodeURIComponent(sprintId)}`,
+  /** Built-in "Current sprint" view (issues-page.tsx `CURRENT_SPRINT_VIEW`): the active sprint's board; not a stored View. */
+  currentSprint: '/current-sprint',
   view: (viewId: string) => `/views/${encodeURIComponent(viewId)}`,
   issue: (identifier: string) => `/issues/${encodeURIComponent(identifier)}`,
   report: '/report',

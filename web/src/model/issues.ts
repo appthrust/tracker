@@ -3,8 +3,10 @@
 // epic › story › work item hierarchy and the list/board grouping built on it
 // (API.md "Epics and stories"), and the attachments an issue's timeline
 // carries (there is no attachment-list route; `attachment` activities hold
-// the Attachment in `to` when added and in `from` when removed).
+// the Attachment in `to` when added and in `from` when removed). Sprint rules
+// live in ./sprints.
 import type { Attachment, Filter, GroupBy, IssueRef, IssueSummary, IssueType, Priority, Progress, Report, Sort, Status, StatusCategory, Surface, TimelineItem } from '../api/tracker'
+import { SIZES, sizePoints } from './sprints'
 
 export const CATEGORIES: readonly StatusCategory[] = ['backlog', 'unstarted', 'started', 'completed', 'canceled']
 export const PRIORITIES: readonly Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
@@ -12,9 +14,11 @@ export const PRIORITIES: readonly Priority[] = ['urgent', 'high', 'medium', 'low
 export const ISSUE_TYPES: readonly IssueType[] = ['epic', 'story', 'bug', 'feature', 'task']
 /** Level-0 types: a unit of work. */
 export const WORK_ITEM_TYPES: readonly IssueType[] = ['bug', 'feature', 'task']
-export const GROUP_BYS: readonly GroupBy[] = ['none', 'epic', 'story']
+export const GROUP_BYS: readonly GroupBy[] = ['none', 'epic', 'story', 'sprint']
+/** The groupings by an issue's derived epic or story. */
+export type HierarchyGroupBy = 'epic' | 'story'
 export const SURFACES: readonly Surface[] = ['dashboard', 'platform-api', 'apth', 'builder-console', 'console-app', 'cluster', 'other']
-export const SORTS: readonly Sort[] = ['updated', 'created', 'priority', 'number']
+export const SORTS: readonly Sort[] = ['updated', 'created', 'priority', 'number', 'estimate']
 export const ENVIRONMENT_SUGGESTIONS: readonly string[] = ['appthrust.ink', 'craftsman', 'appthrust.dev', 'local']
 
 export const TITLE_MAX = 200
@@ -74,6 +78,11 @@ export function compareIssues(sort: Sort): (a: IssueSummary, b: IssueSummary) =>
       return (a, b) => b.createdAt.localeCompare(a.createdAt) || b.number - a.number
     case 'priority':
       return (a, b) => PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority) || updatedDesc(a, b)
+    case 'estimate': {
+      // XL → XS, unestimated last.
+      const rank = (issue: IssueSummary) => (issue.estimate ? SIZES.indexOf(issue.estimate) : -1)
+      return (a, b) => rank(b) - rank(a) || updatedDesc(a, b)
+    }
     case 'number':
       return (a, b) => a.number - b.number
     default:
@@ -81,7 +90,8 @@ export function compareIssues(sort: Sort): (a: IssueSummary, b: IssueSummary) =>
   }
 }
 
-type FilterContext = { me: string; statuses: readonly Status[]; description?: (issue: IssueSummary) => string }
+/** `activeSprintId` resolves the `active` sprint filter value (null: no sprint is active, so `active` matches nothing). */
+type FilterContext = { me: string; statuses: readonly Status[]; description?: (issue: IssueSummary) => string; activeSprintId?: string | null }
 
 /** Whether `issue` passes every set facet of `filter` (facets AND, values within a facet OR). */
 export function matchesFilter(issue: IssueSummary, filter: Filter, context: FilterContext): boolean {
@@ -110,6 +120,12 @@ export function matchesFilter(issue: IssueSummary, filter: Filter, context: Filt
   if (filter.project && filter.project.length > 0 && !filter.project.some((value) => (value === 'none' ? issue.projectId === null : issue.projectId === value))) return false
   if (filter.epic && filter.epic.length > 0 && !filter.epic.some((value) => (value === 'none' ? issue.epic === null : issue.epic?.id === value))) return false
   if (filter.story && filter.story.length > 0 && !filter.story.some((value) => (value === 'none' ? issue.story === null : issue.story?.id === value))) return false
+  if (
+    filter.sprint &&
+    filter.sprint.length > 0 &&
+    !filter.sprint.some((value) => (value === 'none' ? issue.sprint === null : value === 'active' ? Boolean(context.activeSprintId) && issue.sprint?.id === context.activeSprintId : issue.sprint?.id === value))
+  )
+    return false
   const q = filter.q?.trim().toLowerCase()
   if (q) {
     const text = `${issue.identifier} ${issue.title} ${context.description?.(issue) ?? ''}`.toLowerCase()
@@ -150,7 +166,7 @@ export const isSummary = (header: IssueSummary | IssueRef): header is IssueSumma
  * the rows only reference (their status and progress). Rows keep their order.
  * `none` gives one section with every issue.
  */
-export function groupIssues(issues: readonly IssueSummary[], groupBy: GroupBy, known: readonly IssueSummary[] = []): IssueSection[] {
+export function groupIssues(issues: readonly IssueSummary[], groupBy: 'none' | HierarchyGroupBy, known: readonly IssueSummary[] = []): IssueSection[] {
   if (groupBy === 'none') return [{ key: 'all', header: null, issues: [...issues] }]
   const level = levelOf(groupBy)
   const lookup = new Map(known.filter((issue) => issue.type === groupBy).map((issue) => [issue.id, issue]))
@@ -175,11 +191,13 @@ export function groupIssues(issues: readonly IssueSummary[], groupBy: GroupBy, k
   return [...[...sections.values()].sort((a, b) => issueNumber(a.header!) - issueNumber(b.header!)), none]
 }
 
-/** API.md `Progress` over these issues: work items only, `total` without canceled ones, `completed` those in a completed status. */
+/** API.md `Progress` over these issues: work items only, `total` without canceled ones, `completed` those in a completed status; `points` sums their sizes the same way. */
 export function tallyProgress(issues: readonly IssueSummary[], statuses: readonly Status[]): Progress {
   const category = new Map(statuses.map((status) => [status.id, status.category]))
   const counted = issues.filter((issue) => levelOf(issue.type) === 0 && category.get(issue.statusId) !== 'canceled')
-  return { total: counted.length, completed: counted.filter((issue) => category.get(issue.statusId) === 'completed').length }
+  const completed = counted.filter((issue) => category.get(issue.statusId) === 'completed')
+  const points = (list: IssueSummary[]) => list.reduce((sum, issue) => sum + sizePoints(issue.estimate), 0)
+  return { total: counted.length, completed: completed.length, points: { total: points(counted), completed: points(completed) } }
 }
 
 /** Attachments currently on the issue, oldest first, from its timeline. */

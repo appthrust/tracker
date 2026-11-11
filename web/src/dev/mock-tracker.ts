@@ -6,8 +6,13 @@
 // (Dashboard/blue, Platform API/purple, Builder Console/orange), 30 issues
 // across every status (Alex Chen reports 10 of them, so "Reported by me" is
 // not empty), then 2 epics and 4 stories (APT-31…36, In Progress) that bundle
-// every seeded issue n with n % 5 != 0 under stories[n % 4], and three shared
-// views (Bugs, My issues, By epic).
+// every seeded issue n with n % 5 != 0 under stories[n % 4], four Done work
+// items (APT-37…40) and three shared views (Bugs, My issues, By epic).
+// Sprints (API.md v0.1.10, relative to today in Asia/Tokyo): three closed
+// one-week sprints with velocities 18/21/24 points, an active two-week sprint
+// on its fourth day with a scope increase and a cancellation, and a planned
+// one; 17 work items carry a size. The exact fixture (shared authority with
+// the server seed) is `SPRINT_FIXTURE` below.
 // The caller is Alex Chen as Team Admin; MOCK_ROLE=Editor (or Viewer) makes
 // them a non-admin. `POST /api/tracker/v1/__mock/caller {sub, role?}` switches
 // the signed-in person (role default Editor); a `sub` outside the seed needs a
@@ -22,6 +27,7 @@ import type {
   ActivityField,
   ApiError,
   Attachment,
+  Burndown,
   Comment,
   Filter,
   GroupBy,
@@ -38,10 +44,19 @@ import type {
   Project,
   Report,
   Role,
+  Size,
   Sort,
+  Sprint,
+  SprintLength,
+  SprintRef,
+  SprintState,
   Status,
   StatusCategory,
+  Tally,
   TimelineItem,
+  Unit,
+  Velocity,
+  VelocityEntry,
   View,
   ViewLayout,
   Workspace,
@@ -67,6 +82,30 @@ import {
   TITLE_MAX,
   WORK_ITEM_TYPES,
 } from '../model/issues'
+import {
+  addDays,
+  addTally,
+  averagePerWeek,
+  burndownPoints,
+  comingMonday,
+  compareSprints,
+  dayInZone,
+  doneIn,
+  endsOnFor,
+  isDay,
+  overlapsAny,
+  scopeIn,
+  SIZE_POINTS,
+  SIZES,
+  SPRINT_GOAL_MAX_BYTES,
+  SPRINT_LENGTHS,
+  SPRINT_NAME_MAX,
+  sprintDeltas,
+  sprintRef,
+  UNITS,
+  ZERO_TALLY,
+  type SprintStanding,
+} from '../model/sprints'
 
 const BASE = '/api/tracker/v1'
 const DEFAULT_LIMIT = 50
@@ -97,7 +136,11 @@ const FILTER_KEYS: Record<keyof Filter, true> = {
   project: true,
   epic: true,
   story: true,
+  sprint: true,
 }
+const VELOCITY_LIMIT_DEFAULT = 8
+const VELOCITY_LIMIT_MAX = 26
+const DEFAULT_TIMEZONE = 'Asia/Tokyo'
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
@@ -144,12 +187,17 @@ type StoredIssue = {
   updatedAt: string
   completedAt: string | null
   deleted: boolean
+  estimate: Size | null
+  sprintId: string | null
 }
 type StoredComment = Comment & { deleted: boolean }
 type StoredAttachment = Attachment & { bytes: Uint8Array<ArrayBuffer>; deleted: boolean }
 type StoredProject = { id: string; name: string; description: string; color: LabelColor; archivedAt: string | null; createdAt: string; updatedAt: string }
 type Block = { blockerId: string; blockedId: string }
-
+/** `state` is derived from `startedAt`/`closedAt`, as on the server. */
+type StoredSprint = { id: string; number: number; name: string; goal: string; lengthWeeks: SprintLength; startsOn: string; endsOn: string; startedAt: string | null; closedAt: string | null; createdAt: string; updatedAt: string }
+/** One `tracker_sprint_event` row: the signed deltas one issue write caused in one sprint. */
+type SprintEvent = { id: string; sprintId: string; issueId: string; at: string; tally: Tally }
 const STATUS_SEED: readonly [string, StatusCategory, string][] = [
   ['Backlog', 'backlog', 'gray'],
   ['Todo', 'unstarted', 'gray'],
@@ -220,6 +268,64 @@ const STORY_SEED: readonly string[] = [
   'As a triager, I want to prioritize incoming work',
   'As an assignee, I want to find my next task',
 ]
+/** API.md v0.1.10 fixture: Done work items appended after the stories (closed-sprint members). */
+const DONE_SEED: readonly [string, IssueType][] = [
+  ['Speed up issue search', 'task'],
+  ['Add bulk status change', 'feature'],
+  ['Tidy up the settings layout', 'task'],
+  ['Show issue counts per project', 'feature'],
+]
+
+type FixtureTime = readonly [dayOffset: number, time: string]
+/**
+ * The sprint fixture shared with the server seed (offsets are days from
+ * today in Asia/Tokyo, times are that zone's wall clock). Every ledger row is
+ * a join (+scope), done (+done) or cancel (−scope) of one issue by number at
+ * its size; the rows yield velocities 18/21/24 points (committed 21/24/27),
+ * an active sprint at commitment 10 points / 6 issues with a scope increase
+ * (APT-10) and a cancellation (APT-30), and a planned sprint of 4 points.
+ */
+export const SPRINT_FIXTURE = {
+  sizes: { 8: 'XS', 16: 'XS', 3: 'S', 10: 'S', 30: 'S', 2: 'M', 4: 'M', 14: 'M', 11: 'L', 17: 'L', 37: 'L', 5: 'XL', 23: 'XL', 29: 'XL', 38: 'XL', 39: 'XL', 40: 'XL' } as Record<number, Size>,
+  sprints: [
+    { number: 1, lengthWeeks: 1, startOffset: -24, goal: 'Bug intake basics', started: true, closed: true, members: [5, 11, 17] },
+    { number: 2, lengthWeeks: 1, startOffset: -17, goal: 'Triage flow', started: true, closed: true, members: [23, 29, 37] },
+    { number: 3, lengthWeeks: 1, startOffset: -10, goal: 'Board polish', started: true, closed: true, members: [38, 39, 40] },
+    { number: 4, lengthWeeks: 2, startOffset: -3, goal: 'Sprint planning and burndown', started: true, closed: false, members: [2, 3, 4, 10, 15, 30, 34] },
+    { number: 5, lengthWeeks: 1, startOffset: 11, goal: '', started: false, closed: false, members: [8, 14, 26], createdAt: [-1, '10:00'] as FixtureTime },
+  ] as { number: number; lengthWeeks: SprintLength; startOffset: number; goal: string; started: boolean; closed: boolean; members: number[]; createdAt?: FixtureTime }[],
+  rows: [
+    [1, 'join', [5, 11, 17, 2], [-25, '15:00']],
+    [1, 'done', [5], [-22, '16:00']],
+    [1, 'done', [11], [-20, '11:00']],
+    [1, 'done', [17], [-18, '17:00']],
+    [2, 'join', [23, 29, 37], [-18, '15:00']],
+    [2, 'join', [2], [-18, '18:00']],
+    [2, 'done', [23], [-16, '16:00']],
+    [2, 'done', [37], [-14, '11:00']],
+    [2, 'done', [29], [-12, '17:00']],
+    [3, 'join', [38, 39, 40], [-11, '15:00']],
+    [3, 'join', [2], [-11, '18:00']],
+    [3, 'done', [38], [-9, '16:00']],
+    [3, 'done', [39], [-7, '11:00']],
+    [3, 'done', [40], [-4, '10:00']],
+    [4, 'join', [3, 4, 15, 30, 34], [-4, '14:00']],
+    [4, 'join', [2], [-4, '18:00']],
+    [4, 'join', [10], [-2, '11:00']],
+    [4, 'cancel', [30], [-1, '15:00']],
+    [5, 'join', [8, 14, 26], [-1, '10:00']],
+  ] as [sprint: number, kind: 'join' | 'done' | 'cancel', issues: number[], at: FixtureTime][],
+}
+
+/** The instant at wall-clock `time` (HH:MM) on `day` in `timeZone`. */
+function zonedInstant(day: string, time: string, timeZone: string): string {
+  const [hour, minute] = time.split(':').map(Number) as [number, number]
+  const guess = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)), hour, minute)
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' }).formatToParts(guess)
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((candidate) => candidate.type === type)!.value)
+  const shown = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'))
+  return new Date(guess - (shown - guess)).toISOString()
+}
 
 /**
  * Mirrors the server's SeedDev: issue `i` has status i%6, type i%3 (bug,
@@ -227,7 +333,8 @@ const STORY_SEED: readonly string[] = [
  * project by `seedProjectIndex(i+1)`; bugs carry a report with environment
  * i%4 and surface i%7. Then the epics and stories: In Progress, medium
  * priority, reported by Alex, unassigned, no labels, project or description;
- * seed issue n (1-based) with n % 5 != 0 gets the parent stories[n % 4].
+ * seed issue n (1-based) with n % 5 != 0 gets the parent stories[n % 4]. Then
+ * DONE_SEED the same way in status Done, and SPRINT_FIXTURE.
  * Creation times are spaced one hour apart. `withProjects: false` seeds a
  * workspace without projects.
  */
@@ -275,12 +382,15 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
       updatedAt: createdAt,
       completedAt: status.category === 'completed' || status.category === 'canceled' ? createdAt : null,
       deleted: false,
+      estimate: null,
+      sprintId: null,
     }
     issues.push(issue)
     activities.push({ id: ulid(T0 + (i + 1) * HOUR, seq++), issueId: issue.id, actor: issue.reporter, field: 'created', from: null, to: null, createdAt })
   })
   const inProgress = statuses.find((status) => status.name === 'In Progress')!
-  const bundle = (title: string, type: IssueType, parentId: string | null): StoredIssue => {
+  const done = statuses.find((status) => status.name === 'Done')!
+  const bundle = (title: string, type: IssueType, parentId: string | null, status = inProgress): StoredIssue => {
     const number = issues.length + 1
     const createdAt = at(number)
     const issue: StoredIssue = {
@@ -290,7 +400,7 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
       description: '',
       type,
       priority: 'medium',
-      statusId: inProgress.id,
+      statusId: status.id,
       assignee: null,
       reporter: MOCK_PEOPLE.alex,
       labelIds: [],
@@ -300,8 +410,10 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
       report: null,
       createdAt,
       updatedAt: createdAt,
-      completedAt: null,
+      completedAt: status === done ? createdAt : null,
       deleted: false,
+      estimate: null,
+      sprintId: null,
     }
     issues.push(issue)
     activities.push({ id: ulid(T0 + number * HOUR, seq++), issueId: issue.id, actor: issue.reporter, field: 'created', from: null, to: null, createdAt })
@@ -312,6 +424,30 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
   issues.slice(0, SEED_TITLES.length).forEach((issue) => {
     if (issue.number % 5 !== 0) issue.parentId = stories[issue.number % 4]!.id
   })
+  for (const [title, type] of DONE_SEED) bundle(title, type, null, done)
+  const byNumber = (number: number) => issues[number - 1]!
+  for (const [number, size] of Object.entries(SPRINT_FIXTURE.sizes)) byNumber(Number(number)).estimate = size
+  const today = dayInZone(Math.max(Date.now(), T0 + 100 * HOUR), DEFAULT_TIMEZONE)
+  const instant = ([offset, time]: FixtureTime) => zonedInstant(addDays(today, offset), time, DEFAULT_TIMEZONE)
+  const sprints: StoredSprint[] = SPRINT_FIXTURE.sprints.map((fixture) => {
+    const startsOn = addDays(today, fixture.startOffset)
+    const endsOn = endsOnFor(startsOn, fixture.lengthWeeks)
+    const createdAt = instant(fixture.createdAt ?? [fixture.startOffset - 1, '15:00'])
+    const startedAt = fixture.started ? zonedInstant(startsOn, '09:00', DEFAULT_TIMEZONE) : null
+    const closedAt = fixture.closed ? zonedInstant(endsOn, '18:00', DEFAULT_TIMEZONE) : null
+    const sprint: StoredSprint = { id: ulid(Date.parse(createdAt), seq++), number: fixture.number, name: `Sprint ${fixture.number}`, goal: fixture.goal, lengthWeeks: fixture.lengthWeeks, startsOn, endsOn, startedAt, closedAt, createdAt, updatedAt: closedAt ?? startedAt ?? createdAt }
+    for (const number of fixture.members) byNumber(number).sprintId = sprint.id
+    return sprint
+  })
+  const sprintEvents: SprintEvent[] = SPRINT_FIXTURE.rows.flatMap(([sprintNumber, kind, numbers, time]) =>
+    numbers.map((number) => {
+      const points = SIZE_POINTS[SPRINT_FIXTURE.sizes[number]!] ?? 0
+      const tally: Tally =
+        kind === 'join' ? { ...ZERO_TALLY, scopePoints: points, scopeIssues: 1 } : kind === 'done' ? { ...ZERO_TALLY, donePoints: points, doneIssues: 1 } : { ...ZERO_TALLY, scopePoints: -points, scopeIssues: -1 }
+      const at = instant(time)
+      return { id: ulid(Date.parse(at), seq++), sprintId: sprints[sprintNumber - 1]!.id, issueId: byNumber(number).id, at, tally }
+    })
+  )
   const views: (View & { ownerSub: string })[] = [
     { id: ulid(T0, seq++), name: 'Bugs', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { type: ['bug'] }, sort: 'updated', position: 0, createdAt: at(0), updatedAt: at(0) },
     { id: ulid(T0, seq++), name: 'My issues', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { assignee: ['me'] }, sort: 'updated', position: 1, createdAt: at(0), updatedAt: at(0) },
@@ -319,7 +455,7 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
   ]
   const role = process.env.MOCK_ROLE === 'Editor' || process.env.MOCK_ROLE === 'Viewer' ? (process.env.MOCK_ROLE as Role) : 'Admin'
   return {
-    workspace: { id: MOCK_WORKSPACE_ID, key: 'APT', name: MOCK_WORKSPACE_ID, createdAt: at(0), updatedAt: at(0) },
+    workspace: { id: MOCK_WORKSPACE_ID, key: 'APT', name: MOCK_WORKSPACE_ID, sprintLengthWeeks: 1 as SprintLength, timezone: DEFAULT_TIMEZONE, createdAt: at(0), updatedAt: at(0) },
     statuses,
     labels,
     projects,
@@ -329,6 +465,8 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
     comments: [] as StoredComment[],
     attachments: [] as StoredAttachment[],
     views,
+    sprints,
+    sprintEvents,
     caller: MOCK_PEOPLE.alex as Person,
     role,
     clock: T0 + 100 * HOUR,
@@ -392,23 +530,89 @@ function ancestorOfType(issue: StoredIssue, type: IssueType): StoredIssue | unde
   return undefined
 }
 
-/** Epics and stories: over all live level-0 descendants, `total` excludes canceled ones, `completed` counts completed ones. */
+/** Epics and stories: over all live level-0 descendants, `total` excludes canceled ones, `completed` counts completed ones; `points` sums their sizes the same way. */
 function progressOf(issue: StoredIssue): Progress | null {
   if (levelOf(issue.type) === 0) return null
-  const category = (statusId: string) => state.statuses.find((status) => status.id === statusId)?.category
-  const progress: Progress = { total: 0, completed: 0 }
+  const progress: Progress = { total: 0, completed: 0, points: { total: 0, completed: 0 } }
   const seen = new Set<string>([issue.id])
   for (let frontier = [issue.id]; frontier.length > 0; ) {
     const children = live().filter((candidate) => candidate.parentId !== null && frontier.includes(candidate.parentId) && !seen.has(candidate.id))
     for (const child of children) {
       seen.add(child.id)
-      if (levelOf(child.type) !== 0 || category(child.statusId) === 'canceled') continue
+      if (levelOf(child.type) !== 0 || categoryOf(child.statusId) === 'canceled') continue
+      const points = child.estimate ? SIZE_POINTS[child.estimate] : 0
       progress.total++
-      if (category(child.statusId) === 'completed') progress.completed++
+      progress.points.total += points
+      if (categoryOf(child.statusId) === 'completed') {
+        progress.completed++
+        progress.points.completed += points
+      }
     }
     frontier = children.map((child) => child.id)
   }
   return progress
+}
+
+const categoryOf = (statusId: string) => state.statuses.find((status) => status.id === statusId)?.category
+
+// --- sprints --------------------------------------------------------------------
+
+function sprintState(sprint: StoredSprint): SprintState {
+  return sprint.closedAt ? 'closed' : sprint.startedAt ? 'active' : 'planned'
+}
+
+const sprintById = (id: string | null) => (id ? state.sprints.find((sprint) => sprint.id === id) : undefined)
+const activeSprint = () => state.sprints.find((sprint) => sprintState(sprint) === 'active')
+const openSprints = () => state.sprints.filter((sprint) => sprintState(sprint) !== 'closed')
+/** Today in the workspace timezone (reads the clock without advancing it). */
+const today = () => dayInZone(Math.max(Date.now(), state.clock), state.workspace.timezone)
+
+function refOfSprint(sprint: StoredSprint): SprintRef {
+  return sprintRef({ ...sprint, state: sprintState(sprint) })
+}
+
+/** The sum of the sprint's ledger rows, optionally only up to `until` and only for issues `keep` accepts. */
+function ledgerSum(sprintId: string, until?: string, keep: (issueId: string) => boolean = () => true): Tally {
+  return state.sprintEvents.filter((event) => event.sprintId === sprintId && (until === undefined || event.at <= until) && keep(event.issueId)).reduce((sum, event) => addTally(sum, event.tally), ZERO_TALLY)
+}
+
+function sprintView(sprint: StoredSprint): Sprint {
+  return { ...sprint, state: sprintState(sprint), current: ledgerSum(sprint.id), commitment: sprint.startedAt ? ledgerSum(sprint.id, sprint.startedAt) : null }
+}
+
+function standingOf(issue: Pick<StoredIssue, 'sprintId' | 'estimate' | 'statusId' | 'deleted'>): SprintStanding {
+  return { sprintId: issue.sprintId, size: issue.estimate, category: categoryOf(issue.statusId), deleted: issue.deleted }
+}
+
+/** The ledger rule: one row per sprint the write changed, closed sprints excepted (no rows after `closedAt`). */
+function writeLedger(issueId: string, before: SprintStanding, after: SprintStanding, at: string) {
+  for (const [sprintId, tally] of sprintDeltas(before, after)) {
+    const sprint = sprintById(sprintId)
+    if (sprint && sprintState(sprint) !== 'closed') state.sprintEvents.push({ id: nextId(), sprintId, issueId, at, tally })
+  }
+}
+
+/** Live strict ancestors of an issue whose parent is `parentId`. */
+function ancestorsFrom(parentId: string | null): StoredIssue[] {
+  const out: StoredIssue[] = []
+  for (let cursor = issueById(parentId); cursor && out.length < ANCESTOR_HOPS; cursor = issueById(cursor.parentId)) out.push(cursor)
+  return out
+}
+
+function descendantsOf(issueId: string): StoredIssue[] {
+  const out: StoredIssue[] = []
+  for (let frontier = [issueId]; frontier.length > 0; ) {
+    const children = live().filter((candidate) => candidate.parentId !== null && frontier.includes(candidate.parentId))
+    out.push(...children)
+    frontier = children.map((child) => child.id)
+  }
+  return out
+}
+
+/** Ancestors (through `parentId`) and descendants of the issue that are members of `sprintId` (lineage-exclusive). */
+function lineageMembers(issueId: string | null, parentId: string | null, sprintId: string): number {
+  const relatives = [...ancestorsFrom(parentId), ...(issueId ? descendantsOf(issueId) : [])]
+  return relatives.filter((relative) => relative.id !== issueId && relative.sprintId === sprintId).length
 }
 
 function summary(issue: StoredIssue): IssueSummary {
@@ -431,6 +635,8 @@ function summary(issue: StoredIssue): IssueSummary {
     epic: epic ? ref(epic) : null,
     story: story ? ref(story) : null,
     progress: progressOf(issue),
+    estimate: issue.estimate,
+    sprint: issue.sprintId && sprintById(issue.sprintId) ? refOfSprint(sprintById(issue.sprintId)!) : null,
     dueOn: issue.dueOn,
     report: issue.report,
     commentCount: state.comments.filter((comment) => comment.issueId === issue.id && !comment.deleted).length,
@@ -566,6 +772,24 @@ function hierarchyMessage(childType: IssueType): string {
   return childType === 'epic' ? 'Epics cannot have a parent' : 'Stories can only have an epic parent'
 }
 
+function estimateProblem(value: unknown, type: IssueType): Problem | undefined {
+  if (value === null || value === undefined) return undefined
+  if (!SIZES.includes(value as Size)) return { path: 'estimate', message: `estimate must be one of ${SIZES.join(', ')} or null` }
+  if (type === 'epic') return { path: 'estimate', message: 'an epic takes no estimate' }
+  return undefined
+}
+
+/** Why an issue (`issueId` null while creating) of `type` under `parentId` cannot join `value` (`domain.ValidateMembership`). */
+function sprintJoinProblem(value: unknown, type: IssueType, issueId: string | null, parentId: string | null): Problem | undefined {
+  if (typeof value !== 'string') return { path: 'sprintId', message: 'sprintId must be a string or null' }
+  const sprint = sprintById(value)
+  if (!sprint) return { path: 'sprintId', message: 'unknown sprint' }
+  if (type === 'epic') return { path: 'sprintId', message: 'an epic cannot join a sprint' }
+  if (sprintState(sprint) === 'closed') return { path: 'sprintId', message: 'sprint is closed' }
+  if (lineageMembers(issueId, parentId, value) > 0) return { path: 'sprintId', message: 'an ancestor or descendant is already in this sprint' }
+  return undefined
+}
+
 function parseFilter(raw: string | null): Filter | Problem {
   if (!raw) return {}
   let parsed: unknown
@@ -592,6 +816,7 @@ function parseFilter(raw: string | null): Filter | Problem {
   for (const key of ['epic', 'story'] as const) {
     if ((filter[key] as string[] | undefined)?.some((value) => value !== 'none' && !ULID_PATTERN.test(value))) return { path: `filter.${key}`, message: `${key} must list issue ids or none` }
   }
+  if ((filter.sprint as string[] | undefined)?.some((value) => value !== 'none' && value !== 'active' && !ULID_PATTERN.test(value))) return { path: 'filter.sprint', message: 'sprint must list sprint ids, active or none' }
   return filter as Filter
 }
 
@@ -615,7 +840,7 @@ function listIssues(url: URL): Response {
   const descriptions = new Map(state.issues.map((issue) => [issue.id, issue.description]))
   const matching = live()
     .map(summary)
-    .filter((issue) => matchesFilter(issue, filter, { me: state.caller.sub, statuses: state.statuses, description: (candidate) => descriptions.get(candidate.id) ?? '' }))
+    .filter((issue) => matchesFilter(issue, filter, { me: state.caller.sub, statuses: state.statuses, description: (candidate) => descriptions.get(candidate.id) ?? '', activeSprintId: activeSprint()?.id ?? null }))
     .sort(compareIssues(sort))
   const page = matching.slice(offset, offset + limit)
   const next = offset + limit < matching.length ? Buffer.from(String(offset + limit), 'utf8').toString('base64url') : null
@@ -648,6 +873,12 @@ async function createIssue(request: Request): Promise<Response> {
     const problem = projectRefProblem(input.projectId, null)
     if (problem) return invalid(problem.path, problem.message)
   }
+  const estimate = estimateProblem(input.estimate, type)
+  if (estimate) return invalid(estimate.path, estimate.message)
+  if (input.sprintId !== undefined && input.sprintId !== null) {
+    const problem = sprintJoinProblem(input.sprintId, type, null, parent?.id ?? null)
+    if (problem) return invalid(problem.path, problem.message)
+  }
   const time = now()
   const number = Math.max(0, ...state.issues.map((issue) => issue.number)) + 1
   const issue: StoredIssue = {
@@ -669,16 +900,19 @@ async function createIssue(request: Request): Promise<Response> {
     updatedAt: time,
     completedAt: closedStatus(statusId) ? time : null,
     deleted: false,
+    estimate: (input.estimate as Size | null | undefined) ?? null,
+    sprintId: (input.sprintId as string | null | undefined) ?? null,
   }
   state.issues.push(issue)
   record(issue, 'created', null, null, time)
+  writeLedger(issue.id, { sprintId: null, size: null, category: undefined, deleted: false }, standingOf(issue), time)
   return json(full(issue), 201)
 }
 
 async function updateIssue(issue: StoredIssue, request: Request): Promise<Response> {
   const input = await body(request)
   if (!input) return invalid('', 'A JSON object is required')
-  const known = ['title', 'description', 'type', 'priority', 'statusId', 'assigneeSub', 'labelIds', 'parentId', 'blocks', 'dueOn', 'report', 'projectId']
+  const known = ['title', 'description', 'type', 'priority', 'statusId', 'assigneeSub', 'labelIds', 'parentId', 'blocks', 'dueOn', 'report', 'projectId', 'estimate', 'sprintId']
   const unknownKey = Object.keys(input).find((key) => !known.includes(key))
   if (unknownKey) return invalid(unknownKey, `unknown field ${unknownKey}`)
   if ('title' in input) {
@@ -721,8 +955,28 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
     const misfit = live().find((child) => child.parentId === issue.id && !canParent(child.type, nextType))
     if (misfit) return invalid('type', `${identifier(misfit)}: ${hierarchyMessage(misfit.type)}`)
   }
+  // Estimate and sprint (API.md v0.1.10): an epic takes neither; a closed sprint's members are frozen; a type or parent change re-checks membership.
+  const nextEstimate = 'estimate' in input ? ((input.estimate as Size | null) ?? null) : issue.estimate
+  const estimate = 'estimate' in input ? estimateProblem(input.estimate, nextType) : nextType === 'epic' && nextEstimate ? { path: 'estimate', message: 'an epic takes no estimate' } : undefined
+  if (estimate) return invalid(estimate.path, estimate.message)
+  const nextSprintId = 'sprintId' in input ? ((input.sprintId as string | null) ?? null) : issue.sprintId
+  const sprintChanged = nextSprintId !== issue.sprintId
+  const currentSprint = sprintById(issue.sprintId)
+  if (sprintChanged && currentSprint && sprintState(currentSprint) === 'closed') return invalid('sprintId', 'membership is frozen once the sprint is closed')
+  const nextParentId = nextParent?.id ?? null
+  if (nextSprintId && (sprintChanged || parentChanged || nextType !== issue.type)) {
+    const problem = sprintChanged ? sprintJoinProblem(nextSprintId, nextType, issue.id, nextParentId) : nextType === 'epic' ? { path: 'sprintId', message: 'an epic cannot join a sprint' } : lineageMembers(issue.id, nextParentId, nextSprintId) > 0 ? { path: 'sprintId', message: 'an ancestor or descendant is already in this sprint' } : undefined
+    if (problem) return invalid(problem.path, problem.message)
+  }
+  if (parentChanged) {
+    // The subtree's members against the new ancestors, open sprints only.
+    const ancestors = ancestorsFrom(nextParentId)
+    const clash = descendantsOf(issue.id).find((child) => child.sprintId && sprintState(sprintById(child.sprintId)!) !== 'closed' && ancestors.some((ancestor) => ancestor.sprintId === child.sprintId))
+    if (clash) return invalid('sprintId', `${identifier(clash)}: an ancestor or descendant is already in this sprint`)
+  }
 
   const time = now()
+  const before = standingOf(issue)
   let changed = false
   const change = (field: ActivityField, from: unknown, to: unknown) => {
     record(issue, field, from, to, time)
@@ -789,6 +1043,16 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
     change('project', issue.projectId, next)
     issue.projectId = next
   }
+  if (nextEstimate !== issue.estimate) {
+    change('estimate', issue.estimate, nextEstimate)
+    issue.estimate = nextEstimate
+  }
+  if (sprintChanged) {
+    const after = sprintById(nextSprintId)
+    change('sprint', currentSprint ? refOfSprint(currentSprint) : null, after ? refOfSprint(after) : null)
+    issue.sprintId = nextSprintId
+  }
+  writeLedger(issue.id, before, standingOf(issue), time)
   if (changed) issue.updatedAt = time
   return json(full(issue))
 }
@@ -868,6 +1132,173 @@ function renumberStatuses() {
   orderStatuses(state.statuses).forEach((status, position) => (status.position = position))
 }
 
+// --- sprints (API.md v0.1.10) -------------------------------------------------------
+
+function isTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || !value) return false
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sprintInputProblem(input: Record<string, unknown>): Problem | undefined {
+  const unknownKey = Object.keys(input).find((key) => !['name', 'goal', 'startsOn', 'lengthWeeks'].includes(key))
+  if (unknownKey) return { path: unknownKey, message: `unknown field ${unknownKey}` }
+  if ('name' in input && (typeof input.name !== 'string' || !input.name.trim() || Array.from(input.name.trim()).length > SPRINT_NAME_MAX)) return { path: 'name', message: `name must be 1–${SPRINT_NAME_MAX} characters` }
+  if ('goal' in input && (typeof input.goal !== 'string' || bytes(input.goal) > SPRINT_GOAL_MAX_BYTES)) return { path: 'goal', message: `goal must be at most ${SPRINT_GOAL_MAX_BYTES} bytes` }
+  if ('startsOn' in input && !isDay(input.startsOn)) return { path: 'startsOn', message: 'startsOn must be YYYY-MM-DD' }
+  if ('lengthWeeks' in input && !SPRINT_LENGTHS.includes(input.lengthWeeks as SprintLength)) return { path: 'lengthWeeks', message: 'lengthWeeks must be 1 or 2' }
+  return undefined
+}
+
+/** `?unit=` (default points) and `?project=` (an id or `none`: only events of issues currently in that project). */
+function chartScope(url: URL): { unit: Unit; keep: (issueId: string) => boolean } | Problem {
+  const unit = (url.searchParams.get('unit') ?? 'points') as Unit
+  if (!UNITS.includes(unit)) return { path: 'unit', message: 'unit must be points or issues' }
+  const project = url.searchParams.get('project')
+  if (!project) return { unit, keep: () => true }
+  const projectOf = (issueId: string) => state.issues.find((issue) => issue.id === issueId)?.projectId ?? null
+  return { unit, keep: (issueId) => (project === 'none' ? projectOf(issueId) === null : projectOf(issueId) === project) }
+}
+
+function burndownOf(sprint: StoredSprint, unit: Unit, keep: (issueId: string) => boolean): Burndown {
+  const zone = state.workspace.timezone
+  const rows = state.sprintEvents.filter((event) => event.sprintId === sprint.id && keep(event.issueId)).map((event) => ({ day: dayInZone(event.at, zone), tally: event.tally }))
+  const baseline = ledgerSum(sprint.id, sprint.startedAt ?? undefined, keep)
+  const day = today()
+  return { sprint: refOfSprint(sprint), unit, today: day, points: burndownPoints({ startsOn: sprint.startsOn, endsOn: sprint.endsOn, today: day, unit, baseline, rows, closed: sprintState(sprint) === 'closed' }) }
+}
+
+function velocityOf(unit: Unit, keep: (issueId: string) => boolean, limit: number): Velocity {
+  const entries: VelocityEntry[] = state.sprints
+    .filter((sprint) => sprintState(sprint) === 'closed')
+    .sort((a, b) => a.closedAt!.localeCompare(b.closedAt!))
+    .map((sprint) => ({ sprint: refOfSprint(sprint), lengthWeeks: sprint.lengthWeeks, committed: scopeIn(ledgerSum(sprint.id, sprint.startedAt!, keep), unit), completed: doneIn(ledgerSum(sprint.id, undefined, keep), unit) }))
+  return { unit, items: entries.slice(-limit), averagePerWeek: averagePerWeek(entries) }
+}
+
+/** Moves `issue` to `sprintId` (null = backlog) at `time`: `sprint` activity and the ledger rows of the open sprints involved. */
+function moveToSprint(issue: StoredIssue, sprintId: string | null, time: string) {
+  const before = standingOf(issue)
+  const from = sprintById(issue.sprintId)
+  const to = sprintById(sprintId)
+  record(issue, 'sprint', from ? refOfSprint(from) : null, to ? refOfSprint(to) : null, time)
+  issue.sprintId = sprintId
+  issue.updatedAt = time
+  writeLedger(issue.id, before, standingOf(issue), time)
+}
+
+async function sprintRoutes(request: Request, url: URL, route: string): Promise<Response | undefined> {
+  let match: RegExpMatchArray | null
+  if (route === 'GET /velocity') {
+    const scope = chartScope(url)
+    if (isProblem(scope)) return invalid(scope.path, scope.message)
+    const limitParam = url.searchParams.get('limit')
+    const limit = limitParam === null ? VELOCITY_LIMIT_DEFAULT : Number(limitParam)
+    if (!Number.isInteger(limit) || limit < 1 || limit > VELOCITY_LIMIT_MAX) return invalid('limit', `limit must be between 1 and ${VELOCITY_LIMIT_MAX}`)
+    return json(velocityOf(scope.unit, scope.keep, limit))
+  }
+  if (route === 'GET /sprints') {
+    const wanted = url.searchParams.get('state')
+    if (wanted !== null && !['planned', 'active', 'closed'].includes(wanted)) return invalid('state', 'state must be planned, active or closed')
+    const items = state.sprints.map(sprintView).filter((sprint) => wanted === null || sprint.state === wanted)
+    return json({ items: items.sort(compareSprints) })
+  }
+  if (route === 'POST /sprints') {
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    const problem = sprintInputProblem(input)
+    if (problem) return invalid(problem.path, problem.message)
+    const lengthWeeks = (input.lengthWeeks as SprintLength | undefined) ?? state.workspace.sprintLengthWeeks
+    const latest = openSprints().sort((a, b) => b.endsOn.localeCompare(a.endsOn))[0]
+    const startsOn = (input.startsOn as string | undefined) ?? (latest ? addDays(latest.endsOn, 1) : comingMonday(today()))
+    const endsOn = endsOnFor(startsOn, lengthWeeks)
+    if (overlapsAny({ startsOn, endsOn }, openSprints())) return conflict('the dates overlap another sprint that is not closed')
+    const time = now()
+    const number = Math.max(0, ...state.sprints.map((sprint) => sprint.number)) + 1
+    const sprint: StoredSprint = {
+      id: nextId(),
+      number,
+      name: typeof input.name === 'string' ? input.name.trim() : `Sprint ${number}`,
+      goal: (input.goal as string | undefined) ?? '',
+      lengthWeeks,
+      startsOn,
+      endsOn,
+      startedAt: null,
+      closedAt: null,
+      createdAt: time,
+      updatedAt: time,
+    }
+    state.sprints.push(sprint)
+    return json(sprintView(sprint), 201)
+  }
+  if ((match = route.match(/^(GET|PATCH|DELETE) \/sprints\/([^/]+)$/))) {
+    const [, method, rawId] = match
+    const sprint = sprintById(decodeURIComponent(rawId!))
+    if (!sprint) return notFound()
+    if (method === 'GET') return json(sprintView(sprint))
+    if (method === 'DELETE') {
+      if (!isAdmin()) return forbidden()
+      if (sprintState(sprint) !== 'planned') return conflict('only a planned sprint can be deleted')
+      const time = now()
+      for (const issue of live().filter((candidate) => candidate.sprintId === sprint.id)) moveToSprint(issue, null, time)
+      state.sprintEvents = state.sprintEvents.filter((event) => event.sprintId !== sprint.id)
+      state.sprints = state.sprints.filter((candidate) => candidate !== sprint)
+      return noContent()
+    }
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    const problem = sprintInputProblem(input)
+    if (problem) return invalid(problem.path, problem.message)
+    if (('startsOn' in input || 'lengthWeeks' in input) && sprintState(sprint) !== 'planned') return conflict('dates change only while the sprint is planned')
+    const startsOn = (input.startsOn as string | undefined) ?? sprint.startsOn
+    const lengthWeeks = (input.lengthWeeks as SprintLength | undefined) ?? sprint.lengthWeeks
+    const endsOn = endsOnFor(startsOn, lengthWeeks)
+    if (overlapsAny({ startsOn, endsOn }, openSprints().filter((other) => other !== sprint))) return conflict('the dates overlap another sprint that is not closed')
+    if (typeof input.name === 'string') sprint.name = input.name.trim()
+    if (typeof input.goal === 'string') sprint.goal = input.goal
+    Object.assign(sprint, { startsOn, lengthWeeks, endsOn, updatedAt: now() })
+    return json(sprintView(sprint))
+  }
+  if ((match = route.match(/^(POST|GET) \/sprints\/([^/]+)\/(start|close|burndown)$/))) {
+    const [, method, rawId, action] = match
+    const sprint = sprintById(decodeURIComponent(rawId!))
+    if (!sprint) return notFound()
+    if (method === 'GET' && action === 'burndown') {
+      const scope = chartScope(url)
+      if (isProblem(scope)) return invalid(scope.path, scope.message)
+      return json(burndownOf(sprint, scope.unit, scope.keep))
+    }
+    if (method !== 'POST' || action === 'burndown') return notFound()
+    if (action === 'start') {
+      if (sprintState(sprint) !== 'planned') return conflict('only a planned sprint can be started')
+      if (activeSprint()) return conflict('another sprint is active; close it first')
+      // A start before the planned date moves the sprint to today, keeping its length.
+      const startsOn = sprint.startsOn > today() ? today() : sprint.startsOn
+      const endsOn = endsOnFor(startsOn, sprint.lengthWeeks)
+      if (overlapsAny({ startsOn, endsOn }, openSprints().filter((other) => other !== sprint))) return conflict('starting today would overlap another sprint that is not closed')
+      const time = now()
+      Object.assign(sprint, { startsOn, endsOn, startedAt: time, updatedAt: time })
+      return json(sprintView(sprint))
+    }
+    const input = await body(request)
+    if (!input || !('moveIncompleteTo' in input) || (input.moveIncompleteTo !== null && typeof input.moveIncompleteTo !== 'string')) return invalid('moveIncompleteTo', 'moveIncompleteTo must be a planned sprint id or null')
+    if (sprintState(sprint) !== 'active') return conflict('only the active sprint can be closed')
+    const target = input.moveIncompleteTo === null ? null : sprintById(input.moveIncompleteTo as string)
+    if (input.moveIncompleteTo !== null && (!target || sprintState(target) !== 'planned')) return invalid('moveIncompleteTo', 'moveIncompleteTo must be a planned sprint id or null')
+    const time = now()
+    Object.assign(sprint, { closedAt: time, updatedAt: time })
+    // Unfinished scope moves; the closed sprint takes no rows, so the move is on the target's ledger only. A relative already in the target sends an issue to the backlog.
+    const unfinished = live().filter((issue) => issue.sprintId === sprint.id && categoryOf(issue.statusId) !== 'completed' && categoryOf(issue.statusId) !== 'canceled')
+    for (const issue of unfinished) moveToSprint(issue, target && lineageMembers(issue.id, issue.parentId, target.id) === 0 ? target.id : null, time)
+    return json(sprintView(sprint))
+  }
+  return undefined
+}
+
 /** Handles `/api/tracker/v1/*`; undefined for any other path. */
 export async function trackerRoutes(request: Request, url: URL): Promise<Response | undefined> {
   if (!url.pathname.startsWith(`${BASE}/`)) return undefined
@@ -904,8 +1335,12 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if (!input) return invalid('', 'A JSON object is required')
     if ('key' in input && (typeof input.key !== 'string' || !/^[A-Z][A-Z0-9]{1,5}$/.test(input.key))) return invalid('key', 'key must match ^[A-Z][A-Z0-9]{1,5}$')
     if ('name' in input && (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 100)) return invalid('name', 'name must be 1–100 characters')
+    if ('sprintLengthWeeks' in input && !SPRINT_LENGTHS.includes(input.sprintLengthWeeks as SprintLength)) return invalid('sprintLengthWeeks', 'sprintLengthWeeks must be 1 or 2')
+    if ('timezone' in input && !isTimeZone(input.timezone)) return invalid('timezone', 'timezone must be an IANA time zone name')
     if (typeof input.key === 'string') state.workspace.key = input.key
     if (typeof input.name === 'string') state.workspace.name = input.name.trim()
+    if (typeof input.sprintLengthWeeks === 'number') state.workspace.sprintLengthWeeks = input.sprintLengthWeeks as SprintLength
+    if (typeof input.timezone === 'string') state.workspace.timezone = input.timezone
     state.workspace.updatedAt = now()
     return json(workspace())
   }
@@ -1053,7 +1488,9 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if (!isAdmin()) return forbidden()
     const time = now()
     record(issue, 'deleted', null, null, time)
+    const before = standingOf(issue)
     issue.deleted = true
+    writeLedger(issue.id, before, standingOf(issue), time)
     issue.updatedAt = time
     return noContent()
   }
@@ -1170,6 +1607,9 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     view.updatedAt = now()
     return json(viewOut(view))
   }
+
+  const sprints = await sprintRoutes(request, url, route)
+  if (sprints) return sprints
 
   // People
   if ((match = route.match(/^GET \/people\/([^/]+)\/avatar$/))) {

@@ -1,21 +1,25 @@
-// App frame: a Linear-style sidebar (workspace, issues, board, epics, report,
-// the built-in "Reported by me" view with its open count, projects, saved
-// views, settings, keyboard hint, language, app switcher, the signed-in
-// person) beside the page, plus the overlays every page shares (new issue,
-// command palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`.
+// App frame: a Linear-style sidebar (workspace, issues, board, epics,
+// sprints and the built-in "Current sprint" view, report, the built-in
+// "Reported by me" view with its open count, projects, saved views,
+// settings, keyboard hint, language, app switcher, the signed-in person)
+// beside the page, plus the overlays every page shares (new issue, command
+// palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`, G then S
+// (the active sprint, else the sprints overview) and E (estimate the
+// selected or focused issues).
 // The issues, board, epics and reported links keep the current project
 // scope; a project in the sidebar scopes the list, board or epics overview to it.
 import { AppSwitcher } from '@appthrust/app-launcher'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, UserRoundPen, X, Zap } from 'lucide-react'
+import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, SquareKanban, UserRoundPen, X, Zap } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { REPORTED_OPEN_CAP, reportedOpenQuery } from '../api/queries'
+import { REPORTED_OPEN_CAP, reportedOpenQuery, sprintsQuery } from '../api/queries'
 import { FILTER_INPUT_ID } from '../features/issues/filter-bar'
 import { NewIssueDialog } from '../features/issues/new-issue-dialog'
 import { CreateProjectDialog, ProjectSwatch } from '../features/issues/projects'
 import { CommandPalette } from '../features/palette/command-palette'
-import { insideOverlay, isPlainShortcut, isTypingTarget, MOD_KEY, setUi, uiStore, useUi } from '../features/ui-state'
+import { SprintIcon } from '../features/sprints/sprint-ui'
+import { commandTargets, insideOverlay, isPlainShortcut, isTypingTarget, MOD_KEY, setUi, uiStore, useUi } from '../features/ui-state'
 import { setLanguage, useText } from '../i18n'
 import { listHref, paths } from '../routes/paths'
 import { Avatar, cn, HrefLink, Kbd, Toaster } from '../ui'
@@ -23,14 +27,18 @@ import { useSession } from './use-session'
 
 const NAV_LINK = 'flex h-8 items-center gap-2 rounded-md px-2 text-[13px] text-stone-600 hover:bg-stone-200/50 hover:text-stone-900 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-stone-400'
 const NAV_ACTIVE = { className: 'bg-stone-200/70 font-medium text-stone-900 [&_svg]:text-stone-600' }
+/** G then S must follow within this window. */
+const SEQUENCE_MS = 1200
 
 function useGlobalKeys() {
   const navigate = useNavigate()
+  const client = useQueryClient()
   useEffect(() => {
+    let pendingG = 0
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        setUi((state) => ({ palette: !state.palette }))
+        setUi((state) => ({ palette: !state.palette, paletteStart: 'root' }))
         return
       }
       if (uiStore.state.palette || uiStore.state.newIssue) return
@@ -42,9 +50,28 @@ function useGlobalKeys() {
         return
       }
       if (!isPlainShortcut(event)) return
-      if ((event.key === 'c' || event.key === 'C') && !event.shiftKey) {
+      // Letters are plain keys only; `/` may need Shift on some layouts.
+      const key = event.shiftKey ? '' : event.key.toLowerCase()
+      if (key === 's' && Date.now() - pendingG < SEQUENCE_MS) {
+        event.preventDefault()
+        pendingG = 0
+        // The active sprint's page; without one, the overview where a sprint is started.
+        void client.fetchQuery(sprintsQuery).then(
+          (sprints) => {
+            const active = sprints.find((sprint) => sprint.state === 'active')
+            void navigate({ to: active ? paths.sprint(active.id) : paths.sprints } as never)
+          },
+          () => void navigate({ to: paths.sprints } as never)
+        )
+        return
+      }
+      pendingG = key === 'g' ? Date.now() : 0
+      if (key === 'c') {
         event.preventDefault()
         setUi({ newIssue: {} })
+      } else if (key === 'e' && commandTargets(uiStore.state).length > 0) {
+        event.preventDefault()
+        setUi({ palette: true, paletteStart: 'estimate' })
       } else if (event.key === '/') {
         const input = document.getElementById(FILTER_INPUT_ID)
         if (input) {
@@ -55,7 +82,7 @@ function useGlobalKeys() {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [navigate])
+  }, [navigate, client])
 }
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -67,6 +94,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const scope = useUi((state) => state.scope)
   const reportedOpen = useQuery(reportedOpenQuery).data
   const reportedOpenCount = reportedOpen ? (reportedOpen.nextCursor ? `${REPORTED_OPEN_CAP}+` : String(reportedOpen.items.length)) : undefined
+  const activeSprint = useQuery(sprintsQuery).data?.find((sprint) => sprint.state === 'active')
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   // A project in the sidebar scopes the board, the epics overview or "Reported by me" while it is open, else the list.
   const listPath = pathname === paths.board || pathname === paths.reported || pathname === paths.epics ? pathname : paths.home
@@ -96,7 +124,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </button>
         <button
           type="button"
-          onClick={() => setUi({ palette: true })}
+          onClick={() => setUi({ palette: true, paletteStart: 'root' })}
           aria-label={t('tracker.palette.title')}
           title={`${t('tracker.palette.title')} (${MOD_KEY}K)`}
           className="flex size-8 items-center justify-center rounded-md border border-line bg-white text-stone-500 shadow-xs hover:bg-stone-50"
@@ -117,6 +145,16 @@ export function Shell({ children }: { children: ReactNode }) {
           <HrefLink href={listHref(paths.epics, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <Zap aria-hidden />
             {t('tracker.nav.epics')}
+          </HrefLink>
+          <HrefLink href={paths.sprints} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ exact: false, includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <SprintIcon />
+            {t('tracker.nav.sprints')}
+            <Kbd className="ml-auto">G S</Kbd>
+          </HrefLink>
+          <HrefLink href={paths.currentSprint} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <SquareKanban aria-hidden />
+            <span className="truncate">{t('tracker.nav.currentSprint')}</span>
+            {activeSprint ? <span className="ml-auto max-w-20 truncate text-[11px] text-stone-400">{activeSprint.name}</span> : null}
           </HrefLink>
           <HrefLink href={paths.report} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <Bug aria-hidden />
@@ -199,7 +237,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <Settings aria-hidden />
           {t('tracker.nav.settings')}
         </HrefLink>
-        <button type="button" onClick={() => setUi({ palette: true })} className={cn(NAV_LINK, 'w-full')}>
+        <button type="button" onClick={() => setUi({ palette: true, paletteStart: 'root' })} className={cn(NAV_LINK, 'w-full')}>
           <Command aria-hidden />
           {t('tracker.palette.title')}
           <Kbd className="ml-auto">{`${MOD_KEY}K`}</Kbd>

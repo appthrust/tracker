@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { Attachment, Issue, IssuePage, IssueSummary, Label, Project, Status, TimelineItem, View } from '../api/tracker'
+import type { Attachment, Burndown, Issue, IssuePage, IssueSummary, Label, Project, Sprint, Status, TimelineItem, Velocity, View } from '../api/tracker'
+import { addDays, dayInZone } from '../model/sprints'
 import { MOCK_PEOPLE, trackerRoutes } from './mock-tracker'
 
 const BASE = '/api/tracker/v1'
@@ -35,7 +36,7 @@ beforeEach(async () => {
 describe('tracker mock: fixture shared with the server dev seed', () => {
   test('caller, workspace, statuses, labels, views and people', async () => {
     expect((await call('GET', '/me')).body).toEqual({ ...MOCK_PEOPLE.alex, role: 'Admin', isAdmin: true })
-    expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 36 })
+    expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 40, sprintLengthWeeks: 1, timezone: 'Asia/Tokyo' })
     expect((await statuses()).map((status) => [status.name, status.category, status.color, status.position])).toEqual([
       ['Backlog', 'backlog', 'gray', 0],
       ['Todo', 'unstarted', 'gray', 1],
@@ -99,9 +100,9 @@ describe('tracker mock: issues', () => {
       seen.push(...page.items.map((issue) => issue.identifier))
       cursor = page.nextCursor
     } while (cursor)
-    expect(seen).toHaveLength(36)
+    expect(seen).toHaveLength(40)
     expect(seen[0]).toBe('APT-1')
-    expect(new Set(seen).size).toBe(36)
+    expect(new Set(seen).size).toBe(40)
     const urgentFirst = (await list('?sort=priority')).items
     expect(urgentFirst.slice(0, 6).every((issue) => issue.priority === 'urgent')).toBe(true)
     for (const bad of ['?filter=%7Bnope', filterQuery({ colour: ['red'] }), filterQuery({ type: ['initiative'] }), filterQuery({ epic: ['APT-31'] }), filterQuery({ story: 'none' }), '?sort=title', '?limit=500']) {
@@ -158,9 +159,9 @@ describe('tracker mock: issues', () => {
     expect((await call('POST', '/issues', { title: 'x', type: 'task', report: { environment: 'local', surface: 'apth' } })).status).toBe(400)
     const created = await call('POST', '/issues', { title: '  Board drag fails  ', type: 'bug', priority: 'high', report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0', steps: '' } })
     expect(created.status).toBe(201)
-    expect(created.body).toMatchObject({ identifier: 'APT-37', title: 'Board drag fails', statusId: (await statusNamed('Backlog')).id, reporter: MOCK_PEOPLE.alex, report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0' } })
+    expect(created.body).toMatchObject({ identifier: 'APT-41', title: 'Board drag fails', statusId: (await statusNamed('Backlog')).id, reporter: MOCK_PEOPLE.alex, report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0' }, estimate: null, sprint: null })
     expect(created.body.report.steps).toBeUndefined()
-    expect((await call('GET', '/workspace')).body.issueCount).toBe(37)
+    expect((await call('GET', '/workspace')).body.issueCount).toBe(41)
   })
 
   test('PATCH: one activity per changed field, completion time, links and cycle checks', async () => {
@@ -179,6 +180,9 @@ describe('tracker mock: issues', () => {
     expect((await call('PATCH', `/issues/${issue.id}`, { assigneeSub: null })).body.assignee).toBeNull()
 
     const parent = (await call('GET', '/issues/APT-1')).body as Issue
+    // APT-2 is in the active sprint with APT-1's story (APT-34): lineage-exclusive until it leaves the sprint.
+    expect((await call('PATCH', `/issues/${issue.id}`, { parentId: parent.id })).body.issues[0].path).toBe('sprintId')
+    await call('PATCH', `/issues/${issue.id}`, { sprintId: null })
     expect((await call('PATCH', `/issues/${issue.id}`, { parentId: parent.id })).body.parent.identifier).toBe('APT-1')
     expect((await call('GET', '/issues/APT-1')).body.children.map((child: { identifier: string }) => child.identifier)).toEqual(['APT-2'])
     expect((await call('PATCH', `/issues/${parent.id}`, { parentId: issue.id })).body.issues[0]).toEqual({ path: 'parentId', message: 'parent would create a cycle' })
@@ -206,7 +210,7 @@ describe('tracker mock: issues', () => {
     await as('dev-alex', 'Admin')
     expect((await call('DELETE', `/issues/${issue.id}`)).status).toBe(204)
     expect((await call('GET', '/issues/APT-4')).status).toBe(404)
-    expect((await list()).items).toHaveLength(35)
+    expect((await list()).items).toHaveLength(39)
   })
 })
 
@@ -238,18 +242,22 @@ describe('tracker mock: epics and stories', () => {
     }
   })
 
-  test('progress counts level-0 descendants at any depth: canceled excluded from total, completed counted', async () => {
+  test('progress counts level-0 descendants at any depth: canceled excluded from total, completed counted; points sum their sizes', async () => {
     const issues = await byNumber()
     const category = new Map((await statuses()).map((status) => [status.id, status.category]))
+    const weight = (issue: IssueSummary) => (issue.estimate ? { XS: 1, S: 2, M: 3, L: 5, XL: 8 }[issue.estimate] : 0)
     const expected = (inGroup: (issue: IssueSummary) => boolean) => {
       const counted = [...issues.values()].filter((issue) => issue.number <= 30 && inGroup(issue) && category.get(issue.statusId) !== 'canceled')
-      return { total: counted.length, completed: counted.filter((issue) => category.get(issue.statusId) === 'completed').length }
+      const completed = counted.filter((issue) => category.get(issue.statusId) === 'completed')
+      const points = (items: IssueSummary[]) => items.reduce((sum, issue) => sum + weight(issue), 0)
+      return { total: counted.length, completed: completed.length, points: { total: points(counted), completed: points(completed) } }
     }
     const epic = issues.get(31)!
     const story = issues.get(33)!
     expect(story.progress).toEqual(expected((issue) => issue.story?.id === story.id))
     expect(epic.progress).toEqual(expected((issue) => issue.epic?.id === epic.id))
     expect(epic.progress!.total).toBeGreaterThan(story.progress!.total)
+    expect(epic.progress!.points.total).toBeGreaterThan(0)
 
     // A completed sub-task two levels below its story counts there and in the epic.
     const parentTask = issues.get(1)!
@@ -257,7 +265,7 @@ describe('tracker mock: epics and stories', () => {
     expect(subTask).toMatchObject({ epic: { id: parentTask.epic!.id }, story: { id: parentTask.story!.id }, progress: null })
     for (const group of [parentTask.story!, parentTask.epic!]) {
       const before = [...issues.values()].find((issue) => issue.id === group.id)!.progress!
-      expect(((await call('GET', `/issues/${group.id}`)).body as Issue).progress).toEqual({ total: before.total + 1, completed: before.completed + 1 })
+      expect(((await call('GET', `/issues/${group.id}`)).body as Issue).progress).toEqual({ ...before, total: before.total + 1, completed: before.completed + 1 })
     }
   })
 
@@ -281,7 +289,7 @@ describe('tracker mock: epics and stories', () => {
     expect(inEpic.map((issue) => issue.number)).toContain(33)
     expect((await list(`${filterQuery({ story: [story.id] })}&limit=200`)).items.every((issue) => issue.story?.id === story.id)).toBe(true)
     const noEpic = (await list(`${filterQuery({ epic: ['none'] })}&limit=200`)).items
-    expect(noEpic.map((issue) => issue.number).sort((a, b) => a - b)).toEqual([5, 10, 15, 20, 25, 30, 31, 32])
+    expect(noEpic.map((issue) => issue.number).sort((a, b) => a - b)).toEqual([5, 10, 15, 20, 25, 30, 31, 32, 37, 38, 39, 40])
     expect((await list(`${filterQuery({ epic: [epic.id, 'none'] })}&limit=200`)).items).toHaveLength(inEpic.length + noEpic.length)
     expect((await list(filterQuery({ type: ['epic', 'story'] }))).items).toHaveLength(6)
     expect((await list(filterQuery({ parent: epic.id }))).items.map((issue) => issue.number).sort()).toEqual([33, 34])
@@ -412,9 +420,9 @@ describe('tracker mock: projects', () => {
 
   test('filter: project ids OR `none`', async () => {
     const dashboard = await projectNamed('Dashboard')
-    expect((await list(filterQuery({ project: ['none'] }))).items).toHaveLength(16)
+    expect((await list(filterQuery({ project: ['none'] }))).items).toHaveLength(20)
     expect((await list(filterQuery({ project: [dashboard.id] }))).items.every((issue) => issue.projectId === dashboard.id)).toBe(true)
-    expect((await list(filterQuery({ project: [dashboard.id, 'none'] }))).items).toHaveLength(21)
+    expect((await list(filterQuery({ project: [dashboard.id, 'none'] }))).items).toHaveLength(25)
     expect((await call('GET', `/issues${filterQuery({ project: 'none' })}`)).status).toBe(400)
   })
 
@@ -543,5 +551,311 @@ describe('tracker mock: views and settings authorization', () => {
     const { status, body } = await call('GET', '/openapi.json')
     expect(status).toBe(200)
     expect(body.openapi).toMatch(/^3\.1/)
+  })
+})
+
+describe('tracker mock: sprints fixture (API.md v0.1.10)', () => {
+  const today = () => dayInZone(Date.now(), 'Asia/Tokyo')
+  const sprints = async (query = '') => (await call('GET', `/sprints${query}`)).body.items as Sprint[]
+  const byNumber = async () => new Map((await sprints()).map((sprint) => [sprint.number, sprint]))
+  const issueNumbered = async (n: number) => (await call('GET', `/issues/APT-${n}`)).body as Issue
+  const members = async (sprintId: string) => (await list(`${filterQuery({ sprint: [sprintId] })}&sort=number&limit=200`)).items.map((issue) => issue.number)
+
+  test('three closed one-week sprints, an active two-week sprint on its fourth day, a planned one; API order', async () => {
+    const items = await sprints()
+    expect(items.map((sprint) => [sprint.number, sprint.state, sprint.lengthWeeks])).toEqual([
+      [4, 'active', 2],
+      [5, 'planned', 1],
+      [3, 'closed', 1],
+      [2, 'closed', 1],
+      [1, 'closed', 1],
+    ])
+    const sprint = await byNumber()
+    expect(sprint.get(4)).toMatchObject({ name: 'Sprint 4', goal: 'Sprint planning and burndown', startsOn: addDays(today(), -3), endsOn: addDays(today(), 10), closedAt: null })
+    expect(sprint.get(5)).toMatchObject({ startsOn: addDays(today(), 11), endsOn: addDays(today(), 17), startedAt: null, commitment: null, current: { scopePoints: 4, scopeIssues: 3, donePoints: 0, doneIssues: 0 } })
+    expect(sprint.get(1)).toMatchObject({ startsOn: addDays(today(), -24), endsOn: addDays(today(), -18) })
+    expect([1, 2, 3, 4].map((n) => [sprint.get(n)!.commitment, sprint.get(n)!.current])).toEqual([
+      [
+        { scopePoints: 21, scopeIssues: 4, donePoints: 0, doneIssues: 0 },
+        { scopePoints: 21, scopeIssues: 4, donePoints: 18, doneIssues: 3 },
+      ],
+      [
+        { scopePoints: 24, scopeIssues: 4, donePoints: 0, doneIssues: 0 },
+        { scopePoints: 24, scopeIssues: 4, donePoints: 21, doneIssues: 3 },
+      ],
+      [
+        { scopePoints: 27, scopeIssues: 4, donePoints: 0, doneIssues: 0 },
+        { scopePoints: 27, scopeIssues: 4, donePoints: 24, doneIssues: 3 },
+      ],
+      [
+        { scopePoints: 10, scopeIssues: 6, donePoints: 0, doneIssues: 0 },
+        { scopePoints: 10, scopeIssues: 6, donePoints: 0, doneIssues: 0 },
+      ],
+    ])
+    expect(await members(sprint.get(1)!.id)).toEqual([5, 11, 17])
+    expect(await members(sprint.get(2)!.id)).toEqual([23, 29, 37])
+    expect(await members(sprint.get(3)!.id)).toEqual([38, 39, 40])
+    expect(await members(sprint.get(4)!.id)).toEqual([2, 3, 4, 10, 15, 30, 34])
+    expect(await members(sprint.get(5)!.id)).toEqual([8, 14, 26])
+    expect((await issueNumbered(5)).sprint).toEqual({ id: sprint.get(1)!.id, number: 1, name: 'Sprint 1', state: 'closed' })
+  })
+
+  test('four Done work items close the seed, and 17 work items carry a size across all five', async () => {
+    const all = (await list('?sort=number&limit=200')).items
+    const done = await statusNamed('Done')
+    expect(all.slice(36).map((issue) => [issue.number, issue.title, issue.type, issue.statusId === done.id, issue.parent, issue.projectId, issue.estimate])).toEqual([
+      [37, 'Speed up issue search', 'task', true, null, null, 'L'],
+      [38, 'Add bulk status change', 'feature', true, null, null, 'XL'],
+      [39, 'Tidy up the settings layout', 'task', true, null, null, 'XL'],
+      [40, 'Show issue counts per project', 'feature', true, null, null, 'XL'],
+    ])
+    const sized = all.filter((issue) => issue.estimate !== null)
+    expect(sized.map((issue) => `${issue.number}:${issue.estimate}`)).toEqual(['2:M', '3:S', '4:M', '5:XL', '8:XS', '10:S', '11:L', '14:M', '16:XS', '17:L', '23:XL', '29:XL', '30:S', '37:L', '38:XL', '39:XL', '40:XL'])
+    expect(all.filter((issue) => issue.type === 'epic').every((issue) => issue.estimate === null && issue.sprint === null)).toBe(true)
+  })
+
+  test('velocity: 18, 21, 24 points (committed 21, 24, 27), 21 per week; 3 issues each in the issue unit', async () => {
+    const points = (await call('GET', '/velocity')).body as Velocity
+    expect(points.unit).toBe('points')
+    expect(points.items.map((item) => [item.sprint.number, item.lengthWeeks, item.committed, item.completed])).toEqual([
+      [1, 1, 21, 18],
+      [2, 1, 24, 21],
+      [3, 1, 27, 24],
+    ])
+    expect(points.averagePerWeek).toBe(21)
+    const issues = (await call('GET', '/velocity?unit=issues')).body as Velocity
+    expect(issues.items.map((item) => [item.committed, item.completed])).toEqual([
+      [4, 3],
+      [4, 3],
+      [4, 3],
+    ])
+    expect(issues.averagePerWeek).toBe(3)
+    expect(((await call('GET', '/velocity?limit=2')).body as Velocity).items.map((item) => item.sprint.number)).toEqual([2, 3])
+    for (const bad of ['?limit=0', '?limit=27', '?unit=hours']) expect((await call('GET', `/velocity${bad}`)).status, bad).toBe(400)
+  })
+
+  test('burndown of the active sprint: commitment on day one, the scope increase on day two, the cancellation on day three, nothing after today', async () => {
+    const active = (await byNumber()).get(4)!
+    const burndown = (await call('GET', `/sprints/${active.id}/burndown?unit=points`)).body as Burndown
+    expect(burndown).toMatchObject({ sprint: { id: active.id, state: 'active' }, unit: 'points', today: today() })
+    expect(burndown.points).toHaveLength(14)
+    expect(burndown.points.slice(0, 4).map((point) => [point.day, point.scope, point.done, point.remaining])).toEqual([
+      [addDays(today(), -3), 10, 0, 10],
+      [addDays(today(), -2), 12, 0, 12],
+      [addDays(today(), -1), 10, 0, 10],
+      [today(), 10, 0, 10],
+    ])
+    expect(burndown.points[0]!.ideal).toBe(10)
+    expect(burndown.points[13]!.ideal).toBe(0)
+    expect(burndown.points.slice(4).every((point) => point.remaining === undefined && point.scope === undefined && typeof point.ideal === 'number')).toBe(true)
+    const issues = (await call('GET', `/sprints/${active.id}/burndown?unit=issues`)).body as Burndown
+    expect(issues.points.slice(0, 4).map((point) => point.scope)).toEqual([6, 7, 6, 6])
+    // A closed sprint's last day carries its final tally.
+    const first = (await byNumber()).get(1)!
+    const closed = (await call('GET', `/sprints/${first.id}/burndown`)).body as Burndown
+    expect(closed.points[6]).toMatchObject({ scope: 21, done: 18, remaining: 3 })
+    expect((await call('GET', `/sprints/${active.id}/burndown?unit=hours`)).status).toBe(400)
+    expect((await call('GET', '/sprints/nope/burndown')).status).toBe(404)
+    // `project` restricts to issues currently in that project.
+    const none = (await call('GET', `/sprints/${active.id}/burndown?project=none`)).body as Burndown
+    // APT-3 (S), APT-15, APT-30 (canceled on day three) and APT-34 have no project.
+    expect(none.points[3]).toMatchObject({ scope: 2, remaining: 2 })
+  })
+})
+
+describe('tracker mock: estimates and membership on issue writes', () => {
+  const sprintsByNumber = async () => new Map(((await call('GET', '/sprints')).body.items as Sprint[]).map((sprint) => [sprint.number, sprint]))
+  const issueNumbered = async (n: number) => (await call('GET', `/issues/APT-${n}`)).body as Issue
+  const refused = async (method: string, path: string, body: object, field: string) => {
+    const response = await call(method, path, body)
+    expect(response.status, JSON.stringify(body)).toBe(400)
+    expect(response.body).toMatchObject({ error: 'invalid', issues: [{ path: field }] })
+  }
+
+  test('estimating, completing, moving and deleting write the ledger; the burndown moves', async () => {
+    const sprint = await sprintsByNumber()
+    const active = sprint.get(4)!
+    const planned = sprint.get(5)!
+    const fifteen = await issueNumbered(15)
+    expect((await call('PATCH', `/issues/${fifteen.id}`, { estimate: 'L' })).body).toMatchObject({ estimate: 'L' })
+    expect((await call('GET', `/sprints/${active.id}`)).body.current).toEqual({ scopePoints: 15, scopeIssues: 6, donePoints: 0, doneIssues: 0 })
+    const done = await statusNamed('Done')
+    await call('PATCH', `/issues/${fifteen.id}`, { statusId: done.id })
+    expect((await call('GET', `/sprints/${active.id}`)).body.current).toEqual({ scopePoints: 15, scopeIssues: 6, donePoints: 5, doneIssues: 1 })
+    const burndown = (await call('GET', `/sprints/${active.id}/burndown`)).body as Burndown
+    expect(burndown.points[3]).toMatchObject({ scope: 15, done: 5, remaining: 10 })
+    // Commitment stays the ledger at the start.
+    expect((await call('GET', `/sprints/${active.id}`)).body.commitment).toEqual({ scopePoints: 10, scopeIssues: 6, donePoints: 0, doneIssues: 0 })
+
+    const two = await issueNumbered(2)
+    expect((await call('PATCH', `/issues/${two.id}`, { sprintId: planned.id })).body.sprint).toEqual({ id: planned.id, number: 5, name: 'Sprint 5', state: 'planned' })
+    expect((await call('GET', `/sprints/${active.id}`)).body.current.scopePoints).toBe(12)
+    expect((await call('GET', `/sprints/${planned.id}`)).body.current).toMatchObject({ scopePoints: 7, scopeIssues: 4 })
+    await call('PATCH', `/issues/${two.id}`, { sprintId: null })
+    expect((await call('GET', `/sprints/${planned.id}`)).body.current.scopePoints).toBe(4)
+    const timeline = (await call('GET', `/issues/${two.id}/timeline`)).body.items as TimelineItem[]
+    expect(timeline.flatMap((item) => (item.kind === 'activity' && item.activity.field === 'sprint' ? [[(item.activity.from as { number?: number } | null)?.number ?? null, (item.activity.to as { number?: number } | null)?.number ?? null]] : []))).toEqual([
+      [4, 5],
+      [5, null],
+    ])
+    const fifteenTimeline = (await call('GET', `/issues/${fifteen.id}/timeline`)).body.items as TimelineItem[]
+    expect(fifteenTimeline.find((item) => item.kind === 'activity' && item.activity.field === 'estimate')).toMatchObject({ activity: { from: null, to: 'L' } })
+
+    const three = await issueNumbered(3)
+    await call('DELETE', `/issues/${three.id}`)
+    expect((await call('GET', `/sprints/${active.id}`)).body.current).toEqual({ scopePoints: 10, scopeIssues: 4, donePoints: 5, doneIssues: 1 })
+    // A new issue may join with its size.
+    const created = (await call('POST', '/issues', { title: 'Planned work', type: 'task', estimate: 'M', sprintId: planned.id })).body as Issue
+    expect(created).toMatchObject({ estimate: 'M', sprint: { id: planned.id } })
+    expect((await call('GET', `/sprints/${planned.id}`)).body.current.scopePoints).toBe(7)
+    // Edits of a closed sprint's member write nothing to it.
+    const five = await issueNumbered(5)
+    await call('PATCH', `/issues/${five.id}`, { estimate: 'XS' })
+    expect((await call('GET', `/sprints/${sprint.get(1)!.id}`)).body.current.donePoints).toBe(18)
+  })
+
+  test('refusals: sizes, epics, unknown or closed sprints, frozen members, lineage, re-checks on type and parent changes', async () => {
+    const sprint = await sprintsByNumber()
+    const active = sprint.get(4)!
+    const closed = sprint.get(1)!
+    const [epic, nine, ten, fifteen, five, story34] = await Promise.all([31, 9, 10, 15, 5, 34].map(issueNumbered))
+    await refused('PATCH', `/issues/${nine.id}`, { estimate: 'XXL' }, 'estimate')
+    await refused('PATCH', `/issues/${epic!.id}`, { estimate: 'S' }, 'estimate')
+    await refused('PATCH', `/issues/${epic!.id}`, { sprintId: active.id }, 'sprintId')
+    await refused('PATCH', `/issues/${nine.id}`, { sprintId: 'nope' }, 'sprintId')
+    await refused('PATCH', `/issues/${nine.id}`, { sprintId: closed.id }, 'sprintId')
+    await refused('POST', '/issues', { title: 'x', type: 'task', sprintId: closed.id }, 'sprintId')
+    await refused('POST', '/issues', { title: 'x', type: 'epic', estimate: 'M' }, 'estimate')
+    // APT-9 sits under APT-34, which is in the active sprint.
+    expect(nine.parent?.id).toBe(story34!.id)
+    await refused('PATCH', `/issues/${nine.id}`, { sprintId: active.id }, 'sprintId')
+    await refused('POST', '/issues', { title: 'x', type: 'task', parentId: story34!.id, sprintId: active.id }, 'sprintId')
+    // A closed sprint's member is frozen, even to the backlog.
+    await refused('PATCH', `/issues/${five.id}`, { sprintId: active.id }, 'sprintId')
+    await refused('PATCH', `/issues/${five.id}`, { sprintId: null }, 'sprintId')
+    // Type and parent changes re-check membership.
+    await refused('PATCH', `/issues/${fifteen.id}`, { type: 'epic' }, 'sprintId')
+    await refused('PATCH', `/issues/${ten.id}`, { parentId: story34!.id }, 'sprintId')
+    await refused('PATCH', `/issues/${ten.id}`, { type: 'epic' }, 'estimate')
+    expect((await call('PATCH', `/issues/${ten.id}`, { type: 'epic', estimate: null, sprintId: null })).body).toMatchObject({ type: 'epic', estimate: null, sprint: null })
+  })
+
+  test('filter by sprint (ids, active, none) and sort by estimate', async () => {
+    const sprint = await sprintsByNumber()
+    const active = (await list(`${filterQuery({ sprint: ['active'] })}&sort=number`)).items.map((issue) => issue.number)
+    expect(active).toEqual([2, 3, 4, 10, 15, 30, 34])
+    const both = (await list(`${filterQuery({ sprint: [sprint.get(5)!.id, 'active'] })}&limit=200`)).items
+    expect(both).toHaveLength(10)
+    const backlog = (await list(`${filterQuery({ sprint: ['none'] })}&limit=200`)).items
+    expect(backlog.every((issue) => issue.sprint === null)).toBe(true)
+    expect(backlog).toHaveLength(40 - 3 * 3 - 7 - 3)
+    expect((await call('GET', `/issues${filterQuery({ sprint: ['Sprint 4'] })}`)).status).toBe(400)
+    const bySize = (await list('?sort=estimate&limit=200')).items
+    expect(bySize.slice(0, 6).every((issue) => issue.estimate === 'XL')).toBe(true)
+    expect(bySize.at(-1)!.estimate).toBeNull()
+    expect((await call('POST', '/views', { name: 'By sprint', groupBy: 'sprint', sort: 'estimate', filter: { sprint: ['active'] } })).body).toMatchObject({ groupBy: 'sprint', sort: 'estimate' })
+  })
+})
+
+describe('tracker mock: sprint lifecycle', () => {
+  const sprintsByNumber = async () => new Map(((await call('GET', '/sprints')).body.items as Sprint[]).map((sprint) => [sprint.number, sprint]))
+  const today = () => dayInZone(Date.now(), 'Asia/Tokyo')
+
+  test('create: defaults (workspace length, after the last open sprint, "Sprint <n>"), validation and overlap', async () => {
+    const created = await call('POST', '/sprints', {})
+    expect(created.status).toBe(201)
+    expect(created.body).toMatchObject({ number: 6, name: 'Sprint 6', goal: '', state: 'planned', lengthWeeks: 1, startsOn: addDays(today(), 18), endsOn: addDays(today(), 24), current: { scopePoints: 0 }, commitment: null })
+    expect((await call('POST', '/sprints', { name: '  Hardening  ', goal: 'Fix what we broke', lengthWeeks: 2 })).body).toMatchObject({ number: 7, name: 'Hardening', lengthWeeks: 2, startsOn: addDays(today(), 25), endsOn: addDays(today(), 38) })
+    expect((await call('POST', '/sprints', { startsOn: addDays(today(), 20) })).status).toBe(409)
+    for (const bad of [{ lengthWeeks: 3 }, { name: 'x'.repeat(61) }, { name: ' ' }, { startsOn: '2026-13-01' }, { goal: 'x'.repeat(4097) }, { colour: 'red' }]) {
+      expect((await call('POST', '/sprints', bad)).status, JSON.stringify(bad).slice(0, 40)).toBe(400)
+    }
+    expect((await call('GET', '/sprints?state=planned')).body.items.map((sprint: Sprint) => sprint.number)).toEqual([5, 6, 7])
+    expect((await call('GET', '/sprints?state=paused')).status).toBe(400)
+    expect((await call('GET', '/sprints/nope')).status).toBe(404)
+  })
+
+  test('patch: names and goals any time; dates only while planned and without overlap', async () => {
+    const sprint = await sprintsByNumber()
+    const active = sprint.get(4)!
+    const planned = sprint.get(5)!
+    expect((await call('PATCH', `/sprints/${active.id}`, { name: 'Sprint 4: planning', goal: 'Ship it' })).body).toMatchObject({ name: 'Sprint 4: planning', goal: 'Ship it' })
+    expect((await call('PATCH', `/sprints/${active.id}`, { lengthWeeks: 1 })).status).toBe(409)
+    expect((await call('PATCH', `/sprints/${planned.id}`, { lengthWeeks: 2 })).body).toMatchObject({ lengthWeeks: 2, endsOn: addDays(today(), 24) })
+    expect((await call('PATCH', `/sprints/${planned.id}`, { startsOn: addDays(today(), 5) })).status).toBe(409)
+  })
+
+  test('start: 409 while another sprint is active or when not planned', async () => {
+    const sprint = await sprintsByNumber()
+    expect((await call('POST', `/sprints/${sprint.get(5)!.id}/start`)).status).toBe(409)
+    expect((await call('POST', `/sprints/${sprint.get(4)!.id}/start`)).status).toBe(409)
+    expect((await call('POST', `/sprints/${sprint.get(1)!.id}/start`)).status).toBe(409)
+  })
+
+  test('close: counts stay on the closed sprint, unfinished scope moves to the target, velocity gains a bar; then the next sprint starts today', async () => {
+    const sprint = await sprintsByNumber()
+    const active = sprint.get(4)!
+    const planned = sprint.get(5)!
+    expect((await call('POST', `/sprints/${planned.id}/close`, { moveIncompleteTo: null })).status).toBe(409)
+    expect((await call('POST', `/sprints/${active.id}/close`, {})).status).toBe(400)
+    expect((await call('POST', `/sprints/${active.id}/close`, { moveIncompleteTo: sprint.get(1)!.id })).body.issues[0].path).toBe('moveIncompleteTo')
+    // Complete one issue first: it stays in the closing sprint and counts as velocity.
+    const four = (await call('GET', '/issues/APT-4')).body as Issue
+    await call('PATCH', `/issues/${four.id}`, { statusId: (await statusNamed('Done')).id })
+    const closed = await call('POST', `/sprints/${active.id}/close`, { moveIncompleteTo: planned.id })
+    expect(closed.status).toBe(200)
+    expect(closed.body).toMatchObject({ state: 'closed', closedAt: expect.any(String), current: { scopePoints: 10, scopeIssues: 6, donePoints: 3, doneIssues: 1 } })
+    const membersOf = async (id: string) => (await list(`${filterQuery({ sprint: [id] })}&sort=number&limit=200`)).items.map((issue) => issue.number)
+    expect(await membersOf(active.id)).toEqual([4, 30])
+    expect(await membersOf(planned.id)).toEqual([2, 3, 8, 10, 14, 15, 26, 34])
+    expect((await call('GET', `/sprints/${planned.id}`)).body.current).toEqual({ scopePoints: 4 + 3 + 2 + 2, scopeIssues: 8, donePoints: 0, doneIssues: 0 })
+    const velocity = (await call('GET', '/velocity')).body as Velocity
+    expect(velocity.items.map((item) => [item.sprint.number, item.committed, item.completed])).toEqual([
+      [1, 21, 18],
+      [2, 24, 21],
+      [3, 27, 24],
+      [4, 10, 3],
+    ])
+    // The last three: 21, 24 and 3 over two weeks (1.5 a week).
+    expect(velocity.averagePerWeek).toBe(15.5)
+    // Writes after the close leave it alone.
+    await call('PATCH', `/issues/${four.id}`, { estimate: 'XL' })
+    expect((await call('GET', `/sprints/${active.id}`)).body.current.donePoints).toBe(3)
+
+    const started = await call('POST', `/sprints/${planned.id}/start`)
+    expect(started.body).toMatchObject({ state: 'active', startsOn: today(), endsOn: addDays(today(), 6), startedAt: expect.any(String) })
+    expect(started.body.commitment).toEqual(started.body.current)
+  })
+
+  test('close sends an unfinished issue to the backlog when a relative is already in the target', async () => {
+    const sprint = await sprintsByNumber()
+    const [eight, story33, four] = await Promise.all(['APT-8', 'APT-33', 'APT-4'].map(async (key) => (await call('GET', `/issues/${key}`)).body as Issue))
+    await call('PATCH', `/issues/${eight!.id}`, { sprintId: null })
+    expect((await call('PATCH', `/issues/${story33!.id}`, { sprintId: sprint.get(5)!.id })).status).toBe(200)
+    await call('POST', `/sprints/${sprint.get(4)!.id}/close`, { moveIncompleteTo: sprint.get(5)!.id })
+    expect(((await call('GET', `/issues/${four!.id}`)).body as Issue).sprint).toBeNull()
+    expect(((await call('GET', '/issues/APT-3')).body as Issue).sprint?.id).toBe(sprint.get(5)!.id)
+  })
+
+  test('delete: Admin only, planned only; members return to the backlog', async () => {
+    const sprint = await sprintsByNumber()
+    await as('dev-sam')
+    expect((await call('DELETE', `/sprints/${sprint.get(5)!.id}`)).status).toBe(403)
+    // Anyone else may create, start and close.
+    expect((await call('POST', '/sprints', {})).status).toBe(201)
+    await as('dev-alex', 'Admin')
+    expect((await call('DELETE', `/sprints/${sprint.get(4)!.id}`)).status).toBe(409)
+    expect((await call('DELETE', `/sprints/${sprint.get(5)!.id}`)).status).toBe(204)
+    expect((await call('GET', `/sprints/${sprint.get(5)!.id}`)).status).toBe(404)
+    expect(((await call('GET', '/issues/APT-8')).body as Issue).sprint).toBeNull()
+  })
+
+  test('workspace sprint settings: Admin sets length and timezone; new sprints take the length', async () => {
+    expect((await call('PATCH', '/workspace', { sprintLengthWeeks: 3 })).status).toBe(400)
+    expect((await call('PATCH', '/workspace', { timezone: 'Mars/Olympus' })).status).toBe(400)
+    expect((await call('PATCH', '/workspace', { sprintLengthWeeks: 2, timezone: 'Europe/Berlin' })).body).toMatchObject({ sprintLengthWeeks: 2, timezone: 'Europe/Berlin' })
+    expect((await call('POST', '/sprints', {})).body.lengthWeeks).toBe(2)
+    await as('dev-sam')
+    expect((await call('PATCH', '/workspace', { sprintLengthWeeks: 1 })).status).toBe(403)
   })
 })

@@ -1,37 +1,40 @@
 // One column per status. Cards drag between columns (native drag and drop) to
 // change status; the status chip and the command palette do the same from the
-// keyboard. Cards show their project while the board spans projects. With a
-// grouping the board has one swimlane per epic or story (same columns, the
-// lane collapsible): dropping a card in another lane makes that lane's issue
-// its parent; the "No epic/story" lane takes it out only when that grouping
-// issue is its direct parent. Drops the hierarchy forbids are refused with a
-// toast.
+// keyboard. Cards show their project while the board spans projects, their
+// sprint while it spans sprints, and their size. With a grouping the board
+// has one swimlane per epic, story or sprint (same columns, the lane
+// collapsible): dropping a card in another epic/story lane makes that lane's
+// issue its parent (the "No epic/story" lane takes it out only when that
+// grouping issue is its direct parent); in another sprint lane it moves the
+// card to that sprint (or the backlog). Drops the rules forbid are refused
+// with a toast. A member story's card lists the work under it.
 import { Plus } from 'lucide-react'
 import { useState, type DragEvent, type ReactNode } from 'react'
 import type { IssueSummary, UpdateIssueInput } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { isSummary, levelOf, NO_GROUP, type IssueSection } from '../../model/issues'
+import { isSprintSection } from '../../model/sprints'
 import { paths } from '../../routes/paths'
 import { cn, HrefLink, showToast } from '../../ui'
+import { SprintHeading, useSprintMove } from '../sprints/sprint-sections'
 import { setUi, useUi } from '../ui-state'
 import { GroupHeading, hierarchyProblem } from './hierarchy'
-import { isPlainClick, type GroupedProps, type IssueGroup } from './issue-list'
-import { AssigneePicker, IssueProjectPicker, LabelPill, PriorityPicker, useIssueEditor } from './properties'
+import { DRAG_TYPE, isPlainClick, NestedWork, type GroupedProps, type IssueGroup, type RowOptions } from './issue-list'
+import { AssigneePicker, EstimatePicker, IssueProjectPicker, LabelPill, PriorityPicker, SprintPicker, useIssueEditor } from './properties'
 import { useReference } from './use-reference'
 import { ProgressBar, StatusIcon, TypeIcon } from './visuals'
-
-const DRAG_TYPE = 'application/x-tracker-issue'
 
 /** A board row: its section (the whole board without a grouping) split into status columns. */
 export type BoardLane = { section: IssueSection; columns: IssueGroup[] }
 
-type BoardProps = { lanes: BoardLane[]; onOpen: (issue: { identifier: string }) => void; onNewIssue: (statusId: string) => void; showProject: boolean }
+type BoardProps = { lanes: BoardLane[]; onOpen: (issue: { identifier: string }) => void; onNewIssue: (statusId: string) => void; rows: RowOptions }
 
-export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'onOpen' | 'showProject'> }) {
+export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'onOpen' | 'rows'> }) {
   const { t } = useText()
   const { update } = useIssueEditor()
+  const moveToSprint = useSprintMove()
   const [over, setOver] = useState<string | null>(null)
-  const { lanes, onOpen, onNewIssue, showProject, grouped } = props
+  const { lanes, onOpen, onNewIssue, rows, grouped } = props
   const drop = (event: DragEvent, laneKey: string, statusId: string) => {
     event.preventDefault()
     setOver(null)
@@ -39,11 +42,13 @@ export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'o
     const issue = lanes.flatMap((lane) => lane.columns.flatMap((column) => column.issues)).find((candidate) => candidate.id === issueId)
     const lane = lanes.find((candidate) => candidate.section.key === laneKey)
     if (!issue || !lane) return
+    if (grouped?.groupBy === 'sprint' && isSprintSection(lane.section)) return moveToSprint(issue, lane.section, issue.statusId !== statusId ? { statusId } : {})
     const input: UpdateIssueInput = {}
     let parent: IssueSummary | null | undefined
     if (issue.statusId !== statusId) input.statusId = statusId
-    const from = grouped ? (issue[grouped.groupBy]?.id ?? NO_GROUP) : laneKey
-    if (grouped && from !== laneKey) {
+    const hierarchy = grouped && grouped.groupBy !== 'sprint' ? grouped.groupBy : undefined
+    const from = hierarchy ? (issue[hierarchy]?.id ?? NO_GROUP) : laneKey
+    if (hierarchy && from !== laneKey) {
       const refuse = (detail: string) => showToast({ tone: 'error', title: t('tracker.hierarchy.moveRefused', { identifier: issue.identifier }), detail })
       const header = lane.section.header
       if (!header) {
@@ -52,7 +57,7 @@ export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'o
         input.parentId = null
         parent = null
       } else {
-        const problem = hierarchyProblem(t, issue, { id: header.id, type: grouped.groupBy })
+        const problem = hierarchyProblem(t, issue, { id: header.id, type: hierarchy })
         if (problem) return refuse(problem)
         input.parentId = header.id
         parent = isSummary(header) ? header : undefined
@@ -84,7 +89,7 @@ export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'o
         {head}
         <ul className={cn('flex min-h-16 flex-col gap-1.5 px-2 pb-2', fill ? 'flex-1 overflow-y-auto' : 'pt-2')}>
           {issues.map((issue) => (
-            <BoardCard key={issue.id} issue={issue} onOpen={onOpen} showProject={showProject} />
+            <BoardCard key={issue.id} issue={issue} onOpen={onOpen} rows={rows} />
           ))}
         </ul>
       </section>
@@ -132,16 +137,20 @@ export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'o
           const count = lane.columns.reduce((sum, group) => sum + group.issues.length, 0)
           return (
             <section key={lane.section.key} aria-label={lane.section.header ? `${lane.section.header.identifier} ${lane.section.header.title}` : undefined} className="border-b border-line">
-              <GroupHeading
-                section={lane.section}
-                groupBy={grouped.groupBy}
-                count={count}
-                collapsed={collapsed}
-                onToggle={() => grouped.onToggle(lane.section.key)}
-                onOpen={onOpen}
-                onNew={() => grouped.onNewInGroup(lane.section)}
-                variant="lane"
-              />
+              {grouped.groupBy === 'sprint' && isSprintSection(lane.section) ? (
+                <SprintHeading section={lane.section} count={count} collapsed={collapsed} onToggle={() => grouped.onToggle(lane.section.key)} onNew={() => grouped.onNewInGroup(lane.section)} variant="lane" />
+              ) : grouped.groupBy !== 'sprint' ? (
+                <GroupHeading
+                  section={lane.section}
+                  groupBy={grouped.groupBy}
+                  count={count}
+                  collapsed={collapsed}
+                  onToggle={() => grouped.onToggle(lane.section.key)}
+                  onOpen={onOpen}
+                  onNew={() => grouped.onNewInGroup(lane.section)}
+                  variant="lane"
+                />
+              ) : null}
               <div id={`group-rows-${lane.section.key}`} hidden={collapsed} className="flex gap-3 px-4 pb-3 sm:px-6">
                 {collapsed ? null : lane.columns.map((group) => column(lane.section.key, group, null, false))}
               </div>
@@ -153,7 +162,7 @@ export function IssueBoard(props: BoardProps & { grouped?: Omit<GroupedProps, 'o
   )
 }
 
-function BoardCard({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen: (issue: IssueSummary) => void; showProject: boolean }) {
+function BoardCard({ issue, onOpen, rows }: { issue: IssueSummary; onOpen: (issue: { identifier: string }) => void; rows: RowOptions }) {
   const { labelById } = useReference()
   const focused = useUi((state) => state.focusedId === issue.id)
   const selected = useUi((state) => state.selectedIds.includes(issue.id))
@@ -211,13 +220,16 @@ function BoardCard({ issue, onOpen, showProject }: { issue: IssueSummary; onOpen
         {levelOf(issue.type) > 0 && issue.progress ? <ProgressBar progress={issue.progress} className="mt-1.5" /> : null}
         <div className="mt-2 flex flex-wrap items-center gap-1">
           <PriorityPicker issue={issue} />
-          {showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}
+          <EstimatePicker issue={issue} />
+          {rows.showSprint ? <SprintPicker issue={issue} /> : null}
+          {rows.showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}
           {issue.labelIds.map((id) => {
             const label = labelById.get(id)
             return label ? <LabelPill key={id} name={label.name} color={label.color} /> : null
           })}
           {issue.report ? <span className="truncate text-[11px] text-stone-400">{issue.report.environment}</span> : null}
         </div>
+        {rows.nested?.get(issue.id)?.length ? <NestedWork story={issue} items={rows.nested.get(issue.id)!} onOpen={onOpen} compact /> : null}
       </div>
     </li>
   )

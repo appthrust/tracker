@@ -1,15 +1,20 @@
-// Issue property pickers (status, priority, assignee, labels, type, project)
-// used as compact chips on list rows and board cards and as full rows in the
-// detail sidebar. Every pick is an optimistic PATCH; a refused edit rolls back
-// and says so in a toast.
+// Issue property pickers (status, priority, assignee, labels, type, project,
+// estimate, sprint) used as compact chips on list rows and board cards and as
+// full rows in the detail sidebar. Every pick is an optimistic PATCH; a
+// refused edit rolls back and says so in a toast. An epic takes neither an
+// estimate nor a sprint; sprints the membership rules forbid for this issue
+// (closed, a relative already there, its own sprint closed) are shown
+// disabled with the reason.
 import { useQuery } from '@tanstack/react-query'
-import { CircleDashed, Tag, UserRound } from 'lucide-react'
+import { CircleDashed, Ruler, Tag, UserRound } from 'lucide-react'
 import { useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react'
-import { childrenQuery, peopleQuery, useUpdateIssue, type IssueEdit } from '../../api/queries'
-import type { Issue, IssueSummary, IssueType, Person, Priority } from '../../api/tracker'
-import { useText } from '../../i18n'
+import { allIssuesQuery, childrenQuery, peopleQuery, sprintsQuery, useUpdateIssue, type IssueEdit } from '../../api/queries'
+import type { Issue, IssueSummary, IssueType, Person, Priority, Size, Sprint } from '../../api/tracker'
+import { useText, type Translate } from '../../i18n'
 import { canBeType, ISSUE_TYPES, parentLevelOf, PRIORITIES } from '../../model/issues'
+import { SIZES, sprintChoiceProblem } from '../../model/sprints'
 import { Avatar, cn, errorDetail, errorMessageId, Picker, showToast, type PickerOption } from '../../ui'
+import { EstimateBadge, SprintIcon } from '../sprints/sprint-ui'
 import { ProjectPicker, ProjectPill, ProjectSwatch } from './projects'
 import { useReference } from './use-reference'
 import { ColorDot, PriorityIcon, StatusIcon, TypeIcon } from './visuals'
@@ -264,5 +269,132 @@ export function LabelPill({ name, color }: { name: string; color: string }) {
       <ColorDot color={color} className="size-2" />
       <span className="truncate">{name}</span>
     </span>
+  )
+}
+
+/** Picker value of "no estimate" / "backlog". */
+export const NONE_VALUE = '__none'
+
+/** XS…XL plus "no estimate"; sizes only, never their points. */
+export function estimateOptions(t: Translate): PickerOption[] {
+  return [{ value: NONE_VALUE, label: t('tracker.estimate.none'), icon: <CircleDashed className="text-stone-400" /> }, ...SIZES.map((size) => ({ value: size, label: size, icon: <Ruler className="text-stone-400" /> }))]
+}
+
+export const estimateValue = (option: string): Size | null => (option === NONE_VALUE ? null : (option as Size))
+
+/** Chip: the size, or (on hover/focus) a faint "estimate" target. Row: the size or "No estimate". An epic shows that it takes none. */
+export function EstimatePicker({ issue, variant = 'chip' }: { issue: IssueSummary; variant?: ChipVariant }) {
+  const { t } = useText()
+  const { update } = useIssueEditor()
+  const name = issue.estimate ?? t('tracker.estimate.none')
+  if (issue.type === 'epic') {
+    return variant === 'chip' ? null : (
+      <p className="flex min-h-8 items-center gap-2 px-2 text-[13px] text-stone-400" title={t('tracker.estimate.epic')}>
+        <CircleDashed aria-hidden className="size-3.5 shrink-0" />
+        <span className="truncate">{t('tracker.estimate.none')}</span>
+        <span className="sr-only">{t('tracker.estimate.epic')}</span>
+      </p>
+    )
+  }
+  return (
+    <Picker
+      label={t('tracker.estimate.change')}
+      options={estimateOptions(t)}
+      selected={[issue.estimate ?? NONE_VALUE]}
+      onPick={(value) => {
+        const estimate = estimateValue(value)
+        if (estimate !== issue.estimate) update({ id: issue.id, input: { estimate } })
+      }}
+      empty={t('tracker.picker.empty')}
+      align={variant === 'chip' ? 'end' : 'start'}
+    >
+      {variant === 'chip' ? (
+        <Trigger variant="chip" label={`${t('tracker.property.estimate')}: ${name}`} className={cn('px-0.5', !issue.estimate && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100')}>
+          {issue.estimate ? <EstimateBadge size={issue.estimate} /> : <Ruler aria-hidden className="size-3.5 text-stone-400" />}
+        </Trigger>
+      ) : (
+        <Trigger variant="row" label={`${t('tracker.property.estimate')}: ${name}`}>
+          {issue.estimate ? <EstimateBadge size={issue.estimate} /> : <Ruler aria-hidden className="size-3.5 shrink-0 text-stone-400" />}
+          <span className={cn('truncate', !issue.estimate && 'text-stone-500')}>{issue.estimate ? '' : name}</span>
+        </Trigger>
+      )}
+    </Picker>
+  )
+}
+
+/**
+ * The open sprints (and their members, loaded while `enabled`, for the
+ * lineage rule) as picker options for `issues`: "Backlog" first, then active
+ * and planned sprints; a choice the rules forbid for any of them is disabled
+ * with the reason. A closed current sprint is listed (selected, frozen).
+ */
+export function useSprintOptions(issues: readonly IssueSummary[], enabled: boolean) {
+  const { t } = useText()
+  const sprints = useQuery(sprintsQuery).data ?? []
+  const open = sprints.filter((sprint) => sprint.state !== 'closed')
+  const members = useQuery({ ...allIssuesQuery({ sprint: open.map((sprint) => sprint.id) }, 'number'), enabled: enabled && open.length > 0 })
+  const reason = (sprint: Sprint | null) => {
+    const problem = issues.map((issue) => sprintChoiceProblem(issue, sprint, sprint ? (members.data?.items ?? []).filter((member) => member.sprint?.id === sprint.id) : [])).find(Boolean)
+    return problem ? t(`tracker.sprint.problem.${problem}`) : undefined
+  }
+  const closedCurrent = sprints.filter((sprint) => sprint.state === 'closed' && issues.some((issue) => issue.sprint?.id === sprint.id))
+  const options: PickerOption[] = [
+    { value: NONE_VALUE, label: t('tracker.sprint.backlog'), icon: <CircleDashed className="text-stone-400" />, disabled: Boolean(reason(null)), detail: reason(null) },
+    ...[...open, ...closedCurrent].map((sprint) => {
+      const why = reason(sprint)
+      return { value: sprint.id, label: sprint.name, icon: <SprintIcon state={sprint.state} />, disabled: Boolean(why), detail: why ?? t(`tracker.sprint.state.${sprint.state}`) }
+    }),
+  ]
+  return { options, sprints, loading: members.isFetching }
+}
+
+export const sprintValue = (option: string): string | null => (option === NONE_VALUE ? null : option)
+
+/** Chip: the sprint's name, or (on hover/focus) a faint target. Row: the sprint or "No sprint". An epic shows that it takes none. */
+export function SprintPicker({ issue, variant = 'chip' }: { issue: IssueSummary; variant?: ChipVariant }) {
+  const { t } = useText()
+  const { update } = useIssueEditor()
+  const [open, setOpen] = useState(false)
+  const { options } = useSprintOptions([issue], open)
+  const name = issue.sprint?.name ?? t('tracker.sprint.none')
+  if (issue.type === 'epic') {
+    return variant === 'chip' ? null : (
+      <p className="flex min-h-8 items-center gap-2 px-2 text-[13px] text-stone-400" title={t('tracker.sprint.problem.epic')}>
+        <SprintIcon />
+        <span className="truncate">{t('tracker.sprint.none')}</span>
+        <span className="sr-only">{t('tracker.sprint.problem.epic')}</span>
+      </p>
+    )
+  }
+  return (
+    <Picker
+      label={t('tracker.sprint.move')}
+      options={options}
+      selected={[issue.sprint?.id ?? NONE_VALUE]}
+      open={open}
+      onOpenChange={setOpen}
+      onPick={(value) => {
+        const sprintId = sprintValue(value)
+        if (sprintId !== (issue.sprint?.id ?? null)) update({ id: issue.id, input: { sprintId } })
+      }}
+      empty={t('tracker.picker.empty')}
+      align={variant === 'chip' ? 'end' : 'start'}
+    >
+      {variant === 'chip' ? (
+        <Trigger
+          variant="chip"
+          label={`${t('tracker.property.sprint')}: ${name}`}
+          className={cn('max-w-32 border border-line bg-white px-1.5 text-[11px]', !issue.sprint && 'border-dashed opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100')}
+        >
+          <SprintIcon state={issue.sprint?.state} />
+          {issue.sprint ? <span className="truncate">{issue.sprint.name}</span> : null}
+        </Trigger>
+      ) : (
+        <Trigger variant="row" label={`${t('tracker.property.sprint')}: ${name}`}>
+          <SprintIcon state={issue.sprint?.state} />
+          <span className={cn('truncate', !issue.sprint && 'text-stone-500')}>{name}</span>
+        </Trigger>
+      )}
+    </Picker>
   )
 }

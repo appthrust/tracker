@@ -35,7 +35,7 @@ func TestSeedPagingAndFilters(t *testing.T) {
 	require.NoError(t, database.InWorkspace(t.Context(), "pj-test", true, func(tx *Tx) error {
 		w, err := tx.Workspace()
 		require.NoError(t, err)
-		require.Equal(t, 36, w.IssueCount)
+		require.Equal(t, 40, w.IssueCount)
 		statuses, err := tx.Statuses()
 		require.NoError(t, err)
 		require.Len(t, statuses, 6)
@@ -46,7 +46,7 @@ func TestSeedPagingAndFilters(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, views, 3)
 		require.NoError(t, tx.Exec(`UPDATE tracker_issue SET created_at='2026-01-01T00:00:00Z',updated_at='2026-01-01T00:00:00Z'`))
-		for _, order := range []domain.Sort{domain.SortUpdated, domain.SortCreated, domain.SortNumber, domain.SortPriority} {
+		for _, order := range []domain.Sort{domain.SortUpdated, domain.SortCreated, domain.SortNumber, domain.SortPriority, domain.SortEstimate} {
 			seen := map[string]bool{}
 			cursor := ""
 			for {
@@ -63,7 +63,7 @@ func TestSeedPagingAndFilters(t *testing.T) {
 				}
 				cursor = *page.NextCursor
 			}
-			require.Len(t, seen, 36)
+			require.Len(t, seen, 40)
 		}
 		for _, filter := range []domain.Filter{{Type: []string{"bug"}}, {Assignee: []string{"me"}}, {Category: []string{"started"}}, {Q: "Dashboard"}, {Environment: []string{"local"}}, {Surface: []string{"apth"}}, {Label: []string{labels[0].ID}}, {Status: []string{statuses[0].ID}}, {Priority: []string{"urgent"}}, {CreatedAfter: "2025-01-01T00:00:00Z"}, {Parent: "none"}} {
 			page, err := tx.ListIssues(ListOptions{Filter: filter, Subject: "dev-alex"})
@@ -132,7 +132,7 @@ func TestMutationsAndIsolation(t *testing.T) {
 		require.Error(t, tx.DeleteStatus(statuses[1].ID))
 		require.Error(t, tx.DeleteStatus(statuses[5].ID))
 		key := "NEW"
-		_, err = tx.PatchWorkspace(&key, nil)
+		_, err = tx.PatchWorkspace(&key, nil, nil, nil)
 		require.NoError(t, err)
 		item, err = tx.Issue("new-1")
 		require.NoError(t, err)

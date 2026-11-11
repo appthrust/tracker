@@ -8,9 +8,9 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, ChevronsUpDown, CircleDashed, Plus, X } from 'lucide-react'
 import { Fragment, useState, type ReactNode } from 'react'
 import { childrenQuery, epicsQuery, issueSearchQuery, storiesQuery, useUpdateIssues } from '../../api/queries'
-import type { GroupBy, Issue, IssueRef, IssueSummary, IssueType } from '../../api/tracker'
+import type { Issue, IssueRef, IssueSummary, IssueType } from '../../api/tracker'
 import { useText, type Translate } from '../../i18n'
-import { canParent, isSummary, levelOf, parentLevelOf, type IssueSection } from '../../model/issues'
+import { canParent, isSummary, levelOf, parentLevelOf, type HierarchyGroupBy, type IssueSection } from '../../model/issues'
 import { paths } from '../../routes/paths'
 import { cn, errorDetail, errorMessageId, HrefLink, Picker, showToast, type PickerOption } from '../../ui'
 import { setUi } from '../ui-state'
@@ -286,7 +286,7 @@ export function GroupHeading({
   variant,
 }: {
   section: IssueSection
-  groupBy: Exclude<GroupBy, 'none'>
+  groupBy: HierarchyGroupBy
   count: number
   collapsed: boolean
   onToggle: () => void
@@ -366,7 +366,7 @@ export function GroupHeading({
 export function useBundling() {
   const { t } = useText()
   const updates = useUpdateIssues()
-  return (issues: readonly IssueSummary[], groupBy: Exclude<GroupBy, 'none'>, group: IssueSummary | null) => {
+  return (issues: readonly IssueSummary[], groupBy: HierarchyGroupBy, group: IssueSummary | null) => {
     const movable = group
       ? issues.filter((issue) => issue.parent?.id !== group.id && !hierarchyProblem(t, issue, group))
       : issues.filter((issue) => parentLevelOf(issue) === levelOf(groupBy))

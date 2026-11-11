@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Tracker API",
-    "version": "0.2.0",
+    "version": "0.1.10",
     "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID."
   },
   "servers": [
@@ -264,6 +264,19 @@
                     "type": "string",
                     "maxLength": 100,
                     "minLength": 1
+                  },
+                  "sprintLengthWeeks": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2
+                    ],
+                    "default": 1
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "default": "Asia/Tokyo",
+                    "description": "IANA timezone name"
                   }
                 },
                 "required": [],
@@ -3325,36 +3338,126 @@
             "in": "path",
             "required": true,
             "description": "Directory person id (not the OIDC subject).",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "v",
             "in": "query",
             "description": "Directory avatarVersion, used as a cache key, not a historical-image selector.",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Directory image bytes",
             "headers": {
-              "Cache-Control": { "schema": { "type": "string" }, "description": "private, max-age=86400 with v; private, no-cache otherwise. Not immutable." },
-              "ETag": { "schema": { "type": "string" }, "description": "Validator keyed by version and image content." },
-              "X-Content-Type-Options": { "schema": { "type": "string", "const": "nosniff" } }
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "private, max-age=86400 with v; private, no-cache otherwise. Not immutable."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Validator keyed by version and image content."
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "const": "nosniff"
+                }
+              }
             },
             "content": {
-              "image/png": { "schema": { "type": "string", "format": "binary" } },
-              "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
-              "image/webp": { "schema": { "type": "string", "format": "binary" } }
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           },
-          "304": { "description": "If-None-Match matches after authentication and upstream fetch." },
-          "400": { "description": "Invalid person id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "401": { "description": "Unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "403": { "description": "Directory denied access", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "404": { "description": "Directory, person or avatar absent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "502": { "description": "directory_avatar_unavailable: invalid content, oversized response or upstream failure", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "503": { "description": "Identity or Tracker store unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "304": {
+            "description": "If-None-Match matches after authentication and upstream fetch."
+          },
+          "400": {
+            "description": "Invalid person id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Directory denied access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Directory, person or avatar absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "directory_avatar_unavailable: invalid content, oversized response or upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity or Tracker store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -3436,6 +3539,883 @@
           }
         },
         "security": []
+      }
+    },
+    "/sprints": {
+      "get": {
+        "operationId": "listSprints",
+        "summary": "listSprints",
+        "description": "Authorization: any authenticated user. Active first, planned by startsOn, then closed newest first.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Sprint"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/SprintState"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createSprint",
+        "summary": "createSprint",
+        "description": "Authorization: any authenticated user. Defaults lengthWeeks to workspace setting, startsOn to day after latest non-closed endsOn or coming Monday, name to Sprint <number>. Overlap returns 409.",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SprintCreate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sprints/{id}": {
+      "get": {
+        "operationId": "getSprint",
+        "summary": "getSprint",
+        "description": "Authorization: any authenticated user. ",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "description": "Sprint ULID."
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchSprint",
+        "summary": "patchSprint",
+        "description": "Authorization: any authenticated user. Only planned sprints may change dates; otherwise 409. Overlap returns 409.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SprintPatch"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "description": "Sprint ULID."
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteSprint",
+        "summary": "deleteSprint",
+        "description": "Authorization: Admin. Only planned sprints; otherwise 409. Members return to backlog.",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "description": "Sprint ULID."
+          }
+        ]
+      }
+    },
+    "/sprints/{id}/start": {
+      "post": {
+        "operationId": "startSprint",
+        "summary": "startSprint",
+        "description": "Authorization: any authenticated user. 409 unless planned with no other active sprint. Future startsOn becomes today, keeping length; overlap returns 409.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "description": "Sprint ULID."
+          }
+        ]
+      }
+    },
+    "/sprints/{id}/close": {
+      "post": {
+        "operationId": "closeSprint",
+        "summary": "closeSprint",
+        "description": "Authorization: any authenticated user. 409 unless active. Invalid destination returns 400 at moveIncompleteTo. Freeze ledger, then move unfinished scope to planned destination or backlog. Lineage conflicts go to backlog; done members stay.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sprint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SprintClose"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "description": "Sprint ULID."
+          }
+        ]
+      }
+    },
+    "/sprints/{id}/burndown": {
+      "get": {
+        "operationId": "getBurndown",
+        "summary": "getBurndown",
+        "description": "Authorization: any authenticated user. Workspace timezone day boundaries; project filters issues by current project. Pre-start ledger rows count on day one; final closed day includes close. Future days omit actuals.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Burndown"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "description": "Sprint ULID."
+          },
+          {
+            "name": "unit",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Unit"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                {
+                  "const": "none"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/velocity": {
+      "get": {
+        "operationId": "getVelocity",
+        "summary": "getVelocity",
+        "description": "Authorization: any authenticated user. Closed sprint done at close, scope at start. Project filters issues by current project.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Velocity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "unit",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Unit"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                {
+                  "const": "none"
+                }
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 26,
+              "default": 8
+            }
+          }
+        ]
       }
     }
   },
@@ -3538,6 +4518,19 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "sprintLengthWeeks": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "default": 1
+          },
+          "timezone": {
+            "type": "string",
+            "default": "Asia/Tokyo",
+            "description": "IANA timezone name"
           }
         },
         "required": [
@@ -3546,7 +4539,9 @@
           "name",
           "issueCount",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "sprintLengthWeeks",
+          "timezone"
         ],
         "additionalProperties": false
       },
@@ -3769,7 +4764,8 @@
           "updated",
           "created",
           "priority",
-          "number"
+          "number",
+          "estimate"
         ]
       },
       "GroupBy": {
@@ -3777,7 +4773,8 @@
         "enum": [
           "none",
           "epic",
-          "story"
+          "story",
+          "sprint"
         ],
         "default": "none"
       },
@@ -3792,11 +4789,30 @@
           "completed": {
             "type": "integer",
             "minimum": 0
+          },
+          "points": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "completed": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "total",
+              "completed"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
           "total",
-          "completed"
+          "completed",
+          "points"
         ],
         "additionalProperties": false
       },
@@ -4008,6 +5024,26 @@
                 "type": "null"
               }
             ]
+          },
+          "estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Size"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SprintRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4032,7 +5068,9 @@
           "attachmentCount",
           "createdAt",
           "updatedAt",
-          "completedAt"
+          "completedAt",
+          "estimate",
+          "sprint"
         ],
         "additionalProperties": false
       },
@@ -4206,6 +5244,26 @@
             "items": {
               "$ref": "#/components/schemas/IssueRef"
             }
+          },
+          "estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Size"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SprintRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4234,7 +5292,9 @@
           "description",
           "children",
           "blocks",
-          "blockedBy"
+          "blockedBy",
+          "estimate",
+          "sprint"
         ],
         "additionalProperties": false
       },
@@ -4367,7 +5427,9 @@
               "due",
               "report",
               "attachment",
-              "deleted"
+              "deleted",
+              "estimate",
+              "sprint"
             ]
           },
           "from": {},
@@ -4546,6 +5608,23 @@
           },
           "parent": {
             "type": "string"
+          },
+          "sprint": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                {
+                  "const": "active"
+                },
+                {
+                  "const": "none"
+                }
+              ]
+            }
           }
         },
         "required": [],
@@ -4739,6 +5818,27 @@
                 "type": "null"
               }
             ]
+          },
+          "estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Size"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprintId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4837,6 +5937,27 @@
               "type": "string",
               "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
             }
+          },
+          "estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Size"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sprintId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [],
@@ -4908,6 +6029,379 @@
         },
         "required": [],
         "additionalProperties": false
+      },
+      "Size": {
+        "type": "string",
+        "enum": [
+          "XS",
+          "S",
+          "M",
+          "L",
+          "XL"
+        ],
+        "description": "Fixed points: XS=1, S=2, M=3, L=5, XL=8; null counts zero."
+      },
+      "SprintState": {
+        "type": "string",
+        "enum": [
+          "planned",
+          "active",
+          "closed"
+        ]
+      },
+      "Unit": {
+        "type": "string",
+        "enum": [
+          "points",
+          "issues"
+        ],
+        "default": "points"
+      },
+      "Tally": {
+        "type": "object",
+        "properties": {
+          "scopePoints": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "scopeIssues": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "donePoints": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "doneIssues": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "scopePoints",
+          "scopeIssues",
+          "donePoints",
+          "doneIssues"
+        ],
+        "additionalProperties": false
+      },
+      "SprintRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SprintState"
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "name",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "Sprint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SprintState"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "lengthWeeks": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "endsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current": {
+            "$ref": "#/components/schemas/Tally"
+          },
+          "commitment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tally"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "name",
+          "state",
+          "goal",
+          "lengthWeeks",
+          "startsOn",
+          "endsOn",
+          "startedAt",
+          "closedAt",
+          "current",
+          "commitment",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "SprintCreate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "goal": {
+            "type": "string",
+            "description": "Valid UTF-8, at most 4096 bytes",
+            "maxLength": 4096
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "lengthWeeks": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "SprintPatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "goal": {
+            "type": "string",
+            "description": "Valid UTF-8, at most 4096 bytes",
+            "maxLength": 4096
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "lengthWeeks": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "SprintClose": {
+        "type": "object",
+        "properties": {
+          "moveIncompleteTo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "moveIncompleteTo"
+        ],
+        "additionalProperties": false
+      },
+      "BurndownPoint": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "scope": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "done": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ideal": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "day",
+          "ideal"
+        ],
+        "additionalProperties": false,
+        "description": "Future days omit scope, done, remaining. Ideal is rounded to two decimals and flat on weekends."
+      },
+      "Burndown": {
+        "type": "object",
+        "properties": {
+          "sprint": {
+            "$ref": "#/components/schemas/SprintRef"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/Unit"
+          },
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BurndownPoint"
+            }
+          }
+        },
+        "required": [
+          "sprint",
+          "unit",
+          "today",
+          "points"
+        ],
+        "additionalProperties": false
+      },
+      "VelocityEntry": {
+        "type": "object",
+        "properties": {
+          "sprint": {
+            "$ref": "#/components/schemas/SprintRef"
+          },
+          "lengthWeeks": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "committed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "sprint",
+          "lengthWeeks",
+          "committed",
+          "completed"
+        ],
+        "additionalProperties": false
+      },
+      "Velocity": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "$ref": "#/components/schemas/Unit"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VelocityEntry"
+            }
+          },
+          "averagePerWeek": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "unit",
+          "items",
+          "averagePerWeek"
+        ],
+        "additionalProperties": false,
+        "description": "Most recent limit closed sprints, oldest first. Average of completed/lengthWeeks over the last three closed sprints, rounded to two decimals, or null."
       }
     }
   }

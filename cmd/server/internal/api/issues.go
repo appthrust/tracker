@@ -58,7 +58,7 @@ func (a *API) assignee(s *request, sub *string) (*domain.Person, error) {
 }
 func (a *API) issueCreate(s *request) (any, int, error) {
 	var input store.IssueCreate
-	if err := decode(s, &input, "assigneeSub", "projectId", "parentId", "dueOn", "report"); err != nil {
+	if err := decode(s, &input, "assigneeSub", "projectId", "parentId", "dueOn", "report", "estimate", "sprintId"); err != nil {
 		return nil, 0, err
 	}
 	assignee, err := a.assignee(s, input.AssigneeSub)
@@ -70,7 +70,7 @@ func (a *API) issueCreate(s *request) (any, int, error) {
 }
 func (a *API) issuePatch(s *request) (any, int, error) {
 	var input store.IssuePatch
-	if err := decode(s, &input, "assigneeSub", "projectId", "parentId", "dueOn", "report"); err != nil {
+	if err := decode(s, &input, "assigneeSub", "projectId", "parentId", "dueOn", "report", "estimate", "sprintId"); err != nil {
 		return nil, 0, err
 	}
 	var assignee *domain.Person

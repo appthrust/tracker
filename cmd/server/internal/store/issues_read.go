@@ -19,7 +19,8 @@ const issueColumns = `i.id,w.key,i.number,i.title,i.type,i.priority,i.status_id,
 	to_char(i.due_on,'YYYY-MM-DD'),i.report,
 	(SELECT count(*) FROM tracker_comment c WHERE c.issue_id=i.id AND c.deleted_at IS NULL),
 	(SELECT count(*) FROM tracker_attachment a WHERE a.issue_id=i.id),i.created_at,i.updated_at,i.completed_at,i.project_id,
-	lineage.epic,lineage.story,rollup.progress`
+	lineage.epic,lineage.story,rollup.progress,i.estimate,
+	(SELECT jsonb_build_object('id',sp.id,'number',sp.number,'name',sp.name,'state',CASE WHEN sp.closed_at IS NOT NULL THEN 'closed' WHEN sp.started_at IS NOT NULL THEN 'active' ELSE 'planned' END) FROM tracker_sprint sp WHERE sp.id=i.sprint_id)`
 const issueFrom = ` FROM tracker_issue i JOIN tracker_workspace w ON w.id=i.workspace_id JOIN tracker_status s ON s.id=i.status_id `
 
 // Lateral recursive queries keep detail and list projections identical without
@@ -44,19 +45,23 @@ const issueHierarchy = `
 	) lineage ON true
 	LEFT JOIN LATERAL (
 		WITH RECURSIVE descendants AS (
-			SELECT c.id,c.type,c.status_id FROM tracker_issue c
+			SELECT c.id,c.type,c.status_id,c.estimate FROM tracker_issue c
 			WHERE i.type IN ('epic','story') AND c.workspace_id=i.workspace_id AND c.parent_id=i.id AND c.deleted_at IS NULL
 			UNION
-			SELECT c.id,c.type,c.status_id FROM tracker_issue c JOIN descendants d ON c.parent_id=d.id
+			SELECT c.id,c.type,c.status_id,c.estimate FROM tracker_issue c JOIN descendants d ON c.parent_id=d.id
 			WHERE c.workspace_id=i.workspace_id AND c.deleted_at IS NULL
 		)
 		SELECT CASE WHEN i.type IN ('epic','story') THEN jsonb_build_object(
 			'total',count(*) FILTER (WHERE s.category<>'canceled'),
-			'completed',count(*) FILTER (WHERE s.category='completed')) END AS progress
+			'completed',count(*) FILTER (WHERE s.category='completed'),
+			'points',jsonb_build_object(
+				'total',coalesce(sum(CASE d.estimate WHEN 'XS' THEN 1 WHEN 'S' THEN 2 WHEN 'M' THEN 3 WHEN 'L' THEN 5 WHEN 'XL' THEN 8 ELSE 0 END) FILTER (WHERE s.category<>'canceled'),0),
+				'completed',coalesce(sum(CASE d.estimate WHEN 'XS' THEN 1 WHEN 'S' THEN 2 WHEN 'M' THEN 3 WHEN 'L' THEN 5 WHEN 'XL' THEN 8 ELSE 0 END) FILTER (WHERE s.category='completed'),0))) END AS progress
 		FROM descendants d JOIN tracker_status s ON s.id=d.status_id
 		WHERE d.type NOT IN ('epic','story')
 	) rollup ON true `
 const prioritySQL = `(CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END)`
+const estimateSQL = `(CASE i.estimate WHEN 'XL' THEN 0 WHEN 'L' THEN 1 WHEN 'M' THEN 2 WHEN 'S' THEN 3 WHEN 'XS' THEN 4 ELSE 5 END)`
 
 type scanner interface{ Scan(...any) error }
 
@@ -64,12 +69,12 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	var item domain.Issue
 	var key string
 	var sub, name, due sql.NullString
-	var parent, report, epic, story, progress []byte
+	var parent, report, epic, story, progress, sprint []byte
 	item.LabelIDs = []string{}
 	item.Children = []domain.IssueRef{}
 	item.Blocks = []domain.IssueRef{}
 	item.BlockedBy = []domain.IssueRef{}
-	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &epic, &story, &progress, &item.Description)
+	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &epic, &story, &progress, &item.Estimate, &sprint, &item.Description)
 	if err != nil {
 		return item, err
 	}
@@ -83,7 +88,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	for _, field := range []struct {
 		data   []byte
 		target any
-	}{{parent, &item.Parent}, {report, &item.Report}, {epic, &item.Epic}, {story, &item.Story}, {progress, &item.Progress}} {
+	}{{parent, &item.Parent}, {report, &item.Report}, {epic, &item.Epic}, {story, &item.Story}, {progress, &item.Progress}, {sprint, &item.Sprint}} {
 		if len(field.data) > 0 {
 			if err := json.Unmarshal(field.data, field.target); err != nil {
 				return item, err
@@ -165,12 +170,13 @@ type issueCursor struct {
 	At       time.Time   `json:"at"`
 	Number   int64       `json:"number"`
 	Priority int         `json:"priority"`
+	Estimate int         `json:"estimate"`
 }
 
 func parseCursor(raw string, sort domain.Sort) (issueCursor, error) {
 	var cursor issueCursor
 	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil || json.Unmarshal(data, &cursor) != nil || cursor.Sort != sort || !domain.ValidID(cursor.ID) || cursor.At.IsZero() || cursor.Number < 1 || cursor.Priority < 0 || cursor.Priority > 4 {
+	if err != nil || json.Unmarshal(data, &cursor) != nil || cursor.Sort != sort || !domain.ValidID(cursor.ID) || cursor.At.IsZero() || cursor.Number < 1 || cursor.Priority < 0 || cursor.Priority > 4 || cursor.Estimate < 0 || cursor.Estimate > 5 {
 		return cursor, invalid("Invalid cursor")
 	}
 	return cursor, nil
@@ -246,6 +252,16 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		}
 		clauses = append(clauses, "("+condition+")")
 	}
+	if len(f.Sprint) > 0 {
+		condition := "i.sprint_id=ANY(" + bind(pq.Array(f.Sprint)) + ")"
+		if slices.Contains(f.Sprint, "none") {
+			condition += " OR i.sprint_id IS NULL"
+		}
+		if slices.Contains(f.Sprint, "active") {
+			condition += " OR i.sprint_id IN (SELECT id FROM tracker_sprint WHERE workspace_id=i.workspace_id AND started_at IS NOT NULL AND closed_at IS NULL)"
+		}
+		clauses = append(clauses, "("+condition+")")
+	}
 	for _, field := range []struct {
 		column string
 		values []string
@@ -278,6 +294,8 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		order = prioritySQL + " ASC,i.updated_at DESC,i.id DESC"
 	case domain.SortNumber:
 		order = "i.number ASC,i.id ASC"
+	case domain.SortEstimate:
+		order = estimateSQL + " ASC,i.updated_at DESC,i.id DESC"
 	}
 	if options.Cursor != "" {
 		c, err := parseCursor(options.Cursor, options.Sort)
@@ -290,6 +308,9 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		case domain.SortPriority:
 			p, at, id := bind(c.Priority), bind(c.At), bind(c.ID)
 			clauses = append(clauses, "("+prioritySQL+">"+p+" OR ("+prioritySQL+"="+p+" AND (i.updated_at,i.id)<("+at+","+id+")))")
+		case domain.SortEstimate:
+			size, at, id := bind(c.Estimate), bind(c.At), bind(c.ID)
+			clauses = append(clauses, "("+estimateSQL+">"+size+" OR ("+estimateSQL+"="+size+" AND (i.updated_at,i.id)<("+at+","+id+")))")
 		default:
 			column := "i.updated_at"
 			if options.Sort == domain.SortCreated {
@@ -328,7 +349,11 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 				break
 			}
 		}
-		data, err := json.Marshal(issueCursor{Sort: options.Sort, ID: last.ID, At: at, Number: last.Number, Priority: priority})
+		estimate := 5
+		if last.Estimate != nil {
+			estimate = slices.Index([]string{"XL", "L", "M", "S", "XS"}, *last.Estimate)
+		}
+		data, err := json.Marshal(issueCursor{Sort: options.Sort, ID: last.ID, At: at, Number: last.Number, Priority: priority, Estimate: estimate})
 		if err != nil {
 			return page, err
 		}

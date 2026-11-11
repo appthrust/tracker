@@ -32,6 +32,8 @@ const issue = (number: number, patch: Partial<IssueSummary> = {}): IssueSummary 
   createdAt: `2026-10-${String(number).padStart(2, '0')}T00:00:00.000Z`,
   updatedAt: `2026-10-${String(number).padStart(2, '0')}T00:00:00.000Z`,
   completedAt: null,
+  estimate: null,
+  sprint: null,
   ...patch,
 })
 
@@ -46,6 +48,9 @@ describe('issue rules', () => {
     expect([...items].sort(compareIssues('created')).map((item) => item.number)).toEqual([3, 2, 1])
     expect([...items].sort(compareIssues('priority')).map((item) => item.number)).toEqual([2, 1, 3])
     expect([...items].sort(compareIssues('number')).map((item) => item.number)).toEqual([1, 2, 3])
+    // estimate: XL → XS, unestimated last, ties by updated desc.
+    const sized = [issue(1, { estimate: 'S' }), issue(2), issue(3, { estimate: 'XL' }), issue(4, { estimate: 'S' }), issue(5, { estimate: 'XS' })]
+    expect([...sized].sort(compareIssues('estimate')).map((item) => item.number)).toEqual([3, 4, 1, 5, 2])
   })
 
   test('filters AND across facets and OR within one; me/none resolve against the caller', () => {
@@ -78,6 +83,14 @@ describe('issue rules', () => {
     expect(matchesFilter(mine, { epic: ['none', 'id-31'], story: ['none'] }, context)).toBe(true)
     expect(matchesFilter(bundled, { story: ['id-34'] }, context)).toBe(false)
     expect(matchesFilter(bundled, { epic: ['id-31'], story: ['id-33', 'id-34'] }, context)).toBe(true)
+    // sprint: ids, `active` (resolved by the caller's context) and `none` (the backlog).
+    const planned = issue(6, { sprint: { id: 's-5', number: 5, name: 'Sprint 5', state: 'planned' } })
+    const running = issue(7, { sprint: { id: 's-4', number: 4, name: 'Sprint 4', state: 'active' } })
+    expect(matchesFilter(planned, { sprint: ['s-5'] }, context)).toBe(true)
+    expect(matchesFilter(running, { sprint: ['active'] }, { ...context, activeSprintId: 's-4' })).toBe(true)
+    expect(matchesFilter(running, { sprint: ['active'] }, { ...context, activeSprintId: null })).toBe(false)
+    expect(matchesFilter(planned, { sprint: ['active', 'none'] }, { ...context, activeSprintId: 's-4' })).toBe(false)
+    expect(matchesFilter(mine, { sprint: ['none'] }, context)).toBe(true)
     expect(compactFilter({ status: [], q: '', label: ['ux'] })).toEqual({ label: ['ux'] })
   })
 
@@ -106,9 +119,9 @@ describe('issue rules', () => {
   })
 
   test('grouping: sections by epic/story ordered by number, "none" last; the grouping type and higher levels head sections, never rows', () => {
-    const epicA = issue(31, { type: 'epic', progress: { total: 2, completed: 1 } })
-    const storyA = issue(33, { type: 'story', parent: ref(31), epic: ref(31), progress: { total: 1, completed: 0 } })
-    const emptyEpic = issue(32, { type: 'epic', progress: { total: 0, completed: 0 } })
+    const epicA = issue(31, { type: 'epic', progress: { total: 2, completed: 1, points: { total: 0, completed: 0 } } })
+    const storyA = issue(33, { type: 'story', parent: ref(31), epic: ref(31), progress: { total: 1, completed: 0, points: { total: 0, completed: 0 } } })
+    const emptyEpic = issue(32, { type: 'epic', progress: { total: 0, completed: 0, points: { total: 0, completed: 0 } } })
     const rows = [
       issue(9, { epic: ref(40), story: null }),
       issue(2, { epic: ref(31), story: ref(33) }),
@@ -139,11 +152,17 @@ describe('issue rules', () => {
     expect(groupIssues([], 'story')).toEqual([{ key: 'none', header: null, issues: [] }])
   })
 
-  test('progress tally: work items only, canceled left out of the total, completed counted', () => {
+  test('progress tally: work items only, canceled left out of the total, completed counted; points sum the sizes the same way', () => {
     const canceled: Status = { id: 'gone', name: 'Canceled', category: 'canceled', position: 9, color: 'gray' }
-    const items = [issue(1, { statusId: 'done' }), issue(2), issue(3, { statusId: 'gone' }), issue(4, { type: 'story', statusId: 'done' }), issue(5, { type: 'bug', statusId: 'doing' })]
-    expect(tallyProgress(items, [...statuses, canceled])).toEqual({ total: 3, completed: 1 })
-    expect(tallyProgress([], statuses)).toEqual({ total: 0, completed: 0 })
+    const items = [
+      issue(1, { statusId: 'done', estimate: 'M' }),
+      issue(2, { estimate: 'XL' }),
+      issue(3, { statusId: 'gone', estimate: 'L' }),
+      issue(4, { type: 'story', statusId: 'done', estimate: 'S' }),
+      issue(5, { type: 'bug', statusId: 'doing' }),
+    ]
+    expect(tallyProgress(items, [...statuses, canceled])).toEqual({ total: 3, completed: 1, points: { total: 11, completed: 3 } })
+    expect(tallyProgress([], statuses)).toEqual({ total: 0, completed: 0, points: { total: 0, completed: 0 } })
   })
 
   test('attachments come from the timeline: added in `to`, removed in `from`', () => {

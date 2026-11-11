@@ -23,13 +23,15 @@ func (a *API) workspacePatch(s *request) (any, int, error) {
 		return nil, 0, err
 	}
 	var input struct {
-		Key  *string `json:"key"`
-		Name *string `json:"name"`
+		Key               *string `json:"key"`
+		Name              *string `json:"name"`
+		SprintLengthWeeks *int    `json:"sprintLengthWeeks"`
+		Timezone          *string `json:"timezone"`
 	}
 	if err := decode(s, &input); err != nil {
 		return nil, 0, err
 	}
-	item, err := s.tx.PatchWorkspace(input.Key, input.Name)
+	item, err := s.tx.PatchWorkspace(input.Key, input.Name, input.SprintLengthWeeks, input.Timezone)
 	return item, 200, err
 }
 func (a *API) statusList(s *request) (any, int, error) {
