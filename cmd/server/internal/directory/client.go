@@ -52,7 +52,8 @@ func (c *Client) Enrich(ctx context.Context, bearer string, snapshot domain.Pers
 	return snapshot
 }
 func (c *Client) list(ctx context.Context, bearer string, query url.Values) ([]domain.Person, error) {
-	if c == nil || c.links == nil {
+	// Without a caller bearer there is no authority to ask Directory with.
+	if c == nil || c.links == nil || bearer == "" {
 		return nil, link.ErrAbsent
 	}
 	key := cacheKey{sha256.Sum256([]byte(bearer)), query.Encode()}

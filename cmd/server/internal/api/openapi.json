@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Tracker API",
-    "version": "0.1.10",
-    "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID."
+    "version": "0.1.11",
+    "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID. The bearer is the signed-in user's token or an Access Key assertion (audience tracker; scope tracker:read for GET, tracker:write otherwise)."
   },
   "servers": [
     {
@@ -5699,7 +5699,10 @@
             "enum": [
               "invalid",
               "unauthenticated",
+              "raw_key_not_accepted",
               "forbidden",
+              "insufficient_scope",
+              "key_subject",
               "not_found",
               "conflict",
               "tracker_store_unavailable",

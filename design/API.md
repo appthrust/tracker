@@ -7,11 +7,13 @@ emits `openapi.json` from these shapes) and the SPA mock
 Conventions (SDK `httpx`): success bodies are the resource or
 `{ "items": [...], "nextCursor": string|null }`; errors are
 `{ "error": "<code>", "message": "...", "issues"?: [{path, message}] }` with
-codes `invalid` (400), `unauthenticated` (401), `forbidden` (403),
+codes `invalid` (400), `unauthenticated` (401), `raw_key_not_accepted` (401),
+`forbidden` (403), `insufficient_scope` (403), `key_subject` (403),
 `not_found` (404), `conflict` (409), `directory_avatar_unavailable` (502),
 `tracker_store_unavailable` (503), `identity_unavailable` (503). Timestamps
-RFC 3339 UTC. IDs are ULIDs unless noted. All routes require the edge bearer;
-`GET /openapi.json` does not.
+RFC 3339 UTC. IDs are ULIDs unless noted. All routes require a bearer: the
+signed-in user's token forwarded by the edge, or an Access Key assertion
+([Access Keys](#access-keys-v0111)); `GET /openapi.json` does not.
 
 ## Shapes
 
@@ -427,3 +429,42 @@ with ledgers that yield velocities 18, 21, 24 points, one active two-week
 sprint on its fourth day with a scope increase and one cancellation, one
 planned sprint; about half of the seeded work items carry a size, spread
 over all five.
+
+## Access Keys (v0.1.11)
+
+Scripts, CLIs and coding agents call this API without a browser session. The
+mechanism is the platform's Access Keys
+(`appthrust/platform` `design/platform/access-keys/README.md`); Tracker adds no
+credential of its own.
+
+`catalog/entry.yaml` declares the space: audience `tracker`, key prefix `trk`,
+scopes `tracker:read` and `tracker:write`, and `bearerPassThrough` so the edge
+verifies a bearer instead of starting a sign-in. The platform projects
+`TRACKER_ACCESS_AUDIENCE` and `PLATFORM_ACCESS_ISSUER`.
+
+```sh
+apth access-keys create --project <project> --space tracker --scope tracker:read --scope tracker:write
+printf %s "$KEY" | apth access-keys exchange --project <project>   # assertion, valid ≤ 5 min
+curl -H "Authorization: Bearer <assertion>" https://tracker.<project-host>/api/tracker/v1/issues
+```
+
+Rules (`cmd/server/internal/api/keys.go`, `keyActor`):
+
+| Rule | Result when violated |
+| --- | --- |
+| The raw key is exchanged first; only the assertion is a bearer | 401 `raw_key_not_accepted` |
+| The assertion's Project equals `PLATFORM_PROJECT_ID`. The audience is the same in every Project, so this claim is the tenant boundary | 401 `unauthenticated` |
+| The key's subject is a user. Every write records a person; component, external and cluster keys have none | 403 `key_subject` |
+| `GET` routes need `tracker:read`; every other method needs `tracker:write`. Neither implies the other | 403 `insufficient_scope` |
+| The key acts as its user (`sub` = the subject id) with role `Viewer`. The Platform role is not looked up, so Admin-only routes stay with signed-in users | 403 `forbidden` |
+| `GET /people/{id}/avatar` is Directory's data under Directory's authority | 403 `key_subject` |
+
+What the user's key creates belongs to that user: `reporter: ['me']` in the
+SPA lists it. The assertion carries no name or email and is never forwarded to
+Directory, so a key write stores `name = sub` as the person snapshot and
+`GET /people` answers `source: 'unavailable'`; a signed-in reader still sees
+the Directory name. `GET /me` returns `{ sub, name: sub, role: 'Viewer', isAdmin: false }`.
+
+Each mutation request made with a key writes one `tracker access key mutation:`
+log line (method, path, key name, subject, edge `X-Request-Id`) before
+authorization. The timeline does not distinguish key writes from the user's own.

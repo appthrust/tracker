@@ -12,6 +12,18 @@ spec:
     - email
     tokenClaims:
     - groups
+    bearerPassThrough: true
+    accessKeys:
+      audience: tracker
+      audienceEnv: TRACKER_ACCESS_AUDIENCE
+      keyPrefix: trk
+      scopes:
+      - name: tracker:read
+        description: Read issues, epics, comments, projects, sprints and views
+      - name: tracker:write
+        description: Create and edit issues, epics, comments, projects and sprints as the key's user
+      defaultTTL: 720h0m0s
+      maxTTL: 8760h0m0s
   components:
   - defaultValues:
       livenessProbePath: /healthz

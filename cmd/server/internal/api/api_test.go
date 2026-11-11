@@ -33,7 +33,8 @@ func token(subject string) string {
 	claims, _ := json.Marshal(map[string]string{"sub": subject, "email": subject + "@example.test", "name": subject})
 	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(claims) + "."
 }
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessTrusting(t, identity.Trust{}) }
+func newHarnessTrusting(t *testing.T, trust identity.Trust) *harness {
 	database, _ := testutil.Database(t, store.Open)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/projects/pj-test/access" {
@@ -52,7 +53,7 @@ func newHarness(t *testing.T) *harness {
 	require.NoError(t, err)
 	_, _, err = auth.Authenticate(t.Context(), issuer.Bearer(t))
 	require.NoError(t, err)
-	auth, err = identity.New(identity.Trust{})
+	auth, err = identity.New(trust)
 	require.NoError(t, err)
 	server := httptest.NewServer(New(database, auth, platformclient.New(upstream.URL, "pj-test"), directory.New(nil, ""), "pj-test"))
 	t.Cleanup(server.Close)
