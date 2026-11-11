@@ -2,22 +2,28 @@
 // `queryOptions()` / `infiniteQueryOptions()` factory so route loaders
 // (`ensureQueryData`) and components share one key and fetcher. Freshness:
 // every query refetches every 15 s while the tab is visible and on window
-// focus (no push in v1). Issue edits (status, priority, assignee, labels,
+// focus (no push in v1) — the inbox, live runs on cards and the run block
+// included. Issue edits (status, priority, assignee, labels,
 // project, parent, …) are optimistic: lists and the open issue change at once
 // and roll back on failure. Sprints, burndown and velocity share one key
 // prefix, refreshed by every issue write (estimates, statuses and membership
-// move the ledger).
+// move the ledger). Agent work (answers, canceled runs) refreshes issues,
+// timelines, the inbox and the agents list together.
 import { infiniteQueryOptions, QueryClient, queryOptions, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import { compactFilter, levelOf } from '../model/issues'
 import { sprintRef } from '../model/sprints'
 import {
   trackerApi,
   TrackerApiError,
+  type Actor,
+  type AnswerInput,
+  type CreateAgentInput,
   type CreateIssueInput,
   type CreateProjectInput,
   type CreateSprintInput,
   type CreateViewInput,
   type Filter,
+  type InboxAck,
   type Issue,
   type IssuePage,
   type IssueSummary,
@@ -25,11 +31,13 @@ import {
   type LabelColor,
   type Person,
   type Project,
+  type RequestListParams,
   type Sort,
   type Sprint,
   type SprintRef,
   type StatusCategory,
   type Unit,
+  type UpdateAgentInput,
   type UpdateIssueInput,
   type UpdateProjectInput,
   type UpdateSprintInput,
@@ -62,6 +70,9 @@ export const TRACKER_KEY = ['tracker'] as const
 const ISSUES_KEY = [...TRACKER_KEY, 'issues'] as const
 const ISSUE_KEY = [...TRACKER_KEY, 'issue'] as const
 const SPRINTS_KEY = [...TRACKER_KEY, 'sprints'] as const
+const INBOX_KEY = [...TRACKER_KEY, 'inbox'] as const
+const AGENTS_KEY = [...TRACKER_KEY, 'agents'] as const
+const REQUESTS_KEY = [...TRACKER_KEY, 'requests'] as const
 
 export const meQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'me'], queryFn: () => trackerApi.me(), staleTime: 60_000 })
 export const workspaceQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'workspace'], queryFn: () => trackerApi.workspace.get() })
@@ -143,6 +154,14 @@ export const timelineQuery = (issueId: string) => queryOptions({ queryKey: [...T
 export const peopleQuery = (q: string) =>
   queryOptions({ queryKey: [...TRACKER_KEY, 'people', q.trim()], queryFn: () => trackerApi.people(q.trim() || undefined), staleTime: 60_000, refetchInterval: false })
 
+/** Every agent, disabled ones included: history keeps showing their names; pickers offer active ones only. */
+export const agentsQuery = queryOptions({ queryKey: [...AGENTS_KEY, 'list'], queryFn: () => trackerApi.agents.list({ includeDisabled: true }) })
+/** The caller's queue (open requests first); the sidebar count reads the same query. */
+export const inboxQuery = queryOptions({ queryKey: INBOX_KEY, queryFn: () => trackerApi.inbox.list() })
+export const requestsQuery = (params: RequestListParams) => queryOptions({ queryKey: [...REQUESTS_KEY, params], queryFn: () => trackerApi.requests.list(params) })
+/** One run (a review shows its summary and links). */
+export const runQuery = (id: string) => queryOptions({ queryKey: [...TRACKER_KEY, 'run', id], queryFn: () => trackerApi.runs.get(id) })
+
 // --- optimistic issue edits --------------------------------------------------
 
 /**
@@ -151,7 +170,7 @@ export const peopleQuery = (q: string) =>
  * derived `epic`/`story` follow at once (the server recomputes them), and
  * `sprint` the ref of the sprint `sprintId` names.
  */
-export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateIssueInput, assignee?: Person | null, parent?: IssueSummary | null, sprint?: SprintRef | null): T {
+export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateIssueInput, assignee?: Actor | null, parent?: IssueSummary | null, sprint?: SprintRef | null, delegator?: Person | null): T {
   const next: T = { ...issue }
   if (input.title !== undefined) next.title = input.title
   if (input.type !== undefined) next.type = input.type
@@ -163,7 +182,12 @@ export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateI
   if (input.projectId !== undefined) next.projectId = input.projectId
   if (input.estimate !== undefined) next.estimate = input.estimate
   if (input.sprintId !== undefined) next.sprint = input.sprintId === null ? null : (sprint ?? issue.sprint)
-  if (input.assigneeSub !== undefined) next.assignee = input.assigneeSub === null ? null : (assignee ?? issue.assignee)
+  if (input.assigneeSub !== undefined && input.assigneeSub !== (issue.assignee?.sub ?? null)) {
+    next.assignee = input.assigneeSub === null ? null : (assignee ?? issue.assignee)
+    // A new assignee ends the agent's run (the server cancels it as `reassigned`); an agent assignee gets its delegator.
+    next.activeRun = null
+    next.delegator = next.assignee?.kind === 'agent' ? (delegator ?? issue.delegator) : null
+  }
   if (input.parentId === null) Object.assign(next, { parent: null, epic: null, story: null })
   else if (input.parentId !== undefined && parent?.id === input.parentId) {
     const ref = { id: parent.id, identifier: parent.identifier, title: parent.title, statusId: parent.statusId }
@@ -185,18 +209,19 @@ function patchCaches(client: QueryClient, id: string, update: <T extends IssueSu
   client.setQueriesData<Issue>({ queryKey: ISSUE_KEY }, (data) => (data && data.id === id ? update(data) : data))
 }
 
-export type IssueEdit = { id: string; input: UpdateIssueInput; assignee?: Person | null; parent?: IssueSummary | null }
+/** `assignee`: the picked actor for display; `delegator`: who the agent will answer to (the signed-in person) when the pick is an agent. */
+export type IssueEdit = { id: string; input: UpdateIssueInput; assignee?: Actor | null; parent?: IssueSummary | null; delegator?: Person | null }
 
 export function useUpdateIssue() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ id, input }: IssueEdit) => trackerApi.issues.update(id, input),
-    onMutate: async ({ id, input, assignee, parent }) => {
+    onMutate: async ({ id, input, assignee, parent, delegator }) => {
       await Promise.all([client.cancelQueries({ queryKey: ISSUES_KEY }), client.cancelQueries({ queryKey: ISSUE_KEY })])
       const lists = client.getQueriesData<IssueLists>({ queryKey: ISSUES_KEY })
       const details = client.getQueriesData<Issue>({ queryKey: ISSUE_KEY })
       const picked = input.sprintId ? client.getQueryData<Sprint[]>(sprintsQuery.queryKey)?.find((sprint) => sprint.id === input.sprintId) : undefined
-      patchCaches(client, id, (issue) => applyIssuePatch(issue, input, assignee, parent, picked ? sprintRef(picked) : undefined))
+      patchCaches(client, id, (issue) => applyIssuePatch(issue, input, assignee, parent, picked ? sprintRef(picked) : undefined, delegator))
       return { lists, details }
     },
     onError: (_error, _edit, snapshot) => {
@@ -206,7 +231,7 @@ export function useUpdateIssue() {
       const { description: _description, children: _children, blocks: _blocks, blockedBy: _blockedBy, ...summary } = issue
       patchCaches(client, issue.id, (cached) => ('description' in cached ? ({ ...cached, ...issue } as typeof cached) : ({ ...cached, ...summary } as typeof cached)))
     },
-    onSettled: (_issue, _error, { id }) => {
+    onSettled: (_issue, _error, { id, input }) => {
       void client.invalidateQueries({ queryKey: ISSUES_KEY })
       void client.invalidateQueries({ queryKey: ISSUE_KEY })
       void client.invalidateQueries({ queryKey: [...TRACKER_KEY, 'timeline', id] })
@@ -214,6 +239,11 @@ export function useUpdateIssue() {
       void client.invalidateQueries({ queryKey: projectsQuery.queryKey })
       // Estimates, statuses and membership move sprint tallies and charts.
       void client.invalidateQueries({ queryKey: SPRINTS_KEY })
+      // Reassignment cancels runs and withdraws requests; an agent's counts and inboxes move.
+      if (input.assigneeSub !== undefined) {
+        void client.invalidateQueries({ queryKey: INBOX_KEY })
+        void client.invalidateQueries({ queryKey: AGENTS_KEY })
+      }
     },
   })
 }
@@ -223,7 +253,7 @@ export function useUpdateIssues() {
   const update = useUpdateIssue()
   return {
     ...update,
-    run: (ids: string[], input: UpdateIssueInput, assignee?: Person | null, parent?: IssueSummary | null) => Promise.allSettled(ids.map((id) => update.mutateAsync({ id, input, assignee, parent }))),
+    run: (ids: string[], input: UpdateIssueInput, assignee?: Actor | null, parent?: IssueSummary | null, delegator?: Person | null) => Promise.allSettled(ids.map((id) => update.mutateAsync({ id, input, assignee, parent, delegator }))),
   }
 }
 
@@ -369,5 +399,67 @@ export function useSprintMutations() {
     start: useMutation({ mutationFn: (id: string) => trackerApi.sprints.start(id), onSuccess }),
     close: useMutation({ mutationFn: ({ id, moveIncompleteTo }: { id: string; moveIncompleteTo: string | null }) => trackerApi.sprints.close(id, moveIncompleteTo), onSuccess }),
     remove: useMutation({ mutationFn: (id: string) => trackerApi.sprints.remove(id), onSuccess }),
+  }
+}
+
+// --- agents and their work -------------------------------------------------------
+
+/** Answers, withdrawals and canceled runs move issues (status, run, request counts), timelines, the inbox and agents' counts. */
+const invalidateAgentWork = (client: QueryClient) =>
+  Promise.all([
+    client.invalidateQueries({ queryKey: ISSUES_KEY }),
+    client.invalidateQueries({ queryKey: ISSUE_KEY }),
+    client.invalidateQueries({ queryKey: [...TRACKER_KEY, 'timeline'] }),
+    client.invalidateQueries({ queryKey: INBOX_KEY }),
+    client.invalidateQueries({ queryKey: AGENTS_KEY }),
+    client.invalidateQueries({ queryKey: REQUESTS_KEY }),
+    client.invalidateQueries({ queryKey: [...TRACKER_KEY, 'run'] }),
+    client.invalidateQueries({ queryKey: SPRINTS_KEY }),
+  ])
+
+export type AnswerEdit = { id: string; input: AnswerInput; /** One per click: a repeated send replays the first answer. */ idempotencyKey: string }
+
+export function useAnswerRequest() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input, idempotencyKey }: AnswerEdit) => trackerApi.requests.answer(id, input, idempotencyKey),
+    onSettled: () => void invalidateAgentWork(client),
+  })
+}
+
+export function useWithdrawRequest() {
+  const client = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => trackerApi.requests.withdraw(id), onSettled: () => void invalidateAgentWork(client) })
+}
+
+export function useCancelRun() {
+  const client = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => trackerApi.runs.cancel(id), onSettled: () => void invalidateAgentWork(client) })
+}
+
+/** Acknowledging drops the items from the inbox at once; a failure brings them back. */
+export function useAckInbox() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: InboxAck) => trackerApi.inbox.ack(input),
+    onMutate: async (input) => {
+      await client.cancelQueries({ queryKey: INBOX_KEY })
+      const before = client.getQueryData(inboxQuery.queryKey)
+      client.setQueryData(inboxQuery.queryKey, (items) =>
+        (items ?? []).filter((item) => !(item.kind === 'answer' && input.answers?.includes(item.request.id)) && !(item.kind === 'mention' && input.mentions?.includes(item.comment.id)))
+      )
+      return { before }
+    },
+    onError: (_error, _input, snapshot) => client.setQueryData(inboxQuery.queryKey, snapshot?.before),
+    onSettled: () => void client.invalidateQueries({ queryKey: INBOX_KEY }),
+  })
+}
+
+export function useAgentMutations() {
+  const client = useQueryClient()
+  return {
+    create: useMutation({ mutationFn: (input: CreateAgentInput) => trackerApi.agents.create(input), onSuccess: () => void client.invalidateQueries({ queryKey: AGENTS_KEY }) }),
+    // Disabling cancels the agent's runs: every board and inbox moves.
+    update: useMutation({ mutationFn: ({ id, input }: { id: string; input: UpdateAgentInput }) => trackerApi.agents.update(id, input), onSuccess: () => void invalidateAgentWork(client) }),
   }
 }

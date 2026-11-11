@@ -56,8 +56,9 @@ Run the server with `go run ./cmd/server --static-dir web/dist`. Configure:
 
 - `PLATFORM_API_URL`, `PLATFORM_PROJECT_ID`, and the platform OIDC identity settings.
 - `TRACKER_DATABASE_URL` (or `DATABASE_URL`) for PostgreSQL. `TRACKER_DEV_SEED=1` enables
-  development seed data on an empty database: 40 issues, three closed one-week sprints
-  with 18/21/24-point velocities, an active two-week sprint, and a planned sprint.
+  development seed data on an empty database: 42 issues, three closed one-week sprints
+  with 18/21/24-point velocities, an active two-week sprint, a planned sprint, and
+  four agents with live/stalled runs, review requests, answers and mentions.
 - `TRACKER_PUBLIC_URL` for the HTTPS browser origin.
 - `TRACKER_DIRECTORY_URL` and `TRACKER_DIRECTORY_PUBLIC_URL` for optional Directory links.
 - `TRACKER_STATIC_DIR` or `--static-dir` to override `/srv/tracker`.
@@ -90,11 +91,60 @@ The same 401 expires the edge's session cookies for this host
 real sign-in and receives a newly minted token instead of replaying the refused
 one. The SSO session and other apps' sessions are not touched.
 
-Scripts and agents use an Access Key instead of a browser session: create a key
-in the `tracker` space (`tracker:read`, `tracker:write`), exchange it with
-`apth access-keys exchange`, and send the assertion as the bearer. The key acts
-as its user with the Viewer role. The rules are in
-[`design/API.md`](design/API.md#access-keys-v0111).
+Scripts use an Access Key instead of a browser session: create a key in the
+`tracker` space (`tracker:read`, `tracker:write`), exchange it with
+`apth access-keys exchange`, and send the assertion as the bearer. User-subject
+keys act as their user with the Viewer role. External-subject keys act as an
+active registered agent whose immutable handle equals the subject.
+The rules are in [`design/API.md`](design/API.md#access-keys-v0111).
+
+### Agent protocol (0.1.13)
+
+An Admin registers agents through `POST /api/tracker/v1/agents`, with a handle,
+display name, description and accountable person owner. Keys are issued and
+revoked by the platform, never by Tracker. Disabling an agent rejects all its
+keys, cancels its non-terminal runs and withdraws its open requests. Names and
+owners may change; handles cannot. Existing issue attribution is not rewritten.
+
+Agents poll `/inbox` and `/events`. Initialize the event cursor without `after`,
+then poll with `after=next`; sequence allocation and the represented write
+commit together. Inbox assignments include Backlog and the agent's own live
+run, which it should resume. A run has a ten-minute lease; stalled runs cannot
+heartbeat or finish. A new start closes the expired run and its requests.
+
+Completion defaults to `review`: successful finish opens a review to the
+delegator (else owner); the person's approval completes the issue and updates
+the sprint ledger. Admins may set `agentCompletion: "direct"` on the workspace
+to allow agents to set completed statuses themselves. Finishing a run alone
+never changes issue status. Agents may edit fields as assignee or reporter;
+comments, attachments and questions/approvals can involve any issue.
+
+`GET /api/tracker/v1/agent-guide` serves the full protocol as Markdown; its route
+inventory uses the handler registration table. The public `openapi.json` includes
+all agent shapes and routes. Mentions currently resolve registered `@handle`
+agents only, not Directory people. Acknowledge answers by request ID and mentions
+by comment ID through `/inbox/ack`; retained mentions preserve acknowledgement
+when a comment is edited.
+
+For safe retries, all JSON/non-multipart POST routes accept `Idempotency-Key`
+(1–128 characters). Responses, including handler errors, are stored for 24 hours
+per actor and key, atomically with successful writes. Replay requires identical
+method, URI, content type and body bytes; a different request returns 409.
+Authentication failures are not cached. Multipart attachment upload is excluded.
+Use a fresh key for each new heartbeat. `PATCH /issues/{id}` accepts
+`expectedUpdatedAt` and returns 409 when it no longer matches.
+
+The real-server `hack/smoke.sh` also runs `hack/agents-smoke.sh` (signed assertion
+fixture, isolated Postgres schema, no live services). With a disposable database:
+
+```sh
+DATABASE_URL='postgres://postgres:pg@127.0.0.1:55443/postgres?sslmode=disable' \
+  /home/vagrant/.codex/skills/serialize-vm-tests/scripts/serialize-vm-tests -- bash hack/smoke.sh
+```
+
+The smoke verifies the collaboration loop, gap-free events for every semantic
+write, replay/conflicts, mention acknowledgement, disabling and direct completion.
+Both smoke scripts remove their schema, temporary files and processes on exit.
 
 PostgreSQL integration tests are opt-in: they skip when both
 `BUILTIN_APPSERVER_TEST_DATABASE_URL` and `BUILDER_CONSOLE_TEST_DATABASE_URL` are unset.

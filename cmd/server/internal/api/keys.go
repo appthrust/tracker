@@ -38,5 +38,5 @@ func keyActor(principal accesskey.Principal, project string, mutation bool) (dom
 	if subject.Kind == accesskey.SubjectExternal {
 		kind = "agent"
 	}
-	return domain.Actor{Person: domain.Person{Sub: subject.ID, Name: subject.ID}, Role: "Viewer", Kind: kind, Key: true}, nil
+	return domain.Actor{Person: domain.Person{Sub: subject.ID, Name: subject.ID}, Role: "Viewer", Kind: kind, Key: true, Scopes: principal.Scopes}, nil
 }

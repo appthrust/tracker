@@ -251,7 +251,7 @@ func TestSprintDatesDefaultsAndIsolation(t *testing.T) {
 	var id string
 	require.NoError(t, db.InWorkspace(t.Context(), "dates", true, func(tx *Tx) error {
 		weeks := 2
-		_, err := tx.PatchWorkspace(nil, nil, &weeks, nil)
+		_, err := tx.PatchWorkspace(nil, nil, &weeks, nil, nil)
 		require.NoError(t, err)
 		a, err := tx.CreateSprint(SprintCreate{})
 		require.NoError(t, err)
@@ -404,7 +404,7 @@ func TestSprintSeedFixture(t *testing.T) {
 	require.NoError(t, db.InWorkspace(t.Context(), "seed", false, func(tx *Tx) error {
 		workspace, err := tx.Workspace()
 		require.NoError(t, err)
-		require.Equal(t, 40, workspace.IssueCount)
+		require.Equal(t, 42, workspace.IssueCount)
 		sprints, err := tx.Sprints("")
 		require.NoError(t, err)
 		require.Len(t, sprints, 5)
@@ -543,7 +543,7 @@ func TestSprintStartOverlapAndDST(t *testing.T) {
 	db.Now = func() time.Time { return now }
 	require.NoError(t, db.InWorkspace(t.Context(), "dst", true, func(tx *Tx) error {
 		timezone := "America/New_York"
-		_, err := tx.PatchWorkspace(nil, nil, nil, &timezone)
+		_, err := tx.PatchWorkspace(nil, nil, nil, &timezone, nil)
 		require.NoError(t, err)
 		a, err := tx.CreateSprint(sprintInput("2026-10-31", 1))
 		require.NoError(t, err)

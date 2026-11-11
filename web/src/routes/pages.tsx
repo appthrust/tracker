@@ -3,6 +3,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { createRoute, notFound, redirect } from '@tanstack/react-router'
 import { issueQuery, sprintQuery, viewsQuery } from '../api/queries'
+import { InboxPage } from '../features/agents/inbox-page'
 import { IssuePage } from '../features/issues/issue-detail'
 import { EpicsPage } from '../features/issues/epics-page'
 import { IssuesPage } from '../features/issues/issues-page'
@@ -76,6 +77,33 @@ export const currentSprintRoute = createRoute({
   },
 })
 
+export const atWorkRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/agents-at-work',
+  validateSearch: validateListSearch,
+  component: function AtWorkRoute() {
+    return <IssuesPage page={{ kind: 'atWork' }} path={paths.atWork} search={atWorkRoute.useSearch()} />
+  },
+})
+
+export const waitingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/waiting-for-people',
+  validateSearch: validateListSearch,
+  component: function WaitingRoute() {
+    return <IssuesPage page={{ kind: 'waiting' }} path={paths.waiting} search={waitingRoute.useSearch()} />
+  },
+})
+
+export const inboxRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/inbox',
+  validateSearch: (search: Record<string, unknown>): { issue?: string } => (typeof search.issue === 'string' && search.issue ? { issue: search.issue } : {}),
+  component: function InboxRoute() {
+    return <InboxPage search={inboxRoute.useSearch()} />
+  },
+})
+
 export const viewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/views/$viewId',
@@ -138,6 +166,9 @@ export const routeTree = rootRoute.addChildren([
   sprintsRoute,
   sprintRoute,
   currentSprintRoute,
+  atWorkRoute,
+  waitingRoute,
+  inboxRoute,
   viewRoute,
   issueRoute,
   reportRoute,
@@ -146,4 +177,5 @@ export const routeTree = rootRoute.addChildren([
   settingsTab('statuses'),
   settingsTab('labels'),
   settingsTab('projects'),
+  settingsTab('agents'),
 ])

@@ -34,7 +34,6 @@ type Agent struct {
 	Handle       string     `json:"handle"`
 	Name         string     `json:"name"`
 	Description  string     `json:"description"`
-	KeySubject   string     `json:"keySubject"`
 	Owner        Person     `json:"owner"`
 	Disabled     bool       `json:"disabled"`
 	ActiveRuns   int        `json:"activeRuns"`
@@ -106,6 +105,19 @@ type InboxItem struct {
 	Kind    string        `json:"kind"`
 	Request *Request      `json:"request,omitempty"`
 	Issue   *IssueSummary `json:"issue,omitempty"`
+	Comment *Comment      `json:"comment,omitempty"`
+}
+
+func (i InboxItem) MarshalJSON() ([]byte, error) {
+	type item InboxItem
+	if i.Kind == "mention" {
+		return json.Marshal(struct {
+			Kind    string   `json:"kind"`
+			Comment *Comment `json:"comment"`
+			Issue   IssueRef `json:"issue"`
+		}{i.Kind, i.Comment, IssueRef{ID: i.Issue.ID, Identifier: i.Issue.Identifier, Title: i.Issue.Title, StatusID: i.Issue.StatusID}})
+	}
+	return json.Marshal(item(i))
 }
 
 type ActionableInput struct {
@@ -117,5 +129,14 @@ type ActionableInput struct {
 }
 
 func Actionable(in ActionableInput) bool {
-	return !in.Deleted && (in.Category == "unstarted" || in.Category == "started") && !in.OtherActiveRun && !in.OwnOpenRequest && !in.UnfinishedBlock
+	return !in.Deleted && (in.Category == "backlog" || in.Category == "unstarted" || in.Category == "started") && !in.OtherActiveRun && !in.OwnOpenRequest && !in.UnfinishedBlock
+}
+
+type Event struct {
+	Seq   int64     `json:"seq"`
+	At    time.Time `json:"at"`
+	Issue *IssueRef `json:"issue"`
+	Actor Person    `json:"actor"`
+	Type  string    `json:"type"`
+	Data  any       `json:"data"`
 }

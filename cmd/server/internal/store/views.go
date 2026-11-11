@@ -119,7 +119,7 @@ func (t *Tx) PatchView(id string, input ViewPatch, actor domain.Actor) (domain.V
 		item.Sort = *input.Sort
 	}
 	if input.Shared != nil {
-		if *input.Shared && actor.Role != "Admin" {
+		if !domain.Can(actor, domain.CreateView, domain.Target{Shared: *input.Shared}) {
 			return item, httpx.Forbidden()
 		}
 		item.Shared = *input.Shared
@@ -150,7 +150,7 @@ func (t *Tx) DeleteView(id string, actor domain.Actor) error {
 	if err != nil {
 		return err
 	}
-	if !domain.Can(actor, domain.ManageView, domain.Target{OwnerSub: item.Owner.Sub, Shared: item.Shared}) {
+	if !domain.Can(actor, domain.DeleteView, domain.Target{OwnerSub: item.Owner.Sub, Shared: item.Shared}) {
 		return httpx.Forbidden()
 	}
 	return t.Exec(`DELETE FROM tracker_view WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID)

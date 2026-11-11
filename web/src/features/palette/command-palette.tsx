@@ -1,7 +1,7 @@
-// ⌘/Ctrl+K command palette: navigate (lists, epics, sprints, the current
-// sprint, "Reported by me", projects, views, report, settings, issues by
+// ⌘/Ctrl+K command palette: navigate (inbox, lists, epics, sprints, the current
+// sprint, the agent views, "Reported by me", projects, views, report, settings, issues by
 // identifier or title) and, when issues are focused or X-selected, change
-// their status, priority, assignee, labels, project (typing a new name
+// their status, priority, assignee (people or agents), labels, project (typing a new name
 // offers to create that project and move them into it), estimate or sprint,
 // or put them in an epic or story (issues the hierarchy or the sprint rules
 // forbid are skipped and counted in the summary toast). E opens it straight
@@ -9,18 +9,18 @@
 // back, Escape closes.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, BookMarked, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Ruler, Settings, SignalHigh, SquareKanban, Tag, UserRound, UserRoundPen, Zap } from 'lucide-react'
+import { ArrowRight, BookMarked, Bookmark, Bot, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Hand, Inbox, Languages, List, Plus, Ruler, Settings, SignalHigh, SquareKanban, Tag, UserRound, UserRoundPen, Zap } from 'lucide-react'
 import { Dialog as RDialog } from 'radix-ui'
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { epicsQuery, issueSearchQuery, storiesQuery, useProjectMutations, useUpdateIssues } from '../../api/queries'
-import type { IssueSummary, Person, UpdateIssueInput } from '../../api/tracker'
+import type { Actor, IssueSummary, Person, UpdateIssueInput } from '../../api/tracker'
 import { setLanguage, useText } from '../../i18n'
 import { PRIORITIES } from '../../model/issues'
 import { SIZES, sprintChoiceProblem } from '../../model/sprints'
 import { listHref, paths } from '../../routes/paths'
 import { cn, errorDetail, errorMessageId, Kbd, showToast, splitHref } from '../../ui'
 import { useBundling } from '../issues/hierarchy'
-import { assigneeValue, useSprintOptions, usePeopleOptions } from '../issues/properties'
+import { assigneeEdit, assigneeValue, useSprintOptions, usePeopleOptions } from '../issues/properties'
 import { nextProjectColor, ProjectSwatch } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
 import { ColorDot, PriorityIcon, StatusIcon, TypeIcon } from '../issues/visuals'
@@ -38,7 +38,7 @@ export function CommandPalette() {
 function Palette() {
   const { t, language } = useText()
   const navigate = useNavigate()
-  const { statuses, labels, views, projects, activeProjects } = useReference()
+  const { statuses, labels, views, projects, activeProjects, me } = useReference()
   const createProject = useProjectMutations().create
   const context = useUi((state) => state.context)
   // Snapshot the targets at open: commands keep applying to them while the list re-renders.
@@ -62,8 +62,8 @@ function Palette() {
     void navigate({ to, search: params } as never)
     return 'close' as const
   }
-  const apply = (input: Parameters<typeof updates.run>[1], assignee?: Person | null) => {
-    void updates.run(current.map((issue) => issue.id), input, assignee).then((results) => {
+  const apply = (input: Parameters<typeof updates.run>[1], assignee?: Actor | null, delegator?: Person | null) => {
+    void updates.run(current.map((issue) => issue.id), input, assignee, undefined, delegator).then((results) => {
       const failure = results.find((result) => result.status === 'rejected')
       if (failure && failure.status === 'rejected') {
         const known = errorMessageId(failure.reason)
@@ -123,7 +123,12 @@ function Palette() {
           icon: option.icon,
           hint: option.hint,
           checked: current.length > 0 && current.every((issue) => (issue.assignee?.sub ?? null) === sub),
-          run: () => (apply({ assigneeSub: sub }, sub ? (people.people.get(sub) ?? null) : null), 'close'),
+          run: () => {
+            // Every target gets the same assignee (and, for an agent, the signed-in person as delegator).
+            const { input, assignee, delegator } = assigneeEdit(current[0]?.id ?? '', sub, people.people, me)
+            apply(input, assignee, delegator)
+            return 'close' as const
+          },
         }
       })
     if (page === 'labels')
@@ -265,12 +270,15 @@ function Palette() {
     const nav = t('tracker.palette.groupNavigate')
     list.push(
       { id: 'nav-new', group: nav, label: t('tracker.nav.newIssue'), icon: <Plus />, hint: 'C', run: () => (setUi({ newIssue: {} }), 'close') },
+      { id: 'nav-inbox', group: nav, label: t('tracker.palette.goInbox'), icon: <Inbox />, hint: 'G I', run: go(paths.inbox) },
       { id: 'nav-report', group: nav, label: t('tracker.nav.report'), icon: <Bug />, hint: '⇧R', run: go(paths.report) },
       { id: 'nav-issues', group: nav, label: t('tracker.nav.issues'), icon: <List />, run: go(paths.home) },
       { id: 'nav-board', group: nav, label: t('tracker.nav.board'), icon: <Columns3 />, run: go(paths.board) },
       { id: 'nav-epics', group: nav, label: t('tracker.palette.goEpics'), icon: <Zap />, run: go(paths.epics) },
       { id: 'nav-sprints', group: nav, label: t('tracker.palette.goSprints'), icon: <SprintIcon />, hint: 'G S', run: go(paths.sprints) },
       { id: 'nav-current-sprint', group: nav, label: t('tracker.palette.goCurrentSprint'), icon: <SquareKanban />, run: go(paths.currentSprint) },
+      { id: 'nav-at-work', group: nav, label: t('tracker.nav.atWork'), icon: <Bot />, run: go(paths.atWork) },
+      { id: 'nav-waiting', group: nav, label: t('tracker.nav.waiting'), icon: <Hand />, run: go(paths.waiting) },
       { id: 'nav-reported', group: nav, label: t('tracker.palette.goReported'), icon: <UserRoundPen />, run: go(paths.reported) },
       ...activeProjects.map((project) => ({
         id: `nav-project-${project.id}`,
@@ -284,6 +292,7 @@ function Palette() {
       { id: 'nav-settings-statuses', group: nav, label: t('tracker.settings.statuses'), icon: <Settings />, run: go(paths.settingsStatuses) },
       { id: 'nav-settings-labels', group: nav, label: t('tracker.property.labels'), icon: <Settings />, run: go(paths.settingsLabels) },
       { id: 'nav-settings-projects', group: nav, label: t('tracker.project.sidebar'), icon: <Settings />, run: go(paths.settingsProjects) },
+      { id: 'nav-settings-agents', group: nav, label: t('tracker.settings.agents'), icon: <Settings />, run: go(paths.settingsAgents) },
       {
         id: 'nav-language',
         group: nav,

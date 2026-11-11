@@ -96,7 +96,10 @@ func (s *Store) SeedDev(ctx context.Context, workspace string) error {
 				return err
 			}
 		}
-		return tx.seedSprints(admin.Person, statuses)
+		if err := tx.seedSprints(admin.Person, statuses); err != nil {
+			return err
+		}
+		return tx.seedAgents(people, statuses, projects[1].ID)
 	})
 }
 

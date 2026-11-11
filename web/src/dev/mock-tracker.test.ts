@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { Attachment, Burndown, Issue, IssuePage, IssueSummary, Label, Project, Sprint, Status, TimelineItem, Velocity, View } from '../api/tracker'
+import type { Agent, Attachment, Burndown, InboxItem, Issue, IssuePage, IssueSummary, Label, Project, Run, Sprint, Status, TimelineItem, TrackerEvent, TrackerRequest, Velocity, View } from '../api/tracker'
 import { addDays, dayInZone } from '../model/sprints'
 import { MOCK_PEOPLE, trackerRoutes } from './mock-tracker'
 
 const BASE = '/api/tracker/v1'
 
-async function call(method: string, path: string, body?: unknown) {
+async function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
   const url = new URL(`${BASE}${path}`, 'http://mock.test')
-  const init: RequestInit = { method }
+  const init: RequestInit = { method, headers: { ...headers } }
   if (body instanceof FormData) init.body = body
   else if (body !== undefined) {
     init.body = JSON.stringify(body)
-    init.headers = { 'Content-Type': 'application/json' }
+    init.headers = { ...headers, 'Content-Type': 'application/json' }
   }
   const response = await trackerRoutes(new Request(url, init), url)
   if (!response) throw new Error(`unhandled ${method} ${path}`)
@@ -35,8 +35,8 @@ beforeEach(async () => {
 
 describe('tracker mock: fixture shared with the server dev seed', () => {
   test('caller, workspace, statuses, labels, views and people', async () => {
-    expect((await call('GET', '/me')).body).toEqual({ ...MOCK_PEOPLE.alex, role: 'Admin', isAdmin: true })
-    expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 40, sprintLengthWeeks: 1, timezone: 'Asia/Tokyo' })
+    expect((await call('GET', '/me')).body).toEqual({ ...MOCK_PEOPLE.alex, kind: 'person', role: 'Admin', isAdmin: true })
+    expect((await call('GET', '/workspace')).body).toMatchObject({ key: 'APT', issueCount: 42, sprintLengthWeeks: 1, timezone: 'Asia/Tokyo', agentCompletion: 'review' })
     expect((await statuses()).map((status) => [status.name, status.category, status.color, status.position])).toEqual([
       ['Backlog', 'backlog', 'gray', 0],
       ['Todo', 'unstarted', 'gray', 1],
@@ -89,7 +89,8 @@ describe('tracker mock: fixture shared with the server dev seed', () => {
 
 describe('tracker mock: issues', () => {
   test('filter, sort and cursor paging; malformed parameters are 400 invalid', async () => {
-    expect((await list(filterQuery({ type: ['bug'] }))).items).toHaveLength(10)
+    // Ten seeded bugs plus APT-42, reported by astra.
+    expect((await list(filterQuery({ type: ['bug'] }))).items).toHaveLength(11)
     expect((await list(filterQuery({ assignee: ['me'] }))).items.every((issue) => issue.assignee?.sub === 'dev-alex')).toBe(true)
     expect((await list(filterQuery({ category: ['started'] }))).items).toHaveLength(16)
     expect((await list(filterQuery({ q: 'cluster' }))).items.map((issue) => issue.identifier).sort()).toEqual(['APT-10', 'APT-28', 'APT-3'])
@@ -100,9 +101,9 @@ describe('tracker mock: issues', () => {
       seen.push(...page.items.map((issue) => issue.identifier))
       cursor = page.nextCursor
     } while (cursor)
-    expect(seen).toHaveLength(40)
+    expect(seen).toHaveLength(42)
     expect(seen[0]).toBe('APT-1')
-    expect(new Set(seen).size).toBe(40)
+    expect(new Set(seen).size).toBe(42)
     const urgentFirst = (await list('?sort=priority')).items
     expect(urgentFirst.slice(0, 6).every((issue) => issue.priority === 'urgent')).toBe(true)
     for (const bad of ['?filter=%7Bnope', filterQuery({ colour: ['red'] }), filterQuery({ type: ['initiative'] }), filterQuery({ epic: ['APT-31'] }), filterQuery({ story: 'none' }), '?sort=title', '?limit=500']) {
@@ -132,7 +133,7 @@ describe('tracker mock: issues', () => {
     expect((await call('POST', '/__mock/caller', { sub: 'dev-riley', name: 'Riley Park' })).status).toBe(200)
     expect((await list(filterQuery({ reporter: ['me'] }))).items).toEqual([])
     const created = (await call('POST', '/issues', { title: 'First report', type: 'bug', report: { environment: 'craftsman', surface: 'dashboard' } })).body as Issue
-    expect(created.reporter).toEqual({ sub: 'dev-riley', name: 'Riley Park' })
+    expect(created.reporter).toEqual({ sub: 'dev-riley', name: 'Riley Park', kind: 'person' })
     expect((await list(filterQuery({ reporter: ['me'] }))).items.map((issue) => issue.identifier)).toEqual([created.identifier])
 
     const subjects = Array.from({ length: 21 }, (_, i) => `dev-${i}`)
@@ -159,9 +160,9 @@ describe('tracker mock: issues', () => {
     expect((await call('POST', '/issues', { title: 'x', type: 'task', report: { environment: 'local', surface: 'apth' } })).status).toBe(400)
     const created = await call('POST', '/issues', { title: '  Board drag fails  ', type: 'bug', priority: 'high', report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0', steps: '' } })
     expect(created.status).toBe(201)
-    expect(created.body).toMatchObject({ identifier: 'APT-41', title: 'Board drag fails', statusId: (await statusNamed('Backlog')).id, reporter: MOCK_PEOPLE.alex, report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0' }, estimate: null, sprint: null })
+    expect(created.body).toMatchObject({ identifier: 'APT-43', title: 'Board drag fails', statusId: (await statusNamed('Backlog')).id, reporter: { ...MOCK_PEOPLE.alex, kind: 'person' }, report: { environment: 'craftsman', surface: 'dashboard', version: '0.1.0' }, estimate: null, sprint: null })
     expect(created.body.report.steps).toBeUndefined()
-    expect((await call('GET', '/workspace')).body.issueCount).toBe(41)
+    expect((await call('GET', '/workspace')).body.issueCount).toBe(43)
   })
 
   test('PATCH: one activity per changed field, completion time, links and cycle checks', async () => {
@@ -210,7 +211,7 @@ describe('tracker mock: issues', () => {
     await as('dev-alex', 'Admin')
     expect((await call('DELETE', `/issues/${issue.id}`)).status).toBe(204)
     expect((await call('GET', '/issues/APT-4')).status).toBe(404)
-    expect((await list()).items).toHaveLength(39)
+    expect((await list()).items).toHaveLength(41)
   })
 })
 
@@ -289,7 +290,7 @@ describe('tracker mock: epics and stories', () => {
     expect(inEpic.map((issue) => issue.number)).toContain(33)
     expect((await list(`${filterQuery({ story: [story.id] })}&limit=200`)).items.every((issue) => issue.story?.id === story.id)).toBe(true)
     const noEpic = (await list(`${filterQuery({ epic: ['none'] })}&limit=200`)).items
-    expect(noEpic.map((issue) => issue.number).sort((a, b) => a - b)).toEqual([5, 10, 15, 20, 25, 30, 31, 32, 37, 38, 39, 40])
+    expect(noEpic.map((issue) => issue.number).sort((a, b) => a - b)).toEqual([5, 10, 15, 20, 25, 30, 31, 32, 37, 38, 39, 40, 41, 42])
     expect((await list(`${filterQuery({ epic: [epic.id, 'none'] })}&limit=200`)).items).toHaveLength(inEpic.length + noEpic.length)
     expect((await list(filterQuery({ type: ['epic', 'story'] }))).items).toHaveLength(6)
     expect((await list(filterQuery({ parent: epic.id }))).items.map((issue) => issue.number).sort()).toEqual([33, 34])
@@ -401,14 +402,16 @@ describe('tracker mock: projects', () => {
     expect(items.map((project) => [project.name, project.color, project.archived, project.issueCount])).toEqual([
       ['Builder Console', 'orange', false, 10],
       ['Dashboard', 'blue', false, 5],
-      ['Platform API', 'purple', false, 5],
+      // APT-41 and APT-42 (agents' reports) are in Platform API.
+      ['Platform API', 'purple', false, 7],
     ])
     const byName = Object.fromEntries(items.map((project) => [project.name, project.id]))
     const order = [byName.Dashboard, byName['Platform API'], byName['Builder Console']]
     const all = (await list('?sort=number')).items
     for (const issue of all) {
       const seeded = issue.number <= 30
-      expect(issue.projectId, issue.identifier).toBe(seeded && issue.number % 3 !== 0 ? order[((issue.number % 3) + (issue.number % 2)) % 3]! : null)
+      const agentReport = issue.number === 41 || issue.number === 42
+      expect(issue.projectId, issue.identifier).toBe(agentReport ? byName['Platform API']! : seeded && issue.number % 3 !== 0 ? order[((issue.number % 3) + (issue.number % 2)) % 3]! : null)
     }
     const closed = new Set((await statuses()).filter((status) => status.category === 'completed' || status.category === 'canceled').map((status) => status.id))
     for (const project of items) {
@@ -603,7 +606,7 @@ describe('tracker mock: sprints fixture (API.md v0.1.10)', () => {
   test('four Done work items close the seed, and 17 work items carry a size across all five', async () => {
     const all = (await list('?sort=number&limit=200')).items
     const done = await statusNamed('Done')
-    expect(all.slice(36).map((issue) => [issue.number, issue.title, issue.type, issue.statusId === done.id, issue.parent, issue.projectId, issue.estimate])).toEqual([
+    expect(all.slice(36, 40).map((issue) => [issue.number, issue.title, issue.type, issue.statusId === done.id, issue.parent, issue.projectId, issue.estimate])).toEqual([
       [37, 'Speed up issue search', 'task', true, null, null, 'L'],
       [38, 'Add bulk status change', 'feature', true, null, null, 'XL'],
       [39, 'Tidy up the settings layout', 'task', true, null, null, 'XL'],
@@ -748,7 +751,7 @@ describe('tracker mock: estimates and membership on issue writes', () => {
     expect(both).toHaveLength(10)
     const backlog = (await list(`${filterQuery({ sprint: ['none'] })}&limit=200`)).items
     expect(backlog.every((issue) => issue.sprint === null)).toBe(true)
-    expect(backlog).toHaveLength(40 - 3 * 3 - 7 - 3)
+    expect(backlog).toHaveLength(42 - 3 * 3 - 7 - 3)
     expect((await call('GET', `/issues${filterQuery({ sprint: ['Sprint 4'] })}`)).status).toBe(400)
     const bySize = (await list('?sort=estimate&limit=200')).items
     expect(bySize.slice(0, 6).every((issue) => issue.estimate === 'XL')).toBe(true)
@@ -857,5 +860,297 @@ describe('tracker mock: sprint lifecycle', () => {
     expect((await call('POST', '/sprints', {})).body.lengthWeeks).toBe(2)
     await as('dev-sam')
     expect((await call('PATCH', '/workspace', { sprintLengthWeeks: 1 })).status).toBe(403)
+  })
+})
+
+// --- agents (API.md "Agents"; fixture `.tmp/agents-ui/fixture.md`) -------------------------------------
+
+/** A call made with the named agent's Access Key assertion. */
+const agentCall = (handle: string, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => call(method, path, body, { 'X-Mock-Agent': handle, ...headers })
+const issueNamed = async (identifier: string) => (await call('GET', `/issues/${identifier}`)).body as Issue
+const agentsByHandle = async () => new Map(((await call('GET', '/agents?includeDisabled=true')).body.items as Agent[]).map((agent) => [agent.handle, agent]))
+const inbox = async (handle?: string) => ((handle ? await agentCall(handle, 'GET', '/inbox') : await call('GET', '/inbox')).body.items as InboxItem[])
+const inboxTitles = (items: InboxItem[]) => items.map((item) => (item.kind === 'mention' ? `mention ${item.issue.identifier}` : item.kind === 'assignment' ? `assignment ${item.issue.identifier}` : `${item.kind} ${item.request.title}`))
+const MINUTE = 60_000
+
+describe('tracker mock: agents fixture', () => {
+  test('four agents (one disabled) with derived counts; disabled ones only on request', async () => {
+    const active = (await call('GET', '/agents')).body.items as Agent[]
+    expect(active.map((agent) => agent.handle)).toEqual(['astra', 'claude', 'opus-ui'])
+    const all = await agentsByHandle()
+    expect([...all.values()].map((agent) => [agent.handle, agent.name, agent.owner.sub, agent.disabled, agent.activeRuns, agent.openRequests])).toEqual([
+      ['astra', 'Astra', 'dev-sam', false, 1, 1],
+      ['claude', 'Claude', 'dev-jordan', false, 0, 1],
+      ['legacy-bot', 'Legacy bot', 'dev-alex', true, 0, 0],
+      ['opus-ui', 'Opus UI', 'dev-alex', false, 1, 1],
+    ])
+    expect(all.get('astra')!.lastSeenAt).toEqual(expect.any(String))
+  })
+
+  test('delegations, runs and request counts on the board', async () => {
+    const astra = (await agentsByHandle()).get('astra')!
+    const apt15 = await issueNamed('APT-15')
+    expect(apt15.assignee).toMatchObject({ sub: `agent:${astra.id}`, kind: 'agent', name: 'Astra', agent: { handle: 'astra', owner: { sub: 'dev-sam' }, disabled: false } })
+    // The wire carries `kind` on every person, the delegator included.
+    const delegator: unknown = apt15.delegator
+    expect(delegator).toEqual({ ...MOCK_PEOPLE.alex, kind: 'person' })
+    expect(apt15.activeRun).toMatchObject({ state: 'running', session: 'astra · lane-2', agent: { name: 'Astra' } })
+    expect((await issueNamed('APT-27')).activeRun?.state).toBe('waiting')
+    expect((await issueNamed('APT-27')).openRequestCount).toBe(1)
+    expect((await issueNamed('APT-9')).activeRun?.state).toBe('stalled')
+    expect((await issueNamed('APT-16'))).toMatchObject({ activeRun: null, openRequestCount: 1 })
+    expect((await issueNamed('APT-1')).openRequestCount).toBe(1)
+    expect((await issueNamed('APT-41')).reporter).toMatchObject({ kind: 'agent', name: 'Claude' })
+    expect((await issueNamed('APT-42'))).toMatchObject({ reporter: { name: 'Astra' }, assignee: { name: 'Astra' }, delegator: MOCK_PEOPLE.sam })
+    const numbers = async (filter: object) => (await list(`${filterQuery(filter)}&sort=number&limit=200`)).items.map((issue) => issue.number)
+    expect(await numbers({ run: ['active'] })).toEqual([15, 27])
+    expect(await numbers({ run: ['stalled'] })).toEqual([9])
+    expect(await numbers({ request: ['open'] })).toEqual([1, 16, 27])
+    // `mine`: an open request the caller raised (Alex's only request, R6, is answered); astra raised the open review of APT-16.
+    expect(await numbers({ request: ['mine'] })).toEqual([])
+    expect((await agentCall('astra', 'GET', `/issues${filterQuery({ request: ['mine'] })}`)).body.items.map((issue: IssueSummary) => issue.number)).toEqual([16])
+    expect(await numbers({ assigneeKind: ['agent'] })).toEqual([4, 9, 13, 15, 16, 19, 21, 26, 27, 42])
+    expect(await numbers({ agent: [astra.id] })).toEqual([4, 9, 15, 16, 19, 42])
+    for (const bad of [{ run: ['live'] }, { request: ['all'] }, { assigneeKind: ['bot'] }, { agent: ['astra'] }]) expect((await call('GET', `/issues${filterQuery(bad)}`)).status).toBe(400)
+    // A run on the timeline sits at its start; requests at their creation.
+    const kinds = ((await call('GET', `/issues/${apt15.id}/timeline`)).body.items as TimelineItem[]).map((item) => item.kind)
+    expect(kinds).toEqual(['activity', 'activity', 'activity', 'run', 'request'])
+  })
+
+  test('inboxes: requests first, then answers and mentions; agents also get their actionable assignments', async () => {
+    expect(inboxTitles(await inbox())).toEqual([
+      'request Add APT-1 to the current sprint?',
+      'request Review: CLI login expires too early',
+      "request Which label should the panel's close button use?",
+      'answer Which open bugs look like duplicates of APT-22?',
+    ])
+    await as('dev-sam')
+    expect(inboxTitles(await inbox())).toEqual(['request Add APT-1 to the current sprint?'])
+    // Assignments by priority (APT-42 medium; APT-4, APT-9, APT-19 low with APT-4 in the active sprint; APT-15 none), then number.
+    expect(inboxTitles(await inbox('astra'))).toEqual(['mention APT-22', 'answer Review: Platform API returns stale status', 'assignment APT-42', 'assignment APT-4', 'assignment APT-9', 'assignment APT-19', 'assignment APT-15'])
+    expect(inboxTitles(await inbox('opus-ui'))).toEqual(['assignment APT-26', 'assignment APT-13'])
+    expect(inboxTitles(await inbox('claude'))).toEqual(['assignment APT-21'])
+  })
+})
+
+describe('tracker mock: agent keys', () => {
+  test('the handle is the key subject; scopes gate methods; agents act with role Viewer', async () => {
+    expect(await agentCall('nobody', 'GET', '/me')).toMatchObject({ status: 403, body: { error: 'key_subject' } })
+    expect(await agentCall('legacy-bot', 'GET', '/issues')).toMatchObject({ status: 403, body: { error: 'key_subject' } })
+    const me = (await agentCall('astra', 'GET', '/me')).body
+    expect(me).toMatchObject({ kind: 'agent', name: 'Astra', role: 'Viewer', isAdmin: false, scopes: ['tracker:read', 'tracker:write'], agent: { handle: 'astra' } })
+    expect(await agentCall('astra', 'POST', '/issues', { title: 'x', type: 'task' }, { 'X-Mock-Scopes': 'tracker:read' })).toMatchObject({ status: 403, body: { error: 'insufficient_scope' } })
+    expect(await agentCall('astra', 'GET', '/issues', undefined, { 'X-Mock-Scopes': 'tracker:write' })).toMatchObject({ status: 403, body: { error: 'insufficient_scope' } })
+    expect((await agentCall('astra', 'GET', '/people')).body).toEqual({ items: [], source: 'unavailable' })
+    expect((await agentCall('astra', 'POST', '/agents', { handle: 'x1', name: 'X', ownerSub: 'dev-alex' })).status).toBe(403)
+    expect((await agentCall('astra', 'PATCH', '/workspace', { agentCompletion: 'direct' })).status).toBe(403)
+  })
+
+  test('agents edit fields only as assignee or reporter, assign only themselves on their reports, never complete under review', async () => {
+    const done = await statusNamed('Done')
+    const apt2 = await issueNamed('APT-2')
+    expect((await agentCall('astra', 'PATCH', `/issues/${apt2.id}`, { priority: 'high' })).status).toBe(403)
+    // Commenting and raising questions work on any issue.
+    expect((await agentCall('astra', 'POST', `/issues/${apt2.id}/comments`, { body: 'Looks related to APT-15.' })).status).toBe(201)
+    const apt19 = await issueNamed('APT-19')
+    expect((await agentCall('astra', 'PATCH', `/issues/${apt19.id}`, { priority: 'high' })).body.priority).toBe('high')
+    expect((await agentCall('astra', 'PATCH', `/issues/${apt19.id}`, { statusId: done.id })).status).toBe(403)
+    const agents = await agentsByHandle()
+    // Self-assignment only on an issue the agent reported.
+    const own = (await agentCall('astra', 'POST', '/issues', { title: 'Follow-up from APT-15', type: 'task', assigneeSub: `agent:${agents.get('astra')!.id}` })).body as Issue
+    expect(own).toMatchObject({ assignee: { name: 'Astra' }, delegator: MOCK_PEOPLE.sam, reporter: { name: 'Astra' } })
+    expect((await agentCall('astra', 'POST', '/issues', { title: 'x', type: 'task', assigneeSub: `agent:${agents.get('claude')!.id}` })).status).toBe(403)
+    expect((await agentCall('astra', 'PATCH', `/issues/${apt19.id}`, { assigneeSub: `agent:${agents.get('claude')!.id}` })).status).toBe(403)
+    // Under `direct` the agent may complete.
+    await call('PATCH', '/workspace', { agentCompletion: 'direct' })
+    expect((await agentCall('astra', 'PATCH', `/issues/${apt19.id}`, { statusId: done.id })).body.statusId).toBe(done.id)
+  })
+})
+
+describe('tracker mock: delegation, runs and requests', () => {
+  test('assign → run → question → answer → finish → review → approve completes the issue as the person', async () => {
+    const agents = await agentsByHandle()
+    const astraSub = `agent:${agents.get('astra')!.id}`
+    const apt2 = await issueNamed('APT-2')
+    expect((await call('PATCH', `/issues/${apt2.id}`, { assigneeSub: `agent:${agents.get('legacy-bot')!.id}` })).body.issues[0].path).toBe('assigneeSub')
+    expect((await agentCall('astra', 'POST', `/issues/${apt2.id}/runs`, {})).status).toBe(403)
+    const assigned = (await call('PATCH', `/issues/${apt2.id}`, { assigneeSub: astraSub })).body as Issue
+    expect(assigned).toMatchObject({ assignee: { sub: astraSub }, delegator: MOCK_PEOPLE.alex })
+    expect(inboxTitles(await inbox('astra'))).toContain('assignment APT-2')
+    expect((await call('POST', `/issues/${apt2.id}/runs`, {})).status).toBe(403)
+    const started = await agentCall('astra', 'POST', `/issues/${apt2.id}/runs`, { session: 'astra · lane-3', note: 'reading the issue' })
+    expect(started.status).toBe(201)
+    const run = started.body as Run
+    expect(run).toMatchObject({ state: 'running', session: 'astra · lane-3', note: 'reading the issue', reason: null, finishedAt: null })
+    expect(Date.parse(run.leaseExpiresAt) - Date.parse(run.heartbeatAt)).toBe(10 * MINUTE)
+    expect((await agentCall('astra', 'POST', `/issues/${apt2.id}/runs`, {})).status).toBe(409)
+    expect((await agentCall('astra', 'POST', `/runs/${run.id}/heartbeat`, { note: 'running tests' })).body.note).toBe('running tests')
+    expect((await agentCall('claude', 'POST', `/runs/${run.id}/heartbeat`, {})).status).toBe(403)
+    // Only the run's own agent attaches a request to it, and only on the run's issue.
+    expect((await agentCall('claude', 'POST', `/issues/${apt2.id}/requests`, { kind: 'question', title: 'Mine?', runId: run.id })).status).toBe(403)
+    expect((await agentCall('astra', 'POST', `/issues/${(await issueNamed('APT-3')).id}/requests`, { kind: 'question', title: 'Here?', runId: run.id })).status).toBe(403)
+    const question = (await agentCall('astra', 'POST', `/issues/${apt2.id}/requests`, { kind: 'question', title: 'Which key?', options: ['J/K', 'Arrows'], runId: run.id })).body as TrackerRequest
+    expect(question).toMatchObject({ to: { sub: 'dev-alex' }, from: { sub: astraSub }, state: 'open', runId: run.id })
+    expect((await issueNamed('APT-2')).activeRun?.state).toBe('waiting')
+    expect(inboxTitles(await inbox()).filter((title) => title.startsWith('request')).at(-1)).toBe('request Which key?')
+    expect((await call('POST', `/requests/${question.id}/answer`, { option: 'Tab' })).status).toBe(400)
+    await as('dev-sam')
+    expect((await call('POST', `/requests/${question.id}/answer`, { option: 'J/K' })).status).toBe(403)
+    await as('dev-alex', 'Admin')
+    expect((await call('POST', `/requests/${question.id}/answer`, { option: 'J/K', body: 'Like the list.' })).body).toMatchObject({ state: 'answered', answer: { option: 'J/K', body: 'Like the list.', by: { sub: 'dev-alex' } } })
+    expect((await call('POST', `/requests/${question.id}/answer`, { option: 'J/K' })).status).toBe(409)
+    expect((await issueNamed('APT-2')).activeRun?.state).toBe('running')
+    expect(inboxTitles(await inbox('astra'))).toContain('answer Which key?')
+    await agentCall('astra', 'POST', '/inbox/ack', { answers: [question.id] })
+    expect(inboxTitles(await inbox('astra'))).not.toContain('answer Which key?')
+
+    const links = [{ kind: 'pr', url: 'https://github.com/appthrust/tracker/pull/150', title: 'Keyboard shortcuts' }]
+    expect((await agentCall('astra', 'POST', `/runs/${run.id}/finish`, { outcome: 'succeeded', summary: 'Done.', links: [{ kind: 'pr', url: 'http://x', title: 'x' }] })).status).toBe(400)
+    const finished = (await agentCall('astra', 'POST', `/runs/${run.id}/finish`, { outcome: 'succeeded', summary: 'Added **J/K**.', links })).body as Run
+    expect(finished).toMatchObject({ state: 'succeeded', summary: 'Added **J/K**.', links, finishedAt: expect.any(String) })
+    expect((await agentCall('astra', 'POST', `/runs/${run.id}/heartbeat`, {})).status).toBe(409)
+    const review = (await call('GET', `/requests?state=open&issue=${apt2.id}`)).body.items[0] as TrackerRequest
+    expect(review).toMatchObject({ kind: 'review', to: { sub: 'dev-alex' }, title: `Review: ${apt2.title}`, body: 'Added **J/K**.', options: ['approve', 'reject'], runId: run.id })
+    expect((await agentCall('astra', 'POST', `/requests/${review.id}/answer`, { option: 'approve' })).status).toBe(403)
+    const approved = await call('POST', `/requests/${review.id}/answer`, { option: 'approve' })
+    expect(approved.status).toBe(200)
+    const after = await issueNamed('APT-2')
+    const done = await statusNamed('Done')
+    expect(after).toMatchObject({ statusId: done.id, completedAt: expect.any(String), activeRun: null, openRequestCount: 0 })
+    const timeline = (await call('GET', `/issues/${apt2.id}/timeline`)).body.items as TimelineItem[]
+    const status = [...timeline].reverse().find((item) => item.kind === 'activity' && item.activity.field === 'status')
+    expect(status?.kind === 'activity' && status.activity.actor).toMatchObject({ sub: 'dev-alex', kind: 'person' })
+  })
+
+  test('stalled runs are derived from the lease, refused heartbeats and closed by the next start', async () => {
+    const apt15 = await issueNamed('APT-15')
+    const run = apt15.activeRun!
+    expect((await call('POST', '/__mock/clock', { advanceMs: 11 * MINUTE })).status).toBe(200)
+    expect((await issueNamed('APT-15')).activeRun?.state).toBe('stalled')
+    expect((await call('GET', `/runs/${run.id}`)).body.state).toBe('stalled')
+    expect((await agentCall('astra', 'POST', `/runs/${run.id}/heartbeat`, {})).status).toBe(409)
+    expect((await agentCall('astra', 'POST', `/runs/${run.id}/finish`, { outcome: 'succeeded', summary: '' })).status).toBe(409)
+    // The waiting run of APT-27 stalled too: its question is ignored by "Actionable", so opus-ui may restart.
+    expect(inboxTitles(await inbox('opus-ui'))).toContain('assignment APT-27')
+    const fresh = await agentCall('opus-ui', 'POST', `/issues/${(await issueNamed('APT-27')).id}/runs`, {})
+    expect(fresh.status).toBe(201)
+    const runs = (await call('GET', '/issues/APT-27/runs')).body.items as Run[]
+    expect(runs.map((candidate) => [candidate.state, candidate.reason])).toEqual([
+      ['running', null],
+      ['failed', 'lease_expired'],
+    ])
+    expect((await issueNamed('APT-27')).openRequestCount).toBe(0)
+    expect((await agentsByHandle()).get('astra')!.activeRuns).toBe(0)
+    // A person cancels a stalled run.
+    expect((await call('POST', `/runs/${run.id}/cancel`)).body).toMatchObject({ state: 'canceled', reason: 'canceled_by:dev-alex' })
+    expect((await call('POST', `/runs/${run.id}/cancel`)).status).toBe(409)
+  })
+
+  test('reassigning away from an agent cancels its run and withdraws its requests; disabling cancels every run', async () => {
+    const apt27 = await issueNamed('APT-27')
+    const reassigned = (await call('PATCH', `/issues/${apt27.id}`, { assigneeSub: 'dev-sam' })).body as Issue
+    expect(reassigned).toMatchObject({ assignee: { sub: 'dev-sam', kind: 'person' }, delegator: null, activeRun: null, openRequestCount: 0 })
+    const runs = (await call('GET', `/issues/${apt27.id}/runs`)).body.items as Run[]
+    expect(runs[0]).toMatchObject({ state: 'canceled', reason: 'reassigned' })
+    expect(inboxTitles(await inbox())).not.toContain("request Which label should the panel's close button use?")
+    const fields = ((await call('GET', `/issues/${apt27.id}/timeline`)).body.items as TimelineItem[]).flatMap((item) => (item.kind === 'activity' ? [item.activity.field] : []))
+    expect(fields.slice(-2)).toEqual(['assignee', 'delegator'])
+
+    const astra = (await agentsByHandle()).get('astra')!
+    await as('dev-sam')
+    expect((await call('PATCH', `/agents/${astra.id}`, { disabled: true })).status).toBe(403)
+    await as('dev-alex', 'Admin')
+    expect((await call('PATCH', `/agents/${astra.id}`, { handle: 'astra2' })).body.issues[0].path).toBe('handle')
+    expect((await call('PATCH', `/agents/${astra.id}`, { disabled: true })).body).toMatchObject({ disabled: true, activeRuns: 0 })
+    expect((await call('GET', '/issues/APT-15/runs')).body.items[0]).toMatchObject({ state: 'canceled', reason: 'canceled_by:dev-alex' })
+    expect((await issueNamed('APT-15')).assignee?.agent?.disabled).toBe(true)
+    expect(await agentCall('astra', 'GET', '/inbox')).toMatchObject({ status: 403, body: { error: 'key_subject' } })
+  })
+
+  test('approvals and reviews: people only; unaddressed ones by any person; an open approval blocks a successful finish', async () => {
+    const apt1 = await issueNamed('APT-1')
+    const approval = ((await call('GET', `/requests?issue=${apt1.id}`)).body.items as TrackerRequest[])[0]!
+    expect(approval).toMatchObject({ kind: 'approval', to: null, options: ['approve', 'reject'] })
+    expect((await agentCall('astra', 'POST', `/requests/${approval.id}/answer`, { option: 'approve' })).status).toBe(403)
+    expect((await call('POST', `/requests/${approval.id}/answer`, { body: 'no option' })).body.issues[0].path).toBe('option')
+    await as('dev-jordan')
+    expect((await call('POST', `/requests/${approval.id}/answer`, { option: 'reject', body: 'Next sprint.' })).body.answer).toMatchObject({ option: 'reject', by: { sub: 'dev-jordan' } })
+    expect(inboxTitles(await inbox('claude'))).toContain('answer Add APT-1 to the current sprint?')
+
+    // The review of APT-16 is Alex's; Sam (not Admin) cannot answer it.
+    const review = ((await call('GET', '/requests?state=open&to=dev-alex')).body.items as TrackerRequest[]).find((request) => request.kind === 'review')!
+    await as('dev-sam')
+    expect((await call('POST', `/requests/${review.id}/answer`, { option: 'approve' })).status).toBe(403)
+    await as('dev-alex', 'Admin')
+    expect((await call('POST', `/requests/${review.id}/answer`, { option: 'reject', body: 'Add a test for the refresh path.' })).body.state).toBe('answered')
+    expect((await issueNamed('APT-16')).statusId).toBe((await statusNamed('In Review')).id)
+
+    const apt15 = await issueNamed('APT-15')
+    const run = apt15.activeRun!
+    expect((await agentCall('astra', 'POST', `/issues/${apt15.id}/requests`, { kind: 'approval', title: 'Delete testdata?', options: ['yes'] })).status).toBe(400)
+    expect((await agentCall('astra', 'POST', `/issues/${apt15.id}/requests`, { kind: 'approval', title: 'Delete testdata?', to: `agent:${(await agentsByHandle()).get('claude')!.id}` })).status).toBe(400)
+    const ask = (await agentCall('astra', 'POST', `/issues/${apt15.id}/requests`, { kind: 'approval', title: 'Delete testdata?', runId: run.id })).body as TrackerRequest
+    expect(ask.to?.sub).toBe('dev-alex')
+    expect((await agentCall('astra', 'POST', `/runs/${run.id}/finish`, { outcome: 'succeeded', summary: 'x' })).status).toBe(409)
+    expect((await call('POST', `/requests/${ask.id}/withdraw`)).status).toBe(403)
+    expect((await agentCall('astra', 'POST', `/requests/${ask.id}/withdraw`)).body.state).toBe('withdrawn')
+    expect((await issueNamed('APT-15')).activeRun?.state).toBe('running')
+  })
+
+  test('Idempotency-Key replays the first response; another body is 409', async () => {
+    const apt3 = await issueNamed('APT-3')
+    const first = await call('POST', `/issues/${apt3.id}/comments`, { body: 'once' }, { 'Idempotency-Key': 'k-1' })
+    const again = await call('POST', `/issues/${apt3.id}/comments`, { body: 'once' }, { 'Idempotency-Key': 'k-1' })
+    expect(again).toMatchObject({ status: 201, body: { id: first.body.id } })
+    expect(((await call('GET', `/issues/${apt3.id}/timeline`)).body.items as TimelineItem[]).filter((item) => item.kind === 'comment')).toHaveLength(1)
+    expect((await call('POST', `/issues/${apt3.id}/comments`, { body: 'twice' }, { 'Idempotency-Key': 'k-1' })).status).toBe(409)
+    // Keys are per actor.
+    expect((await agentCall('astra', 'POST', `/issues/${apt3.id}/comments`, { body: 'twice' }, { 'Idempotency-Key': 'k-1' })).status).toBe(201)
+    expect((await call('POST', `/issues/${apt3.id}/comments`, { body: 'x' }, { 'Idempotency-Key': 'k'.repeat(129) })).status).toBe(400)
+  })
+
+  test('expectedUpdatedAt: a stale edit is 409 conflict', async () => {
+    const apt3 = await issueNamed('APT-3')
+    expect((await call('PATCH', `/issues/${apt3.id}`, { title: 'Fresh', expectedUpdatedAt: apt3.updatedAt })).body.title).toBe('Fresh')
+    expect(await call('PATCH', `/issues/${apt3.id}`, { title: 'Stale', expectedUpdatedAt: apt3.updatedAt })).toMatchObject({ status: 409, body: { error: 'conflict' } })
+  })
+
+  test('mentions: @handle of an active agent, one row per comment and agent, acknowledged by the agent', async () => {
+    const apt3 = await issueNamed('APT-3')
+    const comment = (await call('POST', `/issues/${apt3.id}/comments`, { body: '@claude and @claude, also @nobody and email@astra.dev' })).body
+    expect(comment.mentions.map((actor: { name: string }) => actor.name)).toEqual(['Claude'])
+    const mention = (await inbox('claude')).find((item) => item.kind === 'mention')
+    expect(mention).toMatchObject({ kind: 'mention', issue: { identifier: 'APT-3' }, comment: { id: comment.id } })
+    await agentCall('claude', 'POST', '/inbox/ack', { mentions: [comment.id] })
+    expect((await inbox('claude')).some((item) => item.kind === 'mention')).toBe(false)
+  })
+
+  test('events: ascending from a cursor, `after` omitted starts now', async () => {
+    const start = (await call('GET', '/events')).body
+    expect(start.items).toEqual([])
+    const apt3 = await issueNamed('APT-3')
+    await call('PATCH', `/issues/${apt3.id}`, { priority: 'low', title: 'Renamed' })
+    await call('POST', `/issues/${apt3.id}/comments`, { body: 'hi' })
+    const page = (await call('GET', `/events?after=${start.next}`)).body as { items: TrackerEvent[]; next: number }
+    expect(page.items.map((event) => [event.type, event.issue?.identifier])).toEqual([
+      ['issue.updated', 'APT-3'],
+      ['comment.created', 'APT-3'],
+    ])
+    expect(page.items[0]!.data).toEqual({ fields: ['title', 'priority'] })
+    expect(page.next).toBe(page.items[1]!.seq)
+    expect((await call('GET', `/events?after=${page.next}`)).body).toEqual({ items: [], next: page.next })
+    expect((await call('GET', '/events?limit=501')).status).toBe(400)
+  })
+
+  test('agent registry: Admin registers with an immutable unique handle; the guide is Markdown', async () => {
+    expect((await call('POST', '/agents', { handle: 'Astra', name: 'X', ownerSub: 'dev-alex' })).body.issues[0].path).toBe('handle')
+    expect((await call('POST', '/agents', { handle: 'astra', name: 'X', ownerSub: 'dev-alex' })).status).toBe(409)
+    expect((await call('POST', '/agents', { handle: 'scout', name: 'Scout', ownerSub: 'agent:x' })).body.issues[0].path).toBe('ownerSub')
+    const created = await call('POST', '/agents', { handle: 'scout', name: 'Scout', description: 'Finds flaky tests.', ownerSub: 'dev-jordan' })
+    expect(created).toMatchObject({ status: 201, body: { handle: 'scout', owner: { sub: 'dev-jordan', name: 'Jordan Lee' }, activeRuns: 0, openRequests: 0, lastSeenAt: null } })
+    expect((await call('PATCH', `/agents/${created.body.id}`, { name: 'Scout 2', ownerSub: 'dev-sam' })).body).toMatchObject({ name: 'Scout 2', owner: { sub: 'dev-sam' } })
+    const guide = await call('GET', '/agent-guide')
+    expect(guide.headers.get('Content-Type')).toContain('text/markdown')
+    expect(new TextDecoder().decode(guide.body)).toContain('POST /runs/{id}/heartbeat')
   })
 })

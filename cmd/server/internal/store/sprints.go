@@ -382,5 +382,8 @@ func (t *Tx) moveSprintMember(item domain.Issue, next *domain.SprintRef, actor d
 	if err := t.sprintEvents(item.ID, before, after); err != nil {
 		return err
 	}
-	return t.activity(item.ID, actor, "sprint", old, next)
+	if err := t.activity(item.ID, actor, "sprint", old, next); err != nil {
+		return err
+	}
+	return t.event(item.ID, actor, "issue.updated", map[string]any{"fields": []string{"sprint"}})
 }

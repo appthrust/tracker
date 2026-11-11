@@ -6,20 +6,19 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/appthrust/appserver-go/accesskey"
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 	"github.com/oklog/ulid/v2"
 )
 
-const agentColumns = `a.id,a.handle,a.name,a.description,a.key_subject,a.owner_sub,a.owner_name,a.disabled,a.created_at,a.updated_at,
- (SELECT count(*) FROM tracker_run r WHERE r.agent_id=a.id AND r.state IN ('running','waiting') AND r.lease_expires_at >= $2),
+const agentColumns = `a.id,a.handle,a.name,a.description,a.owner_sub,a.owner_name,a.disabled,a.created_at,a.updated_at,
+ (SELECT count(*) FROM tracker_run r JOIN tracker_issue i ON i.id=r.issue_id WHERE r.agent_id=a.id AND i.deleted_at IS NULL AND r.state IN ('running','waiting') AND r.lease_expires_at >= $2),
  (SELECT count(*) FROM tracker_request q JOIN tracker_issue i ON i.id=q.issue_id WHERE i.workspace_id=a.workspace_id AND i.deleted_at IS NULL AND q.from_sub='agent:'||a.id AND q.state='open'),
- (SELECT max(r.heartbeat_at) FROM tracker_run r WHERE r.agent_id=a.id)`
+ a.last_seen_at`
 
 func scanAgent(row scanner) (domain.Agent, error) {
 	var a domain.Agent
-	err := row.Scan(&a.ID, &a.Handle, &a.Name, &a.Description, &a.KeySubject, &a.Owner.Sub, &a.Owner.Name, &a.Disabled, &a.CreatedAt, &a.UpdatedAt, &a.ActiveRuns, &a.OpenRequests, &a.LastSeenAt)
+	err := row.Scan(&a.ID, &a.Handle, &a.Name, &a.Description, &a.Owner.Sub, &a.Owner.Name, &a.Disabled, &a.CreatedAt, &a.UpdatedAt, &a.ActiveRuns, &a.OpenRequests, &a.LastSeenAt)
 	return a, err
 }
 
@@ -28,7 +27,7 @@ func (t *Tx) Agent(id string) (domain.Agent, error) {
 }
 
 func (t *Tx) AgentBySubject(subject string) (domain.Actor, error) {
-	a, err := scanAgent(t.SQL.QueryRowContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND a.key_subject=$3 AND NOT a.disabled`, t.WorkspaceID, t.now(), subject))
+	a, err := scanAgent(t.SQL.QueryRowContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND a.handle=$3 AND NOT a.disabled`, t.WorkspaceID, t.now(), subject))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Actor{}, httpx.Fail(403, "key_subject", "The access key subject is not an active registered agent")
 	}
@@ -38,9 +37,9 @@ func (t *Tx) AgentBySubject(subject string) (domain.Actor, error) {
 	return domain.Actor{Person: a.Person(), Kind: "agent", AgentID: a.ID, Role: "Viewer", Key: true}, nil
 }
 
-func (t *Tx) Agents() ([]domain.Agent, error) {
+func (t *Tx) Agents(includeDisabled bool) ([]domain.Agent, error) {
 	list := []domain.Agent{}
-	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND NOT a.disabled ORDER BY a.handle`, t.WorkspaceID, t.now())
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND ($3 OR NOT a.disabled) ORDER BY a.handle`, t.WorkspaceID, t.now(), includeDisabled)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +58,6 @@ type AgentCreate struct {
 	Handle      string `json:"handle"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	KeySubject  string `json:"keySubject"`
 	OwnerSub    string `json:"ownerSub"`
 }
 
@@ -72,14 +70,11 @@ func (t *Tx) CreateAgent(input AgentCreate, owner domain.Person, actor domain.Ac
 	if !agentHandle.MatchString(input.Handle) || !domain.Text(input.Name, 1, 200) || len(input.Description) > 4096 {
 		return domain.Agent{}, invalid("Invalid agent handle, name or description")
 	}
-	if _, err := accesskey.ParseSubject("external:" + input.KeySubject); err != nil || strings.HasPrefix(input.KeySubject, "external:") {
-		return domain.Agent{}, &domain.FieldError{Path: "keySubject", Message: "Use the external subject id without its prefix"}
-	}
 	if !domain.Text(owner.Sub, 1, 4096) || domain.ActorKind(owner.Sub) != "person" {
 		return domain.Agent{}, invalid("An agent owner must be a person")
 	}
 	id := ulid.Make().String()
-	if err := t.Exec(`INSERT INTO tracker_agent(id,workspace_id,handle,name,description,key_subject,owner_sub,owner_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, t.WorkspaceID, input.Handle, strings.TrimSpace(input.Name), input.Description, input.KeySubject, owner.Sub, owner.Name); err != nil {
+	if err := t.Exec(`INSERT INTO tracker_agent(id,workspace_id,handle,name,description,owner_sub,owner_name) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, t.WorkspaceID, input.Handle, strings.TrimSpace(input.Name), input.Description, owner.Sub, owner.Name); err != nil {
 		return domain.Agent{}, err
 	}
 	return t.Agent(id)
@@ -153,4 +148,78 @@ func (t *Tx) saveDelegator(id string, person *domain.Person) error {
 		sub, name = person.Sub, person.Name
 	}
 	return t.Exec(`UPDATE tracker_issue SET delegator_sub=$3,delegator_name=$4 WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, id, sub, name)
+}
+
+type AgentPatch struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	OwnerSub    *string `json:"ownerSub"`
+	Disabled    *bool   `json:"disabled"`
+}
+
+func (t *Tx) PatchAgent(id string, input AgentPatch, owner *domain.Person, actor domain.Actor) (domain.Agent, error) {
+	if !domain.Can(actor, domain.ManageWorkspace, domain.Target{}) {
+		return domain.Agent{}, httpx.Forbidden()
+	}
+	a, err := t.Agent(id)
+	if err != nil {
+		return a, err
+	}
+	if input.Name != nil {
+		a.Name = strings.TrimSpace(*input.Name)
+	}
+	if input.Description != nil {
+		a.Description = *input.Description
+	}
+	if owner != nil {
+		a.Owner = *owner
+	}
+	if input.Disabled != nil {
+		a.Disabled = *input.Disabled
+	}
+	if !domain.Text(a.Name, 1, 200) || len(a.Description) > 4096 || !domain.Text(a.Description, 0, 4096) {
+		return a, invalid("Invalid agent name or description")
+	}
+	if !domain.Text(a.Owner.Sub, 1, 4096) || domain.ActorKind(a.Owner.Sub) != "person" {
+		return a, invalid("An agent owner must be a person")
+	}
+	if err := t.Exec(`UPDATE tracker_agent SET name=$3,description=$4,owner_sub=$5,owner_name=$6,disabled=$7,updated_at=$8 WHERE workspace_id=$1 AND id=$2`,
+		t.WorkspaceID, id, a.Name, a.Description, a.Owner.Sub, a.Owner.Name, a.Disabled, t.now()); err != nil {
+		return a, err
+	}
+	if a.Disabled {
+		rows, err := t.SQL.QueryContext(t.Context, `SELECT r.id FROM tracker_run r JOIN tracker_issue i ON i.id=r.issue_id WHERE i.workspace_id=$1 AND r.agent_id=$2 AND r.state IN ('running','waiting') ORDER BY r.id`, t.WorkspaceID, id)
+		if err != nil {
+			return a, err
+		}
+		ids := []string{}
+		for rows.Next() {
+			var runID string
+			if err := rows.Scan(&runID); err != nil {
+				rows.Close()
+				return a, err
+			}
+			ids = append(ids, runID)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return a, err
+		}
+		for _, runID := range ids {
+			if err := t.closeRun(runID, "canceled", "canceled_by:"+actor.Sub, actor.Person); err != nil {
+				return a, err
+			}
+		}
+		if err := t.withdrawRequests(`q.from_sub=$2`, "agent:"+id, actor.Person); err != nil {
+			return a, err
+		}
+	}
+	return t.Agent(id)
+}
+
+// ObserveAgent is called after assertion authentication, including GET requests.
+// The predicate bounds writes to once per minute across every key for a handle.
+func (t *Tx) ObserveAgent(handle string) error {
+	return t.Exec(`UPDATE tracker_agent SET last_seen_at=$3 WHERE workspace_id=$1 AND handle=$2 AND NOT disabled AND (last_seen_at IS NULL OR last_seen_at <= $3::timestamptz - interval '1 minute')`, t.WorkspaceID, handle, t.now())
 }

@@ -178,10 +178,14 @@ func TestProjectSeedAssignment(t *testing.T) {
 		}
 		page, err := tx.ListIssues(ListOptions{Sort: domain.SortNumber})
 		require.NoError(t, err)
-		require.Len(t, page.Items, 40)
+		require.Len(t, page.Items, 42)
 		names := []string{"Dashboard", "Platform API", "Builder Console"}
 		for _, issue := range page.Items {
 			n := issue.Number
+			if n > 40 {
+				require.Equal(t, byName["Platform API"].ID, *issue.ProjectID)
+				continue
+			}
 			if n > 30 || n%3 == 0 {
 				require.Nil(t, issue.ProjectID)
 			} else {
@@ -246,7 +250,7 @@ func TestProjectsMigrationFromV010(t *testing.T) {
 		}
 		var versions int
 		require.NoError(t, tx.SQL.QueryRowContext(t.Context(), `SELECT count(*) FROM tracker_schema_migrations`).Scan(&versions))
-		require.Equal(t, 12, versions)
+		require.Equal(t, 13, versions)
 		var reporterIndex string
 		require.NoError(t, tx.SQL.QueryRowContext(t.Context(), `SELECT indexdef FROM pg_indexes WHERE schemaname=current_schema() AND indexname='tracker_issue_reporter'`).Scan(&reporterIndex))
 		require.Contains(t, reporterIndex, "USING btree (workspace_id, reporter_sub) WHERE (deleted_at IS NULL)")

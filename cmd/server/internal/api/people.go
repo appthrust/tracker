@@ -2,7 +2,6 @@ package api
 
 import (
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
-	"github.com/appthrust/tracker/cmd/server/internal/store"
 )
 
 type peopleResponse struct {
@@ -44,71 +43,9 @@ func (a *API) enrich(s *request, body any) {
 		*p = a.directory.Enrich(s.r.Context(), s.bearer, snapshot)
 		resolved[p.Sub] = resolution{person: *p, fallback: *p == snapshot}
 	}
-	issue := func(i *domain.IssueSummary) { person(&i.Reporter); person(i.Assignee) }
-	valuePerson := func(value any) {
-		m, ok := value.(map[string]any)
-		if !ok {
-			return
-		}
-		sub, ok := m["sub"].(string)
-		if !ok {
-			return
-		}
-		name, _ := m["name"].(string)
-		p := domain.Person{Sub: sub, Name: name}
-		person(&p)
-		m["name"] = p.Name
-		m["kind"] = domain.ActorKind(p.Sub)
-		if p.Email != "" {
-			m["email"] = p.Email
-		}
-		if p.AvatarURL != "" {
-			m["avatarUrl"] = p.AvatarURL
-		} else {
-			delete(m, "avatarUrl")
-		}
-		if p.ProfileURL != "" {
-			m["profileUrl"] = p.ProfileURL
-		}
+	projection := responseActors(body)
+	for _, p := range projection.people {
+		person(p)
 	}
-	switch value := body.(type) {
-	case *meResponse:
-		person(&value.Person)
-	case *domain.Issue:
-		issue(&value.IssueSummary)
-	case *store.Page:
-		for i := range value.Items {
-			issue(&value.Items[i])
-		}
-	case *domain.Comment:
-		person(&value.Author)
-	case *domain.Attachment:
-		person(&value.Uploader)
-	case *domain.View:
-		person(&value.Owner)
-	case *items[domain.View]:
-		for i := range value.Items {
-			person(&value.Items[i].Owner)
-		}
-	case *items[domain.TimelineItem]:
-		for _, item := range value.Items {
-			if item.Comment != nil {
-				person(&item.Comment.Author)
-			}
-			if item.Activity != nil {
-				person(&item.Activity.Actor)
-				if item.Activity.Field == "assignee" {
-					valuePerson(item.Activity.From)
-					valuePerson(item.Activity.To)
-				}
-				if item.Activity.Field == "attachment" {
-					for _, raw := range []any{item.Activity.From, item.Activity.To} {
-						if attachment, ok := raw.(map[string]any); ok {
-							valuePerson(attachment["uploader"])
-						}
-					}
-				}
-			}
-		}
-	}
+	projection.apply()
 }

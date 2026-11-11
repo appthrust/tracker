@@ -9,11 +9,13 @@ import { useQuery } from '@tanstack/react-query'
 import { CircleDashed, Ruler, Tag, UserRound } from 'lucide-react'
 import { useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react'
 import { allIssuesQuery, childrenQuery, peopleQuery, sprintsQuery, useUpdateIssue, type IssueEdit } from '../../api/queries'
-import type { Issue, IssueSummary, IssueType, Person, Priority, Size, Sprint } from '../../api/tracker'
+import type { Actor, Agent, Issue, IssueSummary, IssueType, Person, Priority, Size, Sprint } from '../../api/tracker'
 import { useText, type Translate } from '../../i18n'
+import { agentSub, isAgent } from '../../model/agents'
 import { canBeType, ISSUE_TYPES, parentLevelOf, PRIORITIES } from '../../model/issues'
 import { SIZES, sprintChoiceProblem } from '../../model/sprints'
 import { Avatar, cn, errorDetail, errorMessageId, Picker, showToast, type PickerOption } from '../../ui'
+import { ActorAvatar, AgentTag } from '../agents/actor'
 import { EstimateBadge, SprintIcon } from '../sprints/sprint-ui'
 import { ProjectPicker, ProjectPill, ProjectSwatch } from './projects'
 import { useReference } from './use-reference'
@@ -133,16 +135,28 @@ export function TypePicker({ issue }: { issue: Issue }) {
 
 const UNASSIGNED = '__none'
 
-/** People options for an assignee choice: Directory results, the caller and the current assignee, then "unassigned". */
-export function usePeopleOptions(query: string, enabled: boolean, extra: (Person | null)[]) {
+/** An agent as the Actor an issue carries once it is assigned. */
+export function agentActor(agent: Agent): Actor {
+  return { sub: agentSub(agent.id), name: agent.name, kind: 'agent', agent: { id: agent.id, handle: agent.handle, owner: agent.owner, disabled: agent.disabled } }
+}
+
+/**
+ * Assignee options: "unassigned", then People (Directory results, the caller
+ * and the current assignees), then "Delegate to an agent" — active agents
+ * with what to delegate to them. Disabled agents are never offered; an issue
+ * that still has one shows it as its current value. `actors` maps every
+ * offered subject to its Actor for the optimistic update.
+ */
+export function usePeopleOptions(query: string, enabled: boolean, extra: (Actor | Person | null)[]) {
   const { t } = useText()
-  const { me } = useReference()
+  const { me, activeAgents } = useReference()
   const people = useQuery({ ...peopleQuery(query), enabled })
   const needle = query.trim().toLowerCase()
-  const byId = new Map<string, Person>()
-  for (const person of [me, ...extra, ...(people.data?.items ?? [])]) {
-    if (person && (!needle || person.name.toLowerCase().includes(needle))) byId.set(person.sub, person)
+  const byId = new Map<string, Actor>()
+  for (const person of [me, ...extra.filter((candidate) => !isAgent(candidate as Actor | null)), ...(people.data?.items ?? [])]) {
+    if (person && (!needle || person.name.toLowerCase().includes(needle))) byId.set(person.sub, { ...person, kind: 'person' })
   }
+  const agents = activeAgents.filter((agent) => !needle || `${agent.name} ${agent.handle} ${agent.description}`.toLowerCase().includes(needle))
   const options: PickerOption[] = [
     ...(!needle || t('tracker.property.unassigned').toLowerCase().includes(needle) ? [{ value: UNASSIGNED, label: t('tracker.property.unassigned'), icon: <UserRound className="text-stone-400" /> }] : []),
     ...[...byId.values()].map((person) => ({
@@ -150,20 +164,38 @@ export function usePeopleOptions(query: string, enabled: boolean, extra: (Person
       label: person.name,
       icon: <Avatar person={person} size="xs" />,
       hint: person.sub === me.sub ? t('tracker.nav.you') : undefined,
+      group: agents.length > 0 ? t('tracker.agent.people') : undefined,
+    })),
+    ...agents.map((agent) => ({
+      value: agentSub(agent.id),
+      label: agent.name,
+      icon: <Avatar person={{ name: agent.name, kind: 'agent' }} size="xs" />,
+      detail: `@${agent.handle}`,
+      description: [t('tracker.agent.ownedBy', { name: agent.owner.name }), agent.description].filter(Boolean).join(' · '),
+      group: t('tracker.agent.delegate'),
     })),
   ]
+  for (const agent of agents) byId.set(agentSub(agent.id), agentActor(agent))
   return { options, people: byId, unavailable: people.data?.source === 'unavailable' }
 }
 
 export const assigneeValue = (option: string): string | null => (option === UNASSIGNED ? null : option)
 
+/** The edit that assigns `sub`: picking an agent makes the signed-in person its delegator. */
+export function assigneeEdit(id: string, sub: string | null, actors: Map<string, Actor>, me: Person): IssueEdit {
+  const assignee = sub ? (actors.get(sub) ?? null) : null
+  return { id, input: { assigneeSub: sub }, assignee, delegator: isAgent(assignee) ? { sub: me.sub, name: me.name, avatarUrl: me.avatarUrl } : null }
+}
+
 export function AssigneePicker({ issue, variant = 'chip' }: { issue: IssueSummary; variant?: ChipVariant }) {
   const { t } = useText()
+  const { me } = useReference()
   const { update } = useIssueEditor()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const { options, people } = usePeopleOptions(query, open, [issue.assignee])
   const name = issue.assignee?.name ?? t('tracker.property.unassigned')
+  const label = isAgent(issue.assignee) ? t('tracker.agent.avatarLabel', { name, owner: issue.assignee.agent.owner.name }) : name
   return (
     <Picker
       label={t('tracker.property.changeAssignee')}
@@ -175,14 +207,19 @@ export function AssigneePicker({ issue, variant = 'chip' }: { issue: IssueSummar
       onPick={(value) => {
         const sub = assigneeValue(value)
         if (sub === (issue.assignee?.sub ?? null)) return
-        update({ id: issue.id, input: { assigneeSub: sub }, assignee: sub ? (people.get(sub) ?? null) : null })
+        update(assigneeEdit(issue.id, sub, people, me))
       }}
       empty={t('tracker.picker.noPeople')}
       align={variant === 'chip' ? 'end' : 'start'}
     >
-      <Trigger variant={variant} label={`${t('tracker.property.assignee')}: ${name}`} className={variant === 'chip' ? 'px-0.5' : undefined}>
-        {issue.assignee ? <Avatar person={issue.assignee} size="xs" /> : <UserRound aria-hidden className="size-4 text-stone-400" />}
-        {variant === 'row' ? <span className={cn('truncate', !issue.assignee && 'text-stone-500')}>{name}</span> : null}
+      <Trigger variant={variant} label={`${t('tracker.property.assignee')}: ${label}`} className={variant === 'chip' ? 'px-0.5' : undefined}>
+        {issue.assignee ? <ActorAvatar actor={issue.assignee} size="xs" /> : <UserRound aria-hidden className="size-4 text-stone-400" />}
+        {variant === 'row' ? (
+          <span className={cn('flex min-w-0 items-center gap-1.5', !issue.assignee && 'text-stone-500')}>
+            <span className="truncate">{name}</span>
+            {isAgent(issue.assignee) ? <AgentTag disabled={issue.assignee.agent.disabled} /> : null}
+          </span>
+        ) : null}
       </Trigger>
     </Picker>
   )

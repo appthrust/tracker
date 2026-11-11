@@ -17,6 +17,7 @@ type Actor struct {
 	Kind    string
 	AgentID string
 	Key     bool
+	Scopes  []string
 }
 type Workspace struct {
 	ID                string    `json:"id"`
@@ -116,6 +117,7 @@ type Comment struct {
 	IssueID   string     `json:"issueId"`
 	Author    Person     `json:"author"`
 	Body      string     `json:"body"`
+	Mentions  []Person   `json:"mentions"`
 	CreatedAt time.Time  `json:"createdAt"`
 	EditedAt  *time.Time `json:"editedAt"`
 }
@@ -142,12 +144,18 @@ type TimelineItem struct {
 	Kind     string    `json:"kind"`
 	Activity *Activity `json:"activity,omitempty"`
 	Comment  *Comment  `json:"comment,omitempty"`
+	Run      *Run      `json:"run,omitempty"`
+	Request  *Request  `json:"request,omitempty"`
 }
 type Filter struct {
 	Status       []string `json:"status,omitempty"`
 	Category     []string `json:"category,omitempty"`
 	Assignee     []string `json:"assignee,omitempty"`
 	Reporter     []string `json:"reporter,omitempty"`
+	AssigneeKind []string `json:"assigneeKind,omitempty"`
+	Agent        []string `json:"agent,omitempty"`
+	Run          []string `json:"run,omitempty"`
+	Request      []string `json:"request,omitempty"`
 	Label        []string `json:"label,omitempty"`
 	Project      []string `json:"project,omitempty"`
 	Sprint       []string `json:"sprint,omitempty"`

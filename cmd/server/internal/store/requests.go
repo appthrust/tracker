@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
@@ -31,12 +32,12 @@ func (t *Tx) Request(id string) (domain.Request, error) {
 }
 
 type RequestCreate struct {
-	Kind    string   `json:"kind"`
-	Title   string   `json:"title"`
-	Body    string   `json:"body"`
-	Options []string `json:"options"`
-	To      *string  `json:"to"`
-	RunID   *string  `json:"runId"`
+	Kind    string        `json:"kind"`
+	Title   string        `json:"title"`
+	Body    string        `json:"body"`
+	Options []string      `json:"options"`
+	To      Field[string] `json:"to"`
+	RunID   *string       `json:"runId"`
 }
 
 func (t *Tx) insertRequest(issue domain.Issue, input RequestCreate, from domain.Person, to *domain.Person) (domain.Request, error) {
@@ -50,6 +51,9 @@ func (t *Tx) insertRequest(issue domain.Issue, input RequestCreate, from domain.
 		return domain.Request{}, err
 	}
 	if err := t.Exec(`INSERT INTO tracker_request(id,issue_id,kind,from_sub,from_name,to_sub,to_name,title,body,options,run_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, issue.ID, input.Kind, from.Sub, from.Name, sub, name, input.Title, input.Body, options, input.RunID, t.now()); err != nil {
+		return domain.Request{}, err
+	}
+	if err := t.event(issue.ID, from, "request.opened", id); err != nil {
 		return domain.Request{}, err
 	}
 	return t.Request(id)
@@ -74,7 +78,7 @@ func (t *Tx) CreateRequest(issueID string, input RequestCreate, actor domain.Act
 			return domain.Request{}, invalid("Options must be distinct nonempty strings of at most 200 characters")
 		}
 	}
-	if input.To == nil && actor.Kind == "agent" {
+	if !input.To.Present && actor.Kind == "agent" {
 		to = issue.Delegator
 		if to == nil {
 			to = &actor.Agent.Owner
@@ -86,7 +90,7 @@ func (t *Tx) CreateRequest(issueID string, input RequestCreate, actor domain.Act
 			return domain.Request{}, err
 		}
 		if run.Issue.ID != issue.ID {
-			return domain.Request{}, invalid("Run must belong to this issue")
+			return domain.Request{}, httpx.Forbidden()
 		}
 		if err := t.Exec(`UPDATE tracker_run SET state='waiting' WHERE id=$1`, run.ID); err != nil {
 			return domain.Request{}, err
@@ -151,16 +155,16 @@ func (t *Tx) AnswerRequest(id string, input RequestAnswer, actor domain.Actor) (
 			return request, err
 		}
 	}
+	if err := t.event(request.Issue.ID, actor.Person, "request.answered", id); err != nil {
+		return request, err
+	}
 	return t.Request(id)
 }
 
 func (t *Tx) Inbox(actor domain.Actor) ([]domain.InboxItem, error) {
 	list := []domain.InboxItem{}
-	predicate := ` AND q.state='open' AND (q.to_sub=$2 OR q.to_sub IS NULL)`
-	if actor.Kind == "agent" {
-		predicate = ` AND ((q.state='open' AND q.to_sub=$2) OR (q.state='answered' AND q.from_sub=$2))`
-	}
-	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+requestJSON+requestFrom+predicate+` ORDER BY q.created_at,q.id`, t.WorkspaceID, actor.Sub)
+	predicate := ` AND ((q.state='open' AND (q.to_sub=$2 OR (q.to_sub IS NULL AND $3))) OR (q.state='answered' AND q.from_sub=$2 AND q.answer_acknowledged_at IS NULL))`
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+requestJSON+requestFrom+predicate+` ORDER BY CASE WHEN q.state='open' THEN 0 ELSE 1 END,q.created_at,q.id`, t.WorkspaceID, actor.Sub, actor.Kind != "agent")
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +182,15 @@ func (t *Tx) Inbox(actor domain.Actor) ([]domain.InboxItem, error) {
 	}
 	err = rows.Err()
 	rows.Close()
-	if err != nil || actor.Kind != "agent" {
+	if err != nil {
+		return nil, err
+	}
+	mentions, err := t.inboxMentions(actor.Sub)
+	if err != nil {
+		return nil, err
+	}
+	list = append(list, mentions...)
+	if actor.Kind != "agent" {
 		return list, err
 	}
 	rows, err = t.SQL.QueryContext(t.Context, `SELECT i.id,s.category,
@@ -209,12 +221,99 @@ func (t *Tx) Inbox(actor domain.Actor) ([]domain.InboxItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		issue, err := t.Issue(id)
+	issues, err := t.issueSummaries(ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		list = append(list, domain.InboxItem{Kind: "assignment", Issue: &issues[i]})
+	}
+	return list, nil
+}
+
+type RequestFilter struct {
+	State string
+	To    string
+	Issue string
+}
+
+func (t *Tx) Requests(filter RequestFilter) ([]domain.Request, error) {
+	if filter.State != "" && !slices.Contains([]string{"open", "answered", "withdrawn"}, filter.State) {
+		return nil, invalid("State must be open, answered, or withdrawn")
+	}
+	if filter.Issue != "" {
+		issue, err := t.Issue(filter.Issue)
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, domain.InboxItem{Kind: "assignment", Issue: &issue.IssueSummary})
+		filter.Issue = issue.ID
 	}
-	return list, nil
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+requestJSON+requestFrom+` AND ($2='' OR q.state=$2) AND ($3='' OR q.to_sub=$3 OR ($3='none' AND q.to_sub IS NULL)) AND ($4='' OR q.issue_id=$4) ORDER BY q.created_at DESC,q.id DESC`, t.WorkspaceID, filter.State, filter.To, filter.Issue)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []domain.Request{}
+	for rows.Next() {
+		item, err := scanRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, item)
+	}
+	return list, rows.Err()
+}
+
+func (t *Tx) withdrawRequests(predicate, value string, actor domain.Person) error {
+	rows, err := t.SQL.QueryContext(t.Context, `UPDATE tracker_request q SET state='withdrawn' FROM tracker_issue i WHERE i.id=q.issue_id AND i.workspace_id=$1 AND q.state='open' AND (`+predicate+`) RETURNING q.id,q.issue_id,q.run_id`, t.WorkspaceID, value)
+	if err != nil {
+		return err
+	}
+	type withdrawn struct {
+		id, issue string
+		run       *string
+	}
+	list := []withdrawn{}
+	for rows.Next() {
+		var item withdrawn
+		if err := rows.Scan(&item.id, &item.issue, &item.run); err != nil {
+			rows.Close()
+			return err
+		}
+		list = append(list, item)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(list, func(a, b withdrawn) int { return strings.Compare(a.id, b.id) })
+	for _, item := range list {
+		if err := t.event(item.issue, actor, "request.withdrawn", item.id); err != nil {
+			return err
+		}
+		if item.run != nil {
+			if err := t.Exec(`UPDATE tracker_run SET state='running' WHERE id=$1 AND state='waiting' AND NOT EXISTS(SELECT 1 FROM tracker_request WHERE run_id=$1 AND state='open')`, *item.run); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (t *Tx) WithdrawRequest(id string, actor domain.Actor) (domain.Request, error) {
+	item, err := t.Request(id)
+	if err != nil {
+		return item, err
+	}
+	if !domain.Can(actor, domain.WithdrawRequest, domain.Target{OwnerSub: item.From.Sub}) {
+		return item, httpx.Forbidden()
+	}
+	if item.State != "open" {
+		return item, httpx.Conflict("The request is not open")
+	}
+	if err := t.withdrawRequests(`q.id=$2`, id, actor.Person); err != nil {
+		return item, err
+	}
+	return t.Request(id)
 }

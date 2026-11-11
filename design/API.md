@@ -489,7 +489,7 @@ An **Actor** is a person or an agent. Everything a person can be on an issue
 | **Delegation** (fields on Issue) | whoever assigns | set when the assignee becomes an agent, cleared when it becomes a person or nobody | `delegator` is a Person: the person who assigned, or the agent's owner when an agent assigned (itself or another agent). The delegator is who the agent answers to on this issue. |
 | **Run** | the agent that started it; a person may cancel | `running ⇄ waiting → succeeded \| failed \| canceled` | only the issue's assignee starts a run; at most one non-terminal run per issue; holds a lease (`leaseExpiresAt`, 10 minutes, renewed by heartbeat, compared at microsecond precision); a run whose lease has passed is `stalled` (derived at read time). A stalled run blocks nothing and is never revived: heartbeat and finish are refused, and the next start on the issue closes it as `failed/lease_expired`. Changing the assignee away from the agent cancels its non-terminal run (`reassigned`) in the same transaction. Whatever ends a run without success (cancel, reassignment, expiry closure) withdraws its open requests. |
 | **Request** | requester creates and withdraws; addressee answers | `open → answered \| withdrawn` | `kind ∈ {question, approval, review}`; directed from one actor to one actor, or to "any person"; `approval` and `review` are answered only by people; a `review` exists only as the result of a finished run; only a run's own agent attaches a request to that run, and the run must belong to the same issue (otherwise anyone could force a run into `waiting`). |
-| **Mention** | server, parsed from a comment | created with the comment; acknowledged by its target | `@handle` (agent) or `@<directory person>`; one row per (comment, target). |
+| **Mention** | server, parsed from a comment | created with the comment; acknowledged by its target | `@handle` of an agent; one row per (comment, target). People are not mentionable in this version (Directory has no lookup by typed text). |
 | **Event** | server, in the transaction of the write it describes | append-only | `seq` allocated from the workspace row, so order of `seq` is commit order and a reader never misses a row behind its cursor. |
 | **Completion policy** (on Workspace) | Admin | setting | `agentCompletion ∈ {review, direct}`, default `review`. |
 
@@ -514,7 +514,9 @@ identifier of its own: it is the free-text `session` of a Run.
 | Action | Person | Agent (scope) |
 | --- | --- | --- |
 | Read issues, timeline, sprints, feed | any | `tracker:read` |
-| Create/edit issues, comment, attach, raise and answer `question` Requests, runs | any (runs: n/a) | `tracker:write` |
+| Create issues, comment, attach, raise `question`/`approval` Requests, answer a `question` addressed to it — on any issue | any | `tracker:write` |
+| Edit an issue's fields (`PATCH /issues/{id}`) | any | `tracker:write`, and only as the issue's assignee or reporter |
+| Start and drive a run | n/a | `tracker:write`, assignee only |
 | Set a `completed` status | any | only when `agentCompletion = direct` |
 | Answer `approval` / `review` | addressee, or any person when unaddressed; Admin | never |
 | Cancel a run | any | its own |
@@ -524,7 +526,9 @@ identifier of its own: it is the free-text `session` of a Run.
 
 
 Authentication: every route accepts the edge user bearer or an Access Key
-Assertion (audience `tracker`). Scope failures → 403 `forbidden`.
+Assertion (audience `tracker`). A key without the needed scope → 403
+`insufficient_scope` (as for user keys); a refusal by the authorization table
+→ 403 `forbidden`.
 
 ```ts
 type ActorKind = 'person' | 'agent'
@@ -574,10 +578,16 @@ Changes to existing shapes:
 - `POST`/`PATCH /issues`: `assigneeSub` accepts `agent:<id>`; a disabled agent
   → 400 (path `assigneeSub`). `PATCH` accepts `expectedUpdatedAt?`; a mismatch
   → 409 `conflict`. An agent setting a `completed` status under `review` → 403.
-- All `POST` routes honour `Idempotency-Key` (≤ 128 chars): the first response
-  is stored 24 h per (actor, key) and replayed; a different body → 409.
-- `Filter` gains `assigneeKind?: ActorKind[]`, `agent?: string[]`,
-  `run?: ('active' | 'stalled' | 'none')[]`, `request?: ('open' | 'mine')[]`.
+- All `POST` routes except the multipart attachment upload honour
+  `Idempotency-Key` (≤ 128 chars): the first handler status and body are kept
+  24 h per (actor, key) and replayed for the identical request (method, URI,
+  content type, body bytes); a different request under the same key → 409.
+  Authentication failures are not stored.
+- `Filter` gains `assigneeKind?: ActorKind[]`, `agent?: string[]` (the
+  assignee is one of these agent ids),
+  `run?: ('active' | 'stalled' | 'none')[]`, `request?: ('open' | 'mine')[]`
+  (`open`: the issue has an open request; `mine`: an open request raised by
+  the caller).
 - `TimelineItem` gains `{ kind: 'run'; run: Run }` and `{ kind: 'request'; request: Request }`.
 - `Activity.field` gains `'delegator'`. `Me` gains `kind` and, for agents, `agent` and `scopes`.
 - `Workspace` gains `agentCompletion: 'review' | 'direct'`; `PATCH /workspace` accepts it (Admin).

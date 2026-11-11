@@ -1,14 +1,22 @@
-// Activity and comments in one ascending timeline (API.md `TimelineItem`),
-// then the comment composer. Activity values follow the server's encoding
-// (status → status id, labels → label ids, project → project id, assignee →
-// Person, parent/blocks → IssueRef, attachment → Attachment, estimate → the
-// size, sprint → SprintRef) and fall back to the raw value.
+// Activity, comments, agent runs and requests in one ascending timeline
+// (API.md `TimelineItem`), then the comment composer. Activity values follow
+// the server's encoding (status → status id, labels → label ids, project →
+// project id, assignee → Actor, delegator → Person, parent/blocks → IssueRef,
+// attachment → Attachment, estimate → the size, sprint → SprintRef) and fall
+// back to the raw value. A delegator change made in the same write as the
+// assignment reads as part of "delegated it to …" and is not repeated. The
+// composer completes `@handle` mentions of active agents (people are not
+// mentionable).
 import { Pencil, Trash2 } from 'lucide-react'
-import { useRef, useState, type ClipboardEvent, type ReactNode } from 'react'
+import { useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useAddComment, useDeleteComment, useEditComment } from '../../api/queries'
-import type { Activity, Comment, Label, Project, Status, TimelineItem } from '../../api/tracker'
+import type { Activity, Agent, Comment, Label, Project, Status, TimelineItem } from '../../api/tracker'
 import { useText, type Translate } from '../../i18n'
+import { mentionAt } from '../../model/agents'
 import { Avatar, Button, ConfirmDialog, formatDateTime, formatRelative, Kbd, Markdown, TextArea, errorMessageId, showToast } from '../../ui'
+import { ActorAvatar, ActorName } from '../agents/actor'
+import { RequestCard } from '../agents/request-card'
+import { RunTimelineEntry } from '../agents/run-block'
 import { MOD_KEY } from '../ui-state'
 import { markdownFor, transferFiles, useUploader } from './attachments'
 import { useReference } from './use-reference'
@@ -65,8 +73,13 @@ function activityText(activity: Activity, names: Names): ReactNode {
         </>
       )
     }
-    case 'assignee':
-      return activity.to ? t('tracker.activity.assigned', { actor, to }) : t('tracker.activity.unassigned', { actor })
+    case 'assignee': {
+      if (!activity.to) return t('tracker.activity.unassigned', { actor })
+      const toAgent = typeof activity.to === 'object' && 'kind' in activity.to && activity.to.kind === 'agent'
+      return toAgent ? t('tracker.activity.delegated', { actor, to }) : t('tracker.activity.assigned', { actor, to })
+    }
+    case 'delegator':
+      return activity.to ? t('tracker.activity.delegator', { actor, to }) : t('tracker.activity.delegatorCleared', { actor })
     case 'labels': {
       const before = asList(activity.from)
       const after = asList(activity.to)
@@ -102,30 +115,52 @@ function activityText(activity: Activity, names: Names): ReactNode {
   }
 }
 
+/** A delegator change that rides on an assignment in the same write (same time and actor). */
+function delegatorOfAssignment(item: TimelineItem, index: number, items: TimelineItem[]): boolean {
+  if (item.kind !== 'activity' || item.activity.field !== 'delegator') return false
+  const { createdAt, actor } = item.activity
+  return items.some((other, otherIndex) => otherIndex !== index && other.kind === 'activity' && other.activity.field === 'assignee' && other.activity.createdAt === createdAt && other.activity.actor.sub === actor.sub)
+}
+
 export function Timeline({ issueId, items }: { issueId: string; items: TimelineItem[] }) {
   const { t, locale } = useText()
   const { statusById, labelById, projectById } = useReference()
   const names: Names = { statusById, labelById, projectById, t }
   return (
     <ol className="space-y-3">
-      {items.map((item) =>
-        item.kind === 'activity' ? (
-          <li key={item.activity.id} className="flex items-start gap-2 pl-1 text-xs text-stone-500">
-            <Avatar person={item.activity.actor} size="xs" />
-            <p className="min-w-0 flex-1">
-              {activityText(item.activity, names)}
-              <span aria-hidden> · </span>
-              <time dateTime={item.activity.createdAt} title={formatDateTime(item.activity.createdAt, locale)}>
-                {formatRelative(item.activity.createdAt, locale)}
-              </time>
-            </p>
-          </li>
-        ) : (
+      {items.map((item, index) => {
+        if (delegatorOfAssignment(item, index, items)) return null
+        if (item.kind === 'activity')
+          return (
+            <li key={item.activity.id} className="flex items-start gap-2 pl-1 text-xs text-stone-500">
+              <ActorAvatar actor={item.activity.actor} />
+              <p className="min-w-0 flex-1">
+                {activityText(item.activity, names)}
+                <span aria-hidden> · </span>
+                <time dateTime={item.activity.createdAt} title={formatDateTime(item.activity.createdAt, locale)}>
+                  {formatRelative(item.activity.createdAt, locale)}
+                </time>
+              </p>
+            </li>
+          )
+        if (item.kind === 'run')
+          return (
+            <li key={item.run.id}>
+              <RunTimelineEntry run={item.run} />
+            </li>
+          )
+        if (item.kind === 'request')
+          return (
+            <li key={item.request.id}>
+              <RequestCard request={item.request} variant="timeline" />
+            </li>
+          )
+        return (
           <li key={item.comment.id}>
             <CommentCard issueId={issueId} comment={item.comment} />
           </li>
         )
-      )}
+      })}
     </ol>
   )
 }
@@ -142,8 +177,8 @@ function CommentCard({ issueId, comment }: { issueId: string; comment: Comment }
   return (
     <article className="rounded-lg border border-line bg-white" aria-label={t('tracker.comment.by', { name: comment.author.name })}>
       <header className="flex items-center gap-2 px-3 pt-2.5 text-xs text-stone-500">
-        <Avatar person={comment.author} size="xs" />
-        <span className="font-medium text-stone-800">{comment.author.name}</span>
+        <ActorAvatar actor={comment.author} />
+        <ActorName actor={comment.author} className="font-medium text-stone-800" />
         <time dateTime={comment.createdAt} title={formatDateTime(comment.createdAt, locale)}>
           {formatRelative(comment.createdAt, locale)}
         </time>
@@ -210,15 +245,31 @@ export function insertAtCaret(area: HTMLTextAreaElement | null, value: string, t
   return `${before}${glue}${text}${value.slice(end)}`
 }
 
-/** Comment box: Markdown, ⌘/Ctrl+Enter sends, pasted or dropped images upload and land as Markdown images. */
+/** Active agents whose handle or name starts with `query` (what follows the typed `@`). */
+function mentionCandidates(agents: readonly Agent[], query: string): Agent[] {
+  const needle = query.toLowerCase()
+  return agents.filter((agent) => agent.handle.startsWith(needle) || agent.name.toLowerCase().startsWith(needle)).slice(0, 6)
+}
+
+/**
+ * Comment box: Markdown, ⌘/Ctrl+Enter sends, pasted or dropped images upload
+ * and land as Markdown images. Typing `@` offers the active agents (↑/↓ move,
+ * Enter or Tab inserts `@handle `, Esc dismisses).
+ */
 export function CommentComposer({ issueId, attachmentCount }: { issueId: string; attachmentCount: number }) {
   const { t } = useText()
-  const { me } = useReference()
+  const { me, activeAgents } = useReference()
   const add = useAddComment(issueId)
   const { upload, pending: uploading } = useUploader(issueId, attachmentCount)
   const [body, setBody] = useState('')
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
+  const [mentionIndex, setMentionIndex] = useState(0)
   const area = useRef<HTMLTextAreaElement>(null)
   const tooLong = new TextEncoder().encode(body).length > COMMENT_MAX_BYTES
+  const listId = `mentions-${issueId}`
+  const candidates = mention ? mentionCandidates(activeAgents, mention.query) : []
+  const mentionOpen = candidates.length > 0
+  const activeMention = Math.min(mentionIndex, Math.max(candidates.length - 1, 0))
 
   const send = () => {
     if (!body.trim() || tooLong || add.isPending) return
@@ -240,6 +291,46 @@ export function CommentComposer({ issueId, attachmentCount }: { issueId: string;
     event.preventDefault()
     void attachFiles(files)
   }
+  /** Re-reads the `@…` word at the caret. */
+  const trackMention = (value: string, caret: number) => {
+    const next = mentionAt(value, caret)
+    setMention(next)
+    if (next?.query !== mention?.query) setMentionIndex(0)
+  }
+  const insertMention = (agent: Agent) => {
+    if (!mention) return
+    const caret = mention.start + 1 + mention.query.length
+    const next = `${body.slice(0, mention.start)}@${agent.handle} ${body.slice(caret)}`
+    setBody(next)
+    setMention(null)
+    const position = mention.start + agent.handle.length + 2
+    requestAnimationFrame(() => area.current?.setSelectionRange(position, position))
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return
+    if (mentionOpen) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        setMentionIndex((activeMention + (event.key === 'ArrowDown' ? 1 : -1) + candidates.length) % candidates.length)
+        return
+      }
+      if ((event.key === 'Enter' && !event.metaKey && !event.ctrlKey) || event.key === 'Tab') {
+        event.preventDefault()
+        insertMention(candidates[activeMention]!)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setMention(null)
+        return
+      }
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      send()
+    }
+  }
 
   return (
     <form
@@ -250,7 +341,7 @@ export function CommentComposer({ issueId, attachmentCount }: { issueId: string;
       className="flex gap-2"
     >
       <Avatar person={me} size="sm" />
-      <div className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white focus-within:border-accent">
+      <div className="relative min-w-0 flex-1 rounded-lg border border-stone-300 bg-white focus-within:border-accent">
         <label htmlFor={`comment-${issueId}`} className="sr-only">
           {t('tracker.comment.label')}
         </label>
@@ -260,7 +351,17 @@ export function CommentComposer({ issueId, attachmentCount }: { issueId: string;
           value={body}
           rows={3}
           placeholder={t('tracker.comment.placeholder')}
-          onChange={(event) => setBody(event.target.value)}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={mentionOpen}
+          aria-controls={mentionOpen ? listId : undefined}
+          aria-activedescendant={mentionOpen ? `${listId}-${activeMention}` : undefined}
+          onChange={(event) => {
+            setBody(event.target.value)
+            trackMention(event.target.value, event.target.selectionStart)
+          }}
+          onSelect={(event) => trackMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+          onBlur={() => setMention(null)}
           onPaste={onPaste}
           onDrop={(event) => {
             const files = transferFiles(event.dataTransfer)
@@ -268,17 +369,38 @@ export function CommentComposer({ issueId, attachmentCount }: { issueId: string;
             event.preventDefault()
             void attachFiles(files)
           }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              send()
-            }
-          }}
+          onKeyDown={onKeyDown}
           aria-invalid={tooLong || undefined}
           className="block max-h-80 min-h-20 w-full resize-y rounded-t-lg bg-transparent px-3 py-2 text-[13px] leading-relaxed text-stone-900 placeholder:text-stone-400 focus:outline-none"
         />
+        {mentionOpen ? (
+          <ul id={listId} role="listbox" aria-label={t('tracker.comment.mentionList')} className="absolute top-full left-2 z-20 mt-1 w-72 rounded-lg border border-line bg-white p-1 shadow-lg animate-pop-in">
+            {candidates.map((agent, index) => (
+              <li
+                key={agent.id}
+                id={`${listId}-${index}`}
+                role="option"
+                aria-selected={index === activeMention}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  insertMention(agent)
+                }}
+                onPointerMove={() => setMentionIndex(index)}
+                className={`flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-[13px] text-stone-700 ${index === activeMention ? 'bg-stone-100 text-stone-900' : ''}`}
+              >
+                <Avatar person={{ name: agent.name, kind: 'agent' }} size="xs" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">
+                    {agent.name} <span className="text-stone-400">@{agent.handle}</span>
+                  </span>
+                  {agent.description ? <span className="line-clamp-1 block text-[11px] text-stone-500">{agent.description}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="flex items-center gap-2 border-t border-stone-100 px-2 py-1.5">
-          <span className="text-[11px] text-stone-400">{uploading ? t('tracker.attachment.uploading') : tooLong ? t('tracker.comment.tooLong') : t('tracker.comment.hint')}</span>
+          <span className="text-[11px] text-stone-400">{uploading ? t('tracker.attachment.uploading') : tooLong ? t('tracker.comment.tooLong') : activeAgents.length > 0 ? t('tracker.comment.mentionHint') : t('tracker.comment.hint')}</span>
           <Button type="submit" size="sm" tone="primary" className="ml-auto h-7 md:h-7" loading={add.isPending} disabled={!body.trim() || tooLong}>
             {t('tracker.comment.send')}
             <Kbd className="border-white/30 bg-white/15 text-white">{`${MOD_KEY}↵`}</Kbd>

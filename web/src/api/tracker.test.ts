@@ -101,10 +101,15 @@ describe('tracker API client', () => {
   test('optimistic patch: changed fields only; clearing the assignee or picking one shows at once', async () => {
     const { api } = mockApi()
     const issue = await api.issues.get('APT-2')
-    const person = { sub: 'dev-jordan', name: 'Jordan Lee' }
+    const person = { sub: 'dev-jordan', name: 'Jordan Lee', kind: 'person' as const }
     const next = applyIssuePatch(issue, { statusId: 'S', priority: 'low', labelIds: [], assigneeSub: person.sub }, person)
     expect(next).toMatchObject({ statusId: 'S', priority: 'low', labelIds: [], assignee: person, title: issue.title, description: issue.description })
     expect(applyIssuePatch(issue, { assigneeSub: null }).assignee).toBeNull()
+    // Delegating to an agent shows the delegator at once; any reassignment drops the run the server cancels.
+    const agent = { sub: 'agent:A1', name: 'Astra', kind: 'agent' as const, agent: { id: 'A1', handle: 'astra', owner: { sub: 'dev-sam', name: 'Sam Rivera' }, disabled: false } }
+    const delegated = applyIssuePatch(issue, { assigneeSub: agent.sub }, agent, undefined, undefined, { sub: 'dev-alex', name: 'Alex Chen' })
+    expect(delegated).toMatchObject({ assignee: agent, delegator: { sub: 'dev-alex' }, activeRun: null })
+    expect(applyIssuePatch(delegated, { assigneeSub: 'dev-sam' }, { sub: 'dev-sam', name: 'Sam Rivera', kind: 'person' })).toMatchObject({ delegator: null, activeRun: null })
     expect(applyIssuePatch(issue, { projectId: 'P' }).projectId).toBe('P')
     expect(applyIssuePatch({ ...issue, projectId: 'P' }, { projectId: null }).projectId).toBeNull()
     expect(applyIssuePatch({ ...issue, projectId: 'P' }, { title: 'x' }).projectId).toBe('P')

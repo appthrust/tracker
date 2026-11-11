@@ -2,15 +2,16 @@
 // facet: text (`q`, focused by `/`), status/category, assignee, reporter,
 // priority, label, project (shown once the workspace has projects), epic and
 // story (with "none"), sprint (the active one, any sprint, or the backlog;
-// hidden on a sprint's own page), type, environment, surface, created-after
-// and top-level only (`parent: none`). Facets combine with AND, values within
-// a facet with OR. Sort and the grouping (none, by epic, story or sprint) sit
-// on the right.
+// hidden on a sprint's own page), agent work (one control for the assignee
+// kind, agent work in progress, open requests and the assigned agent), type,
+// environment, surface, created-after and top-level only (`parent: none`).
+// Facets combine with AND, values within a facet with OR. Sort and the
+// grouping (none, by epic, story or sprint) sit on the right.
 import { useQuery } from '@tanstack/react-query'
-import { ArrowDownUp, BookMarked, CalendarDays, Circle, CircleDashed, FolderKanban, Globe, Layers, ListTree, MonitorSmartphone, Rows3, Search, SignalHigh, Tag, UserRound, UserRoundPen, X, Zap } from 'lucide-react'
+import { ArrowDownUp, BookMarked, Bot, CalendarDays, Circle, CircleDashed, FolderKanban, Globe, Hand, Layers, ListTree, LoaderCircle, MessageCircleQuestion, MonitorSmartphone, Rows3, Search, SignalHigh, Tag, Unplug, UserRound, UserRoundPen, X, Zap } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { epicsQuery, sprintsQuery, storiesQuery } from '../../api/queries'
-import type { Filter, GroupBy, IssueSummary, IssueType, Priority, Sort, StatusCategory, Surface } from '../../api/tracker'
+import type { ActorKind, Filter, GroupBy, IssueSummary, IssueType, Priority, Sort, StatusCategory, Surface } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { CATEGORIES, ENVIRONMENT_SUGGESTIONS, GROUP_BYS, isEmptyFilter, ISSUE_TYPES, NO_GROUP, PRIORITIES, SORTS, SURFACES } from '../../model/issues'
 import { BACKLOG } from '../../model/sprints'
@@ -61,7 +62,7 @@ export function FilterBar({
   hideSprint?: boolean
 }) {
   const { t, locale } = useText()
-  const { statuses, labels, me, projects } = useReference()
+  const { statuses, labels, me, projects, agents } = useReference()
   const [q, setQ] = useState(filter.q ?? '')
   const [peopleQuery, setPeopleQuery] = useState('')
   const [peopleOpen, setPeopleOpen] = useState(false)
@@ -124,7 +125,33 @@ export function FilterBar({
     })),
     { value: NO_GROUP, label: none, icon: <CircleDashed className="text-stone-400" /> },
   ]
-
+  // One "Agents" control over four facets; values are `<facet>:<value>`.
+  const agentGroup = t('tracker.filter.agentGroup')
+  const agentOptions: PickerOption[] = [
+    { value: 'kind:agent', label: t('tracker.filter.kind.agent'), icon: <Bot className="text-stone-500" />, group: t('tracker.filter.kindGroup') },
+    { value: 'kind:person', label: t('tracker.filter.kind.person'), icon: <UserRound className="text-stone-500" />, group: t('tracker.filter.kindGroup') },
+    { value: 'run:active', label: t('tracker.filter.run.active'), icon: <LoaderCircle className="text-accent" />, group: t('tracker.filter.workGroup') },
+    { value: 'run:stalled', label: t('tracker.filter.run.stalled'), icon: <Unplug className="text-bad-ink" />, group: t('tracker.filter.workGroup') },
+    { value: 'run:none', label: t('tracker.filter.run.none'), icon: <CircleDashed className="text-stone-400" />, group: t('tracker.filter.workGroup') },
+    { value: 'request:open', label: t('tracker.filter.request.open'), icon: <MessageCircleQuestion className="text-busy-ink" />, group: t('tracker.filter.requestGroup') },
+    { value: 'request:mine', label: t('tracker.filter.request.mine'), icon: <Hand className="text-busy-ink" />, group: t('tracker.filter.requestGroup') },
+    ...agents
+      .filter((agent) => !agent.disabled || filter.agent?.includes(agent.id))
+      .map((agent) => ({ value: `agent:${agent.id}`, label: agent.name, icon: <Avatar person={{ name: agent.name, kind: 'agent' }} size="xs" />, detail: `@${agent.handle}`, group: agentGroup })),
+  ]
+  const agentSelected = [
+    ...(filter.assigneeKind ?? []).map((value) => `kind:${value}`),
+    ...(filter.run ?? []).map((value) => `run:${value}`),
+    ...(filter.request ?? []).map((value) => `request:${value}`),
+    ...(filter.agent ?? []).map((value) => `agent:${value}`),
+  ]
+  const pickAgentFacet = (value: string) => {
+    const [facet, rest] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)]
+    if (facet === 'kind') onFilter({ ...filter, assigneeKind: toggle(filter.assigneeKind, rest as ActorKind) })
+    else if (facet === 'run') onFilter({ ...filter, run: toggle(filter.run, rest as 'active' | 'stalled' | 'none') })
+    else if (facet === 'request') onFilter({ ...filter, request: toggle(filter.request, rest as 'open' | 'mine') })
+    else onFilter({ ...filter, agent: toggle(filter.agent, rest) })
+  }
   return (
     <div className="flex flex-wrap items-center gap-1.5 border-b border-line bg-stone-50/60 px-4 py-2 sm:px-6">
       <label className="relative flex h-7 w-full items-center sm:w-56">
@@ -252,6 +279,9 @@ export function FilterBar({
           <FacetButton icon={<SprintIcon className="text-current" />} label={t('tracker.property.sprint')} count={filter.sprint?.length ?? 0} />
         </Picker>
       )}
+      <Picker label={t('tracker.filter.agentWork')} options={agentOptions} selected={agentSelected} multiple onPick={pickAgentFacet} empty={t('tracker.picker.empty')}>
+        <FacetButton icon={<Bot />} label={t('tracker.filter.agentsFacet')} count={agentSelected.length} />
+      </Picker>
       <Picker
         label={t('tracker.filter.type')}
         options={ISSUE_TYPES.map((type) => ({ value: type, label: t(`tracker.type.${type}`), icon: <TypeIcon type={type} /> }))}

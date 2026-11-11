@@ -219,6 +219,32 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 	anyOf("i.priority", f.Priority)
 	anyOf("i.report->>'environment'", f.Environment)
 	anyOf("i.report->>'surface'", f.Surface)
+	anyOf("CASE WHEN i.assignee_sub LIKE 'agent:%' THEN 'agent' WHEN i.assignee_sub IS NOT NULL THEN 'person' END", f.AssigneeKind)
+	if len(f.Agent) > 0 {
+		clauses = append(clauses, "i.assignee_sub IN (SELECT 'agent:'||a.id FROM tracker_agent a WHERE a.workspace_id=i.workspace_id AND a.id=ANY("+bind(pq.Array(f.Agent))+"))")
+	}
+	if len(f.Run) > 0 {
+		now := bind(t.now())
+		states := []string{}
+		for _, state := range f.Run {
+			switch state {
+			case "active":
+				states = append(states, "EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting') AND r.lease_expires_at>="+now+")")
+			case "stalled":
+				states = append(states, "EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting') AND r.lease_expires_at<"+now+")")
+			case "none":
+				states = append(states, "NOT EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting'))")
+			}
+		}
+		clauses = append(clauses, "("+strings.Join(states, " OR ")+")")
+	}
+	if len(f.Request) > 0 {
+		predicate := ""
+		if !slices.Contains(f.Request, "open") {
+			predicate = " AND q.from_sub=" + bind(options.Subject)
+		}
+		clauses = append(clauses, "EXISTS(SELECT 1 FROM tracker_request q WHERE q.issue_id=i.id AND q.state='open'"+predicate+")")
+	}
 	if len(f.Label) > 0 {
 		clauses = append(clauses, "EXISTS(SELECT 1 FROM tracker_issue_label il WHERE il.issue_id=i.id AND il.label_id=ANY("+bind(pq.Array(f.Label))+"))")
 	}
@@ -368,4 +394,26 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		page.NextCursor = &cursor
 	}
 	return page, nil
+}
+
+// Inbox assignments reuse the list projection in one query, preserving its order.
+func (t *Tx) issueSummaries(ids []string) ([]domain.IssueSummary, error) {
+	list := []domain.IssueSummary{}
+	if len(ids) == 0 {
+		return list, nil
+	}
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+issueColumns+`,''`+issueFrom+issueHierarchy+` WHERE i.workspace_id=$1 AND i.deleted_at IS NULL AND i.id=ANY($2) ORDER BY array_position($2::text[],i.id)`, t.WorkspaceID, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := t.now()
+	for rows.Next() {
+		item, err := scanIssue(rows, now)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, item.IssueSummary)
+	}
+	return list, rows.Err()
 }

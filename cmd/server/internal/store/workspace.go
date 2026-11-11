@@ -44,7 +44,7 @@ func (t *Tx) Workspace() (domain.Workspace, error) {
 	err := t.SQL.QueryRowContext(t.Context, `SELECT id,key,name,(SELECT count(*) FROM tracker_issue WHERE workspace_id=$1 AND deleted_at IS NULL),created_at,updated_at,sprint_length_weeks,timezone,agent_completion FROM tracker_workspace WHERE id=$1`, t.WorkspaceID).Scan(&w.ID, &w.Key, &w.Name, &w.IssueCount, &w.CreatedAt, &w.UpdatedAt, &w.SprintLengthWeeks, &w.Timezone, &w.AgentCompletion)
 	return w, err
 }
-func (t *Tx) PatchWorkspace(key, name *string, lengthWeeks *int, timezone *string) (domain.Workspace, error) {
+func (t *Tx) PatchWorkspace(key, name *string, lengthWeeks *int, timezone, agentCompletion *string) (domain.Workspace, error) {
 	w, err := t.Workspace()
 	if err != nil {
 		return w, err
@@ -61,6 +61,12 @@ func (t *Tx) PatchWorkspace(key, name *string, lengthWeeks *int, timezone *strin
 	if timezone != nil {
 		w.Timezone = *timezone
 	}
+	if agentCompletion != nil {
+		w.AgentCompletion = *agentCompletion
+	}
+	if w.AgentCompletion != "review" && w.AgentCompletion != "direct" {
+		return w, &domain.FieldError{Path: "agentCompletion", Message: "Agent completion must be review or direct"}
+	}
 	if w.SprintLengthWeeks != 1 && w.SprintLengthWeeks != 2 {
 		return w, &domain.FieldError{Path: "sprintLengthWeeks", Message: "Sprint length must be 1 or 2 weeks"}
 	}
@@ -70,7 +76,7 @@ func (t *Tx) PatchWorkspace(key, name *string, lengthWeeks *int, timezone *strin
 	if !domain.ValidKey(w.Key) || !domain.Text(w.Name, 1, 100) {
 		return w, invalid("Workspace requires a key of 2 to 6 uppercase letters/digits and a name of 1 to 100 characters")
 	}
-	err = t.Exec(`UPDATE tracker_workspace SET key=$2,name=$3,sprint_length_weeks=$4,timezone=$5,updated_at=now() WHERE id=$1`, t.WorkspaceID, w.Key, w.Name, w.SprintLengthWeeks, w.Timezone)
+	err = t.Exec(`UPDATE tracker_workspace SET key=$2,name=$3,sprint_length_weeks=$4,timezone=$5,agent_completion=$6,updated_at=now() WHERE id=$1`, t.WorkspaceID, w.Key, w.Name, w.SprintLengthWeeks, w.Timezone, w.AgentCompletion)
 	if err != nil {
 		return w, err
 	}

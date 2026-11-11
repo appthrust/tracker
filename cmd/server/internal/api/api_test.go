@@ -204,6 +204,18 @@ func TestOpenAPIRouteInventory(t *testing.T) {
 			require.Contains(t, document.Paths[path], method, "%s %s", method, path)
 		}
 	}
+	registered := map[string]bool{"GET /openapi.json": true, "GET /people/{id}/avatar": true}
+	for _, route := range (&API{}).routes() {
+		require.NotContains(t, registered, route.pattern, "duplicate route")
+		registered[route.pattern] = true
+		method, path, _ := strings.Cut(route.pattern, " ")
+		require.Contains(t, document.Paths[path], strings.ToLower(method), route.pattern)
+	}
+	for path, methods := range document.Paths {
+		for method := range methods {
+			require.True(t, registered[strings.ToUpper(method)+" "+path], "unserved OpenAPI route: %s %s", method, path)
+		}
+	}
 	require.Contains(t, document.Paths["/people/{id}/avatar"], "get")
 	w := httptest.NewRecorder()
 	Unavailable().ServeHTTP(w, httptest.NewRequest("GET", "/api/tracker/v1/openapi.json", nil))

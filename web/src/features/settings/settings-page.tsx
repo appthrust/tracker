@@ -1,8 +1,9 @@
-// `/settings/{workspace,statuses,labels,projects}`. Team Admins edit the
-// workspace (key, name, default sprint length and the timezone sprint dates
-// follow), statuses and labels; everyone else sees them read-only with a
-// note on who can change them. Projects are open to everyone (add, rename,
-// describe, recolor); archiving and deleting stay with Admins.
+// `/settings/{workspace,statuses,labels,projects,agents}`. Team Admins edit the
+// workspace (key, name, default sprint length, the timezone sprint dates
+// follow and how agent work is completed), statuses, labels and agents;
+// everyone else sees them read-only with a note on who can change them.
+// Projects are open to everyone (add, rename, describe, recolor); archiving
+// and deleting stay with Admins.
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import { useLabelMutations, useProjectMutations, useStatusMutations, useUpdateWorkspace } from '../../api/queries'
@@ -11,11 +12,12 @@ import { useText } from '../../i18n'
 import { CATEGORIES, PROJECT_DESCRIPTION_MAX_BYTES, PROJECT_NAME_MAX } from '../../model/issues'
 import { paths } from '../../routes/paths'
 import { ActionError, Button, ConfirmDialog, Field, HrefLink, Notice, Section, SelectInput, TextInput, useDocumentTitle } from '../../ui'
+import { AgentSettings, CompletionPolicy } from '../agents/agents-settings'
 import { nextProjectColor, ProjectSwatch } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
 import { ColorDot, ColorSelect, StatusIcon } from '../issues/visuals'
 
-export type SettingsTab = 'workspace' | 'statuses' | 'labels' | 'projects'
+export type SettingsTab = 'workspace' | 'statuses' | 'labels' | 'projects' | 'agents'
 
 const KEY_PATTERN = /^[A-Z][A-Z0-9]{1,5}$/
 const STATUS_LABEL_NAME_MAX = 40
@@ -34,9 +36,15 @@ function isTimeZone(value: string): boolean {
 export function SettingsPage({ tab }: { tab: SettingsTab }) {
   const { t } = useText()
   const { me } = useReference()
-  const titles: Record<SettingsTab, string> = { workspace: t('tracker.settings.workspace'), statuses: t('tracker.settings.statuses'), labels: t('tracker.property.labels'), projects: t('tracker.project.sidebar') }
+  const titles: Record<SettingsTab, string> = {
+    workspace: t('tracker.settings.workspace'),
+    statuses: t('tracker.settings.statuses'),
+    labels: t('tracker.property.labels'),
+    projects: t('tracker.project.sidebar'),
+    agents: t('tracker.settings.agents'),
+  }
   useDocumentTitle(titles[tab])
-  const hrefs: Record<SettingsTab, string> = { workspace: paths.settingsWorkspace, statuses: paths.settingsStatuses, labels: paths.settingsLabels, projects: paths.settingsProjects }
+  const hrefs: Record<SettingsTab, string> = { workspace: paths.settingsWorkspace, statuses: paths.settingsStatuses, labels: paths.settingsLabels, projects: paths.settingsProjects, agents: paths.settingsAgents }
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-4 py-8 sm:px-8">
@@ -53,12 +61,27 @@ export function SettingsPage({ tab }: { tab: SettingsTab }) {
             </HrefLink>
           ))}
         </nav>
-        {!me.isAdmin && tab !== 'projects' ? (
+        {!me.isAdmin && tab !== 'projects' && tab !== 'agents' ? (
           <Notice className="mt-6" title={t('tracker.settings.readOnlyTitle')}>
             {t('tracker.settings.readOnlyBody')}
           </Notice>
         ) : null}
-        <div className="mt-6">{tab === 'workspace' ? <WorkspaceSettings /> : tab === 'statuses' ? <StatusSettings /> : tab === 'labels' ? <LabelSettings /> : <ProjectSettings />}</div>
+        <div className="mt-6">
+          {tab === 'workspace' ? (
+            <div className="space-y-10">
+              <WorkspaceSettings />
+              <CompletionPolicy />
+            </div>
+          ) : tab === 'statuses' ? (
+            <StatusSettings />
+          ) : tab === 'labels' ? (
+            <LabelSettings />
+          ) : tab === 'agents' ? (
+            <AgentSettings />
+          ) : (
+            <ProjectSettings />
+          )}
+        </div>
       </div>
     </div>
   )

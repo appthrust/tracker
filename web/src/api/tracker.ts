@@ -6,11 +6,109 @@
 
 export type Person = { sub: string; name: string; avatarUrl?: string; email?: string; profileUrl?: string }
 export type Role = 'Admin' | 'Editor' | 'Viewer'
-export type Me = Person & { role: Role; isAdmin: boolean }
 
+/** API.md "Agents": an Actor is a person or a registered agent. For agents `sub` is `agent:<id>` and `name` the agent's display name. */
+export type ActorKind = 'person' | 'agent'
+export type AgentInfo = { id: string; handle: string; owner: Person; disabled: boolean }
+export type Actor = Person & { kind: ActorKind; agent?: AgentInfo }
+/** Agents (an `external` Access Key) also carry `agent` and their key's `scopes`. */
+export type Me = Actor & { role: Role; isAdmin: boolean; scopes?: string[] }
+
+/** `review`: only a person's approval completes an agent's work; `direct`: an agent may set a completed status itself. */
+export type AgentCompletion = 'review' | 'direct'
 /** `sprintLengthWeeks` is the default length of a new sprint; `timezone` (IANA) sets the day boundaries of sprint dates and charts. */
-export type Workspace = { id: string; key: string; name: string; issueCount: number; sprintLengthWeeks: SprintLength; timezone: string; createdAt: string; updatedAt: string }
-export type UpdateWorkspaceInput = { key?: string; name?: string; sprintLengthWeeks?: SprintLength; timezone?: string }
+export type Workspace = { id: string; key: string; name: string; issueCount: number; sprintLengthWeeks: SprintLength; timezone: string; agentCompletion: AgentCompletion; createdAt: string; updatedAt: string }
+export type UpdateWorkspaceInput = { key?: string; name?: string; sprintLengthWeeks?: SprintLength; timezone?: string; agentCompletion?: AgentCompletion }
+
+/** A registered agent. `handle` is immutable and is also the `external` subject of its Access Keys. */
+export type Agent = {
+  id: string
+  handle: string
+  name: string
+  /** ≤ 4096 bytes: what to delegate to it. */
+  description: string
+  owner: Person
+  disabled: boolean
+  /** Live (running or waiting, not stalled) runs. */
+  activeRuns: number
+  /** Open requests the agent raised. */
+  openRequests: number
+  lastSeenAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+export type CreateAgentInput = { handle: string; name: string; description?: string; ownerSub: string }
+/** Disabling cancels the agent's non-terminal runs. */
+export type UpdateAgentInput = Partial<{ name: string; description: string; ownerSub: string; disabled: boolean }>
+
+/** `stalled` is derived at read time: a non-terminal run whose lease has passed. */
+export type RunState = 'running' | 'waiting' | 'stalled' | 'succeeded' | 'failed' | 'canceled'
+export type LinkKind = 'pr' | 'commit' | 'url'
+export type Link = { kind: LinkKind; url: string; title: string }
+export type Run = {
+  id: string
+  issue: IssueRef
+  agent: Actor
+  state: RunState
+  /** `lease_expired`, `reassigned` or `canceled_by:<sub>`. */
+  reason: string | null
+  /** Free text naming the session or lane, ≤ 200. */
+  session: string
+  /** Latest heartbeat note, ≤ 200. */
+  note: string
+  /** Markdown, set on finish. */
+  summary: string
+  links: Link[]
+  startedAt: string
+  heartbeatAt: string
+  leaseExpiresAt: string
+  finishedAt: string | null
+}
+export type RequestKind = 'question' | 'approval' | 'review'
+export type RequestState = 'open' | 'answered' | 'withdrawn'
+export type RequestAnswer = { option: string | null; body: string; by: Actor; at: string }
+/** API.md `Request` (named apart from the Fetch API's `Request`): a directed handoff; `to` null = any person. */
+export type TrackerRequest = {
+  id: string
+  issue: IssueRef
+  kind: RequestKind
+  from: Actor
+  to: Actor | null
+  title: string
+  /** Markdown. */
+  body: string
+  /** ≤ 6; approval and review: `['approve', 'reject']`. */
+  options: string[]
+  runId: string | null
+  state: RequestState
+  answer: RequestAnswer | null
+  createdAt: string
+}
+export type CreateRequestInput = { kind: 'question' | 'approval'; title: string; body?: string; options?: string[]; to?: string | null; runId?: string }
+export type AnswerInput = { option?: string; body?: string }
+export type InboxItem =
+  | { kind: 'request'; request: TrackerRequest }
+  | { kind: 'answer'; request: TrackerRequest }
+  | { kind: 'mention'; comment: Comment; issue: IssueRef }
+  | { kind: 'assignment'; issue: IssueSummary }
+export type InboxAck = { answers?: string[]; mentions?: string[] }
+export type EventType =
+  | 'issue.created'
+  | 'issue.updated'
+  | 'issue.deleted'
+  | 'comment.created'
+  | 'run.started'
+  | 'run.finished'
+  | 'run.canceled'
+  | 'request.opened'
+  | 'request.answered'
+  | 'request.withdrawn'
+/** `data`: `{ fields }` for `issue.updated`, else the entity id. */
+export type TrackerEvent = { seq: number; at: string; issue: IssueRef | null; actor: Actor; type: EventType; data: unknown }
+export type EventPage = { items: TrackerEvent[]; next: number }
+export type StartRunInput = { session?: string; note?: string }
+export type FinishRunInput = { outcome: 'succeeded' | 'failed'; summary: string; links?: Link[] }
+export type RequestListParams = { state?: RequestState; to?: string; issue?: string }
 
 export type StatusCategory = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
 export type Status = { id: string; name: string; category: StatusCategory; position: number; color: string }
@@ -95,8 +193,13 @@ export type Issue = {
   type: IssueType
   priority: Priority
   statusId: string
-  assignee: Person | null
-  reporter: Person
+  assignee: Actor | null
+  reporter: Actor
+  /** The person the agent assignee answers to on this issue; null unless the assignee is an agent. */
+  delegator: Person | null
+  /** The non-terminal run (its state may be the derived `stalled`), else null. */
+  activeRun: Run | null
+  openRequestCount: number
   labelIds: string[]
   /** The tracker project, or null for "no project". */
   projectId: string | null
@@ -126,8 +229,9 @@ export type Issue = {
 }
 export type IssueSummary = Omit<Issue, 'description' | 'children' | 'blocks' | 'blockedBy'>
 
-export type Comment = { id: string; issueId: string; author: Person; body: string; createdAt: string; editedAt: string | null }
-export type Attachment = { id: string; issueId: string; filename: string; mediaType: string; size: number; url: string; uploader: Person; createdAt: string }
+/** `mentions`: the agents its `@handle`s name (people are not mentionable). */
+export type Comment = { id: string; issueId: string; author: Actor; body: string; createdAt: string; editedAt: string | null; mentions: Actor[] }
+export type Attachment = { id: string; issueId: string; filename: string; mediaType: string; size: number; url: string; uploader: Actor; createdAt: string }
 export type ActivityField =
   | 'created'
   | 'title'
@@ -146,8 +250,13 @@ export type ActivityField =
   | 'project'
   | 'estimate'
   | 'sprint'
-export type Activity = { id: string; issueId: string; actor: Person; field: ActivityField; from: unknown; to: unknown; createdAt: string }
-export type TimelineItem = { kind: 'activity'; activity: Activity } | { kind: 'comment'; comment: Comment }
+  | 'delegator'
+export type Activity = { id: string; issueId: string; actor: Actor; field: ActivityField; from: unknown; to: unknown; createdAt: string }
+export type TimelineItem =
+  | { kind: 'activity'; activity: Activity }
+  | { kind: 'comment'; comment: Comment }
+  | { kind: 'run'; run: Run }
+  | { kind: 'request'; request: TrackerRequest }
 
 export type Filter = {
   status?: string[]
@@ -173,13 +282,21 @@ export type Filter = {
   story?: string[]
   /** Sprint ids, `active` (the active sprint) or `none` (the backlog). */
   sprint?: string[]
+  /** The assignee's kind. */
+  assigneeKind?: ActorKind[]
+  /** Agent ids: the assignee is one of these agents. */
+  agent?: string[]
+  /** `active`: a live run; `stalled`: a run whose lease passed; `none`: no non-terminal run. */
+  run?: ('active' | 'stalled' | 'none')[]
+  /** `open`: the issue has an open request; `mine`: it has an open request the caller raised. */
+  request?: ('open' | 'mine')[]
 }
 /** updated/created: desc; priority: urgent→none then updated desc; number: asc; estimate: XL→XS, none last, then updated desc. */
 export type Sort = 'updated' | 'created' | 'priority' | 'number' | 'estimate'
 export type ViewLayout = 'list' | 'board'
 /** Client-side sectioning of a list or board by the issues' derived `epic` or `story`, or by sprint (backlog last). */
 export type GroupBy = 'none' | 'epic' | 'story' | 'sprint'
-export type View = { id: string; name: string; owner: Person; shared: boolean; layout: ViewLayout; groupBy: GroupBy; filter: Filter; sort: Sort; position: number; createdAt: string; updatedAt: string }
+export type View = { id: string; name: string; owner: Actor; shared: boolean; layout: ViewLayout; groupBy: GroupBy; filter: Filter; sort: Sort; position: number; createdAt: string; updatedAt: string }
 
 export type IssuePage = { items: IssueSummary[]; nextCursor: string | null }
 export type PeopleResult = { items: Person[]; source: 'directory' | 'unavailable' }
@@ -218,6 +335,8 @@ export type UpdateIssueInput = Partial<{
   estimate: Size | null
   /** null moves the issue to the backlog. */
   sprintId: string | null
+  /** The `updatedAt` the edit was made against; another write in between → 409 `conflict`. */
+  expectedUpdatedAt: string
 }>
 export type CreateViewInput = { name: string; layout?: ViewLayout; groupBy?: GroupBy; filter?: Filter; sort?: Sort; shared?: boolean }
 export type UpdateViewInput = Partial<CreateViewInput>
@@ -330,6 +449,53 @@ export interface TrackerApi {
   }
   velocity(scope: ChartScope & { limit?: number }): Promise<Velocity>
   people(q?: string): Promise<PeopleResult>
+  agents: {
+    /** Active agents; disabled ones too with `includeDisabled`. */
+    list(options?: { includeDisabled?: boolean }): Promise<Agent[]>
+    /** Admin; a duplicate handle → 409. */
+    create(input: CreateAgentInput): Promise<Agent>
+    /** Admin; disabling cancels the agent's non-terminal runs. */
+    update(id: string, input: UpdateAgentInput): Promise<Agent>
+  }
+  inbox: {
+    /** The caller's queue, open requests first. */
+    list(): Promise<InboxItem[]>
+    /** Acknowledges answers (request ids) and mentions (comment ids). */
+    ack(input: InboxAck): Promise<void>
+  }
+  /** Ascending from `after` (omitted = from now). */
+  events(params?: { after?: number; limit?: number }): Promise<EventPage>
+  runs: {
+    /** Newest first. */
+    list(issueId: string): Promise<Run[]>
+    get(id: string): Promise<Run>
+    /** Agents only, as the issue's assignee. */
+    start(issueId: string, input?: StartRunInput): Promise<Run>
+    heartbeat(id: string, note?: string): Promise<Run>
+    finish(id: string, input: FinishRunInput): Promise<Run>
+    /** Any person, or the run's own agent; accepts a stalled run. */
+    cancel(id: string): Promise<Run>
+  }
+  requests: {
+    create(issueId: string, input: CreateRequestInput): Promise<TrackerRequest>
+    list(params?: RequestListParams): Promise<TrackerRequest[]>
+    get(id: string): Promise<TrackerRequest>
+    /** `idempotencyKey` makes a repeated click replay the first answer. */
+    answer(id: string, input: AnswerInput, idempotencyKey?: string): Promise<TrackerRequest>
+    withdraw(id: string): Promise<TrackerRequest>
+  }
+  /** The agent protocol as Markdown. */
+  agentGuide(): Promise<string>
+}
+
+/** `?state=&to=&issue=` with only the set parameters. */
+export function requestSearch({ state, to, issue }: RequestListParams = {}): string {
+  const search = new URLSearchParams()
+  if (state) search.set('state', state)
+  if (to) search.set('to', to)
+  if (issue) search.set('issue', issue)
+  const text = search.toString()
+  return text ? `?${text}` : ''
 }
 
 /** `?filter=<JSON>&sort=&cursor=&limit=` with only the set parameters; an empty filter is omitted. */
@@ -352,11 +518,12 @@ export function chartSearch({ unit, project, limit }: ChartScope & { limit?: num
 }
 
 export function createTrackerApi(fetcher: Fetcher = (input, init) => fetch(input, init), reauth = browserReauth): TrackerApi {
-  async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async function send<T>(method: string, path: string, body?: unknown, options: { idempotencyKey?: string; text?: boolean } = {}): Promise<T> {
     const read = method === 'GET'
     const multipart = body instanceof FormData
-    const headers: Record<string, string> = { Accept: 'application/json' }
+    const headers: Record<string, string> = { Accept: options.text ? 'text/markdown' : 'application/json' }
     if (body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
+    if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey
     let response: Response
     try {
       response = await fetcher(`${BASE}${path}`, {
@@ -381,7 +548,7 @@ export function createTrackerApi(fetcher: Fetcher = (input, init) => fetch(input
       throw new TrackerApiError(response.status, parsed)
     }
     if (response.status === 204) return undefined as T
-    return (await response.json()) as T
+    return (options.text ? await response.text() : await response.json()) as T
   }
   const list = async <T>(path: string) => (await send<{ items: T[] }>('GET', path)).items
   const id = encodeURIComponent
@@ -451,6 +618,38 @@ export function createTrackerApi(fetcher: Fetcher = (input, init) => fetch(input
     },
     velocity: (scope) => send<Velocity>('GET', `/velocity${chartSearch(scope)}`),
     people: (q) => send<PeopleResult>('GET', `/people${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+    agents: {
+      list: (options) => list<Agent>(`/agents${options?.includeDisabled ? '?includeDisabled=true' : ''}`),
+      create: (input) => send<Agent>('POST', '/agents', input),
+      update: (agentId, input) => send<Agent>('PATCH', `/agents/${id(agentId)}`, input),
+    },
+    inbox: {
+      list: () => list<InboxItem>('/inbox'),
+      ack: (input) => send<void>('POST', '/inbox/ack', input),
+    },
+    events: (params = {}) => {
+      const search = new URLSearchParams()
+      if (params.after !== undefined) search.set('after', String(params.after))
+      if (params.limit !== undefined) search.set('limit', String(params.limit))
+      const text = search.toString()
+      return send<EventPage>('GET', `/events${text ? `?${text}` : ''}`)
+    },
+    runs: {
+      list: (issueId) => list<Run>(`/issues/${id(issueId)}/runs`),
+      get: (runId) => send<Run>('GET', `/runs/${id(runId)}`),
+      start: (issueId, input = {}) => send<Run>('POST', `/issues/${id(issueId)}/runs`, input),
+      heartbeat: (runId, note) => send<Run>('POST', `/runs/${id(runId)}/heartbeat`, note === undefined ? {} : { note }),
+      finish: (runId, input) => send<Run>('POST', `/runs/${id(runId)}/finish`, input),
+      cancel: (runId) => send<Run>('POST', `/runs/${id(runId)}/cancel`),
+    },
+    requests: {
+      create: (issueId, input) => send<TrackerRequest>('POST', `/issues/${id(issueId)}/requests`, input),
+      list: (params) => list<TrackerRequest>(`/requests${requestSearch(params)}`),
+      get: (requestId) => send<TrackerRequest>('GET', `/requests/${id(requestId)}`),
+      answer: (requestId, input, idempotencyKey) => send<TrackerRequest>('POST', `/requests/${id(requestId)}/answer`, input, { idempotencyKey }),
+      withdraw: (requestId) => send<TrackerRequest>('POST', `/requests/${id(requestId)}/withdraw`),
+    },
+    agentGuide: () => send<string>('GET', '/agent-guide', undefined, { text: true }),
   }
 }
 

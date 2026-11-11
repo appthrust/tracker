@@ -87,12 +87,15 @@ func (t *Tx) StartRun(issueID string, input RunStart, actor domain.Actor) (domai
 		if issue.ActiveRun.State != "stalled" {
 			return domain.Run{}, httpx.Conflict("An active run already holds this issue")
 		}
-		if err := t.closeRun(issue.ActiveRun.ID, "failed", "lease_expired"); err != nil {
+		if err := t.closeRun(issue.ActiveRun.ID, "failed", "lease_expired", actor.Person); err != nil {
 			return domain.Run{}, err
 		}
 	}
 	id, now := ulid.Make().String(), t.now()
 	if err := t.Exec(`INSERT INTO tracker_run(id,issue_id,agent_id,state,session,note,started_at,heartbeat_at,lease_expires_at) VALUES($1,$2,$3,'running',$4,$5,$6,$6,$7)`, id, issue.ID, actor.AgentID, input.Session, input.Note, now, now.Add(t.leaseDuration())); err != nil {
+		return domain.Run{}, err
+	}
+	if err := t.event(issue.ID, actor.Person, "run.started", id); err != nil {
 		return domain.Run{}, err
 	}
 	return t.Run(id)
@@ -150,6 +153,15 @@ func (t *Tx) FinishRun(id string, input RunFinish, actor domain.Actor) (domain.R
 			return run, invalid("Links require an HTTPS URL, kind and a title of at most 200 characters")
 		}
 	}
+	if input.Outcome == "succeeded" {
+		var approval bool
+		if err := t.SQL.QueryRowContext(t.Context, `SELECT EXISTS(SELECT 1 FROM tracker_request WHERE run_id=$1 AND state='open' AND kind='approval')`, id).Scan(&approval); err != nil {
+			return run, err
+		}
+		if approval {
+			return run, httpx.Conflict("Resolve or withdraw the run's open approvals before finishing")
+		}
+	}
 	if input.Links == nil {
 		input.Links = []domain.RunLink{}
 	}
@@ -160,7 +172,10 @@ func (t *Tx) FinishRun(id string, input RunFinish, actor domain.Actor) (domain.R
 	if err := t.Exec(`UPDATE tracker_run SET state=$2,summary=$3,links=$4,finished_at=$5 WHERE id=$1`, id, input.Outcome, input.Summary, links, t.now()); err != nil {
 		return run, err
 	}
-	if err := t.Exec(`UPDATE tracker_request SET state='withdrawn' WHERE run_id=$1 AND state='open' AND kind='question'`, id); err != nil {
+	if err := t.event(run.Issue.ID, actor.Person, "run.finished", id); err != nil {
+		return run, err
+	}
+	if err := t.withdrawRequests(`q.run_id=$2 AND (q.kind='question' OR $2 IN (SELECT id FROM tracker_run WHERE state='failed'))`, id, actor.Person); err != nil {
 		return run, err
 	}
 	var policy string
@@ -194,15 +209,19 @@ func truncateTitle(title string, limit int) string {
 	return title
 }
 
-func (t *Tx) withdrawRunRequests(id string) error {
-	return t.Exec(`UPDATE tracker_request SET state='withdrawn' WHERE run_id=$1 AND state='open'`, id)
-}
-
-func (t *Tx) closeRun(id, state, reason string) error {
-	if err := t.Exec(`UPDATE tracker_run SET state=$2,reason=$3,finished_at=$4 WHERE id=$1`, id, state, reason, t.now()); err != nil {
+func (t *Tx) closeRun(id, state, reason string, actor domain.Person) error {
+	var issueID string
+	if err := t.SQL.QueryRowContext(t.Context, `UPDATE tracker_run r SET state=$2,reason=$3,finished_at=$4 FROM tracker_issue i WHERE r.id=$1 AND i.id=r.issue_id AND i.workspace_id=$5 RETURNING r.issue_id`, id, state, reason, t.now(), t.WorkspaceID).Scan(&issueID); err != nil {
 		return err
 	}
-	return t.withdrawRunRequests(id)
+	kind := "run.canceled"
+	if state == "failed" {
+		kind = "run.finished"
+	}
+	if err := t.event(issueID, actor, kind, id); err != nil {
+		return err
+	}
+	return t.withdrawRequests(`q.run_id=$2`, id, actor)
 }
 
 func (t *Tx) CancelRun(id string, actor domain.Actor) (domain.Run, error) {
@@ -216,7 +235,7 @@ func (t *Tx) CancelRun(id string, actor domain.Actor) (domain.Run, error) {
 	if !domain.LiveRun(run.State) && run.State != "stalled" {
 		return run, httpx.Conflict("The run is terminal")
 	}
-	if err := t.closeRun(id, "canceled", "canceled_by:"+actor.Sub); err != nil {
+	if err := t.closeRun(id, "canceled", "canceled_by:"+actor.Sub, actor.Person); err != nil {
 		return run, err
 	}
 	return t.Run(id)

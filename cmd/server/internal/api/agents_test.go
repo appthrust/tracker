@@ -42,7 +42,7 @@ func TestAgentLeaseWaitingAndDisabledBoundaries(t *testing.T) {
 	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
 	h.database.Now = func() time.Time { return now }
 	h.database.RunLease = time.Minute
-	a := call[domain.Agent](h, "admin", "POST", "/agents", store.AgentCreate{Handle: "astra", Name: "Astra", KeySubject: "poc-astra", OwnerSub: "owner"}, 201)
+	a := call[domain.Agent](h, "admin", "POST", "/agents", store.AgentCreate{Handle: "astra", Name: "Astra", OwnerSub: "owner"}, 201)
 	sub := "agent:" + a.ID
 	statuses := call[items[domain.Status]](h, "admin", "GET", "/statuses", nil, 200)
 	unstarted := ""
@@ -61,7 +61,7 @@ func TestAgentLeaseWaitingAndDisabledBoundaries(t *testing.T) {
 		require.NoError(t, h.database.InWorkspace(t.Context(), "pj-test", true, fn))
 	}
 	write(func(tx *store.Tx) error {
-		actor, err := tx.AgentBySubject("poc-astra")
+		actor, err := tx.AgentBySubject("astra")
 		require.NoError(t, err)
 		run, err = tx.StartRun(assigned.ID, store.RunStart{}, actor)
 		require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestAgentLeaseWaitingAndDisabledBoundaries(t *testing.T) {
 	})
 	now = now.Add(time.Microsecond)
 	write(func(tx *store.Tx) error {
-		actor, err := tx.AgentBySubject("poc-astra")
+		actor, err := tx.AgentBySubject("astra")
 		require.NoError(t, err)
 		current, err := tx.Run(run.ID)
 		require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestAgentLeaseWaitingAndDisabledBoundaries(t *testing.T) {
 	require.Nil(t, cleared.Delegator)
 	write(func(tx *store.Tx) error { return tx.Exec(`UPDATE tracker_agent SET disabled=true WHERE id=$1`, a.ID) })
 	write(func(tx *store.Tx) error {
-		_, err := tx.AgentBySubject("poc-astra")
+		_, err := tx.AgentBySubject("astra")
 		require.ErrorContains(t, err, "active registered agent")
 		return nil
 	})
