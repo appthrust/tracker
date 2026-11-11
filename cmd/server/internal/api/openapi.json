@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Tracker API",
-    "version": "0.1.11",
+    "version": "0.1.12",
     "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID. The bearer is the signed-in user's token or an Access Key assertion (audience tracker; scope tracker:read for GET, tracker:write otherwise)."
   },
   "servers": [
