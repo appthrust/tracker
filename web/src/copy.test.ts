@@ -2,6 +2,7 @@ import { createDashboardTranslator } from '@appthrust/platform-dashboard-i18n'
 import { describe, expect, test } from 'bun:test'
 import { catalogs } from './copy'
 import { CATEGORIES, GROUP_BYS, ISSUE_TYPES, PRIORITIES, SORTS, SURFACES } from './model/issues'
+import { UNITS } from './model/sprints'
 
 const placeholders = (text: string) => [...text.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)].map((match) => match[1]).sort()
 
@@ -26,8 +27,16 @@ describe('tracker copy catalogs', () => {
       ...SURFACES.map((value) => `tracker.surface.${value}`),
       ...SORTS.map((value) => `tracker.sort.${value}`),
       ...GROUP_BYS.map((value) => `tracker.group.${value}`),
+      ...(['planned', 'active', 'closed'] as const).map((value) => `tracker.sprint.state.${value}`),
+      ...(['epic', 'frozen', 'closed', 'lineage'] as const).map((value) => `tracker.sprint.problem.${value}`),
+      ...UNITS.map((value) => `tracker.unit.${value}`),
     ]
     for (const id of expected) expect(ids.has(id), id).toBe(true)
+  })
+
+  test('every English source text is used by one id only (the dashboard catalogs key on it)', () => {
+    const sources = messages.map(([, message]) => message.defaultMessage)
+    expect(sources.filter((text, index) => sources.indexOf(text) !== index)).toEqual([])
   })
 
   test('ids are unique, so both languages build a translator', () => {

@@ -1,16 +1,19 @@
 // "New issue" (C): project, title, Markdown description, type (epic, story or
 // a work item), parent (only what the hierarchy allows for that type),
-// status, priority, assignee and labels. The project starts as the
-// list/board scope (or the one the opener passes); an epic's "New story" or
-// a group's "+" passes the type and parent. Choosing "bug" asks for the two
-// required report fields; the full report form is `/report` (Shift+R).
-// ⌘/Ctrl+Enter creates.
+// status, priority, assignee, estimate, sprint and labels. The project starts
+// as the list/board scope (or the one the opener passes); an epic's "New
+// story" or a group's "+" passes the type and parent, a sprint section's or
+// sprint page's "+" the sprint. An epic takes no estimate or sprint.
+// Choosing "bug" asks for the two required report fields; the full report
+// form is `/report` (Shift+R). ⌘/Ctrl+Enter creates.
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState, type FormEvent } from 'react'
-import { useCreateIssue } from '../../api/queries'
-import type { IssueSummary, IssueType, Priority } from '../../api/tracker'
+import { sprintsQuery, useCreateIssue } from '../../api/queries'
+import type { IssueSummary, IssueType, Priority, Size } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { ISSUE_TYPES, PRIORITIES, reportProblems, TITLE_MAX, toReport, type ReportDraft } from '../../model/issues'
+import { SIZES } from '../../model/sprints'
 import { paths } from '../../routes/paths'
 import { ActionError, Button, Dialog, Field, HrefLink, Kbd, SelectInput, TextArea, TextInput } from '../../ui'
 import { EMPTY_REPORT, ReportFields } from '../report/report-fields'
@@ -27,7 +30,7 @@ export function NewIssueDialog() {
   return defaults ? <NewIssueForm key={JSON.stringify(defaults)} defaults={defaults} /> : null
 }
 
-function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requestedProject, type: initialType, parent: initialParent } }: { defaults: NewIssueDefaults }) {
+function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requestedProject, type: initialType, parent: initialParent, sprintId: initialSprint } }: { defaults: NewIssueDefaults }) {
   const { t } = useText()
   const navigate = useNavigate()
   const { statuses, labels, activeProjects } = useReference()
@@ -41,6 +44,10 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
   const [assignee, setAssignee] = useState('')
   const [labelIds, setLabelIds] = useState<string[]>([])
   const [report, setReport] = useState<ReportDraft>(EMPTY_REPORT)
+  const [estimate, setEstimate] = useState<Size | ''>('')
+  // The opener's sprint, else the sprint screen's (C on a sprint page).
+  const [sprintId, setSprintId] = useState(initialSprint ?? uiStore.state.sprintScope ?? '')
+  const openSprints = (useQuery(sprintsQuery).data ?? []).filter((sprint) => sprint.state !== 'closed')
   // The opener's choice, else the list/board scope; only an active project counts.
   const [projectId, setProjectId] = useState(() => {
     const initial = requestedProject !== undefined ? requestedProject : uiStore.state.scope
@@ -53,12 +60,14 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
   const { title: titleProblem, ...reportFieldProblems } = problems
   // A type change can make the chosen parent invalid (a story under a story); creating waits until it is fixed.
   const parentProblem = hierarchyProblem(t, { type }, parent)
+  // Lineage-exclusive: the parent already in the chosen sprint keeps its children out (the server checks every depth).
+  const sprintProblem = type !== 'epic' && sprintId && parent?.sprint?.id === sprintId ? t('tracker.sprint.problem.lineage') : undefined
   const close = () => setUi({ newIssue: null })
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
     setSubmitted(true)
-    if (Object.keys(problems).length > 0 || parentProblem || create.isPending) return
+    if (Object.keys(problems).length > 0 || parentProblem || sprintProblem || create.isPending) return
     const sub = assigneeValue(assignee || '__none')
     create.mutate(
       {
@@ -71,6 +80,8 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
         labelIds: labelIds.length > 0 ? labelIds : undefined,
         parentId: parent?.id,
         projectId: projectId ?? undefined,
+        estimate: type !== 'epic' && estimate ? estimate : undefined,
+        sprintId: type !== 'epic' && sprintId ? sprintId : undefined,
         report: type === 'bug' ? toReport(report) : undefined,
       },
       {
@@ -163,6 +174,26 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
               {people.options.map((option) => (
                 <option key={option.value} value={option.value === '__none' ? '' : option.value}>
                   {option.label}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+          <Field id="new-issue-estimate" label={t('tracker.property.estimate')} hint={type === 'epic' ? t('tracker.estimate.epic') : undefined}>
+            <SelectInput id="new-issue-estimate" value={type === 'epic' ? '' : estimate} disabled={type === 'epic'} onChange={(event) => setEstimate(event.target.value as Size | '')}>
+              <option value="">{t('tracker.estimate.none')}</option>
+              {SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+          <Field id="new-issue-sprint" label={t('tracker.property.sprint')} error={sprintProblem} hint={type === 'epic' ? t('tracker.sprint.problem.epic') : undefined}>
+            <SelectInput id="new-issue-sprint" value={type === 'epic' ? '' : sprintId} disabled={type === 'epic'} invalid={Boolean(sprintProblem)} onChange={(event) => setSprintId(event.target.value)}>
+              <option value="">{t('tracker.sprint.backlog')}</option>
+              {openSprints.map((sprint) => (
+                <option key={sprint.id} value={sprint.id}>
+                  {`${sprint.name} · ${t(`tracker.sprint.state.${sprint.state}`)}`}
                 </option>
               ))}
             </SelectInput>

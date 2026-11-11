@@ -15,12 +15,14 @@ type Actor struct {
 	Role string
 }
 type Workspace struct {
-	ID         string    `json:"id"`
-	Key        string    `json:"key"`
-	Name       string    `json:"name"`
-	IssueCount int       `json:"issueCount"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID                string    `json:"id"`
+	Key               string    `json:"key"`
+	Name              string    `json:"name"`
+	IssueCount        int       `json:"issueCount"`
+	SprintLengthWeeks int       `json:"sprintLengthWeeks"`
+	Timezone          string    `json:"timezone"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 type Status struct {
 	ID       string `json:"id"`
@@ -60,6 +62,11 @@ type IssueRef struct {
 	StatusID   string `json:"statusId"`
 }
 type Progress struct {
+	Total     int            `json:"total"`
+	Completed int            `json:"completed"`
+	Points    ProgressPoints `json:"points"`
+}
+type ProgressPoints struct {
 	Total     int `json:"total"`
 	Completed int `json:"completed"`
 }
@@ -75,6 +82,8 @@ type IssueSummary struct {
 	Reporter        Person     `json:"reporter"`
 	LabelIDs        []string   `json:"labelIds"`
 	ProjectID       *string    `json:"projectId"`
+	Estimate        *string    `json:"estimate"`
+	Sprint          *SprintRef `json:"sprint"`
 	Parent          *IssueRef  `json:"parent"`
 	Epic            *IssueRef  `json:"epic"`
 	Story           *IssueRef  `json:"story"`
@@ -133,6 +142,7 @@ type Filter struct {
 	Reporter     []string `json:"reporter,omitempty"`
 	Label        []string `json:"label,omitempty"`
 	Project      []string `json:"project,omitempty"`
+	Sprint       []string `json:"sprint,omitempty"`
 	Epic         []string `json:"epic,omitempty"`
 	Story        []string `json:"story,omitempty"`
 	Type         []string `json:"type,omitempty"`
@@ -150,6 +160,7 @@ const (
 	SortCreated  Sort = "created"
 	SortPriority Sort = "priority"
 	SortNumber   Sort = "number"
+	SortEstimate Sort = "estimate"
 )
 
 type View struct {
@@ -164,4 +175,56 @@ type View struct {
 	Position  int       `json:"position"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type Tally struct {
+	ScopePoints int `json:"scopePoints"`
+	ScopeIssues int `json:"scopeIssues"`
+	DonePoints  int `json:"donePoints"`
+	DoneIssues  int `json:"doneIssues"`
+}
+type SprintRef struct {
+	ID     string `json:"id"`
+	Number int64  `json:"number"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+}
+type Sprint struct {
+	SprintRef
+	Goal        string     `json:"goal"`
+	LengthWeeks int        `json:"lengthWeeks"`
+	StartsOn    string     `json:"startsOn"`
+	EndsOn      string     `json:"endsOn"`
+	StartedAt   *time.Time `json:"startedAt"`
+	ClosedAt    *time.Time `json:"closedAt"`
+	Current     Tally      `json:"current"`
+	Commitment  *Tally     `json:"commitment"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+type BurndownPoint struct {
+	Day       string  `json:"day"`
+	Scope     *int    `json:"scope,omitempty"`
+	Done      *int    `json:"done,omitempty"`
+	Remaining *int    `json:"remaining,omitempty"`
+	Ideal     float64 `json:"ideal"`
+}
+
+// BurndownResponse is the wire shape; Burndown is the pure calculation.
+type BurndownResponse struct {
+	Sprint SprintRef       `json:"sprint"`
+	Unit   string          `json:"unit"`
+	Today  string          `json:"today"`
+	Points []BurndownPoint `json:"points"`
+}
+type VelocityEntry struct {
+	Sprint      SprintRef `json:"sprint"`
+	LengthWeeks int       `json:"lengthWeeks"`
+	Committed   int       `json:"committed"`
+	Completed   int       `json:"completed"`
+}
+type Velocity struct {
+	Unit           string          `json:"unit"`
+	Items          []VelocityEntry `json:"items"`
+	AveragePerWeek *float64        `json:"averagePerWeek"`
 }

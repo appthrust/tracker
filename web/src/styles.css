@@ -5,7 +5,9 @@
 /*
  * One accent color (indigo, tracker's own); everything else is neutral stone.
  * Status and label colors come from the fixed palette (src/features/issues/visuals.tsx).
- * System font stack only, light only. Rendered Markdown uses `.tracker-prose` below.
+ * System font stack only; the app is light only, except the sprint charts, which
+ * carry their own light and dark token set (`.tracker-chart` below).
+ * Rendered Markdown uses `.tracker-prose` below.
  */
 @theme {
   --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN',
@@ -151,5 +153,49 @@
   }
   .tracker-prose th {
     @apply bg-stone-50 font-semibold;
+  }
+}
+
+/*
+ * Sprint charts (src/features/sprints/charts.tsx) paint only with these tokens.
+ * Light by default, built from the app tokens; any ancestor with `.dark` or
+ * `data-theme="dark"` switches the chart to its dark set (lighter strokes and
+ * text, darker grid and weekend bands) so every series keeps at least 3:1
+ * against the surface and text 4.5:1.
+ */
+@layer components {
+  .tracker-chart {
+    --chart-ink: var(--color-stone-700);
+    --chart-muted: var(--color-stone-500);
+    --chart-grid: var(--color-stone-200);
+    --chart-weekend: color-mix(in oklab, var(--color-stone-100) 70%, transparent);
+    --chart-surface-muted: var(--color-stone-50);
+    --chart-ideal: var(--color-stone-400);
+    --chart-scope: var(--color-stone-500);
+    --chart-remaining: var(--color-accent);
+    --chart-point: var(--color-white);
+    --chart-committed: var(--color-stone-300);
+    --chart-completed: var(--color-accent);
+    --chart-completed-ink: var(--color-accent-strong);
+    --chart-average: var(--color-accent-strong);
+    --chart-today: var(--color-busy);
+    --chart-today-ink: var(--color-busy-ink);
+  }
+  :where(.dark, [data-theme='dark']) .tracker-chart {
+    --chart-ink: var(--color-stone-200);
+    --chart-muted: var(--color-stone-400);
+    --chart-grid: var(--color-stone-700);
+    --chart-weekend: color-mix(in oklab, var(--color-stone-800) 70%, transparent);
+    --chart-surface-muted: var(--color-stone-800);
+    --chart-ideal: var(--color-stone-400);
+    --chart-scope: var(--color-stone-300);
+    --chart-remaining: oklch(0.74 0.13 272);
+    --chart-point: var(--color-stone-900);
+    --chart-committed: var(--color-stone-600);
+    --chart-completed: oklch(0.68 0.15 272);
+    --chart-completed-ink: oklch(0.82 0.09 272);
+    --chart-average: oklch(0.82 0.09 272);
+    --chart-today: oklch(0.8 0.15 80);
+    --chart-today-ink: oklch(0.85 0.12 80);
   }
 }

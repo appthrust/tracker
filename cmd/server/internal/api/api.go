@@ -57,6 +57,15 @@ func New(database *store.Store, auth *identity.Authenticator, upstream *platform
 	a.route("GET /projects/{id}", false, false, a.projectGet)
 	a.route("PATCH /projects/{id}", true, true, a.projectPatch)
 	a.route("DELETE /projects/{id}", true, true, a.projectDelete)
+	a.route("GET /sprints", false, false, a.sprintList)
+	a.route("POST /sprints", true, false, a.sprintCreate)
+	a.route("GET /sprints/{id}", false, false, a.sprintGet)
+	a.route("PATCH /sprints/{id}", true, false, a.sprintPatch)
+	a.route("POST /sprints/{id}/start", true, false, a.sprintStart)
+	a.route("POST /sprints/{id}/close", true, false, a.sprintClose)
+	a.route("DELETE /sprints/{id}", true, true, a.sprintDelete)
+	a.route("GET /sprints/{id}/burndown", false, false, a.sprintBurndown)
+	a.route("GET /velocity", false, false, a.velocity)
 	a.route("GET /issues", false, false, a.issueList)
 	a.route("POST /issues", true, false, a.issueCreate)
 	a.route("GET /issues/{id}", false, false, a.issueGet)
@@ -191,7 +200,11 @@ func decode(s *request, target any, nullable ...string) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(target) != nil {
+	if err := decoder.Decode(target); err != nil {
+		var typed *json.UnmarshalTypeError
+		if errors.As(err, &typed) && (typed.Field == "estimate" || typed.Field == "sprintId") {
+			return &domain.FieldError{Path: typed.Field, Message: "Value must be a string or null"}
+		}
 		return invalid("Request body contains invalid or unknown fields")
 	}
 	if decoder.Decode(new(any)) != io.EOF {

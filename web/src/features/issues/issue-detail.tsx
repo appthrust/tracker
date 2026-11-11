@@ -1,8 +1,8 @@
 // One issue: breadcrumb (epic › story › parent), title, Markdown description,
 // bug report fields, an epic's or story's children with progress, relations,
-// attachments, timeline and comment box, with a properties sidebar (parent
-// included). Rendered as the full page (`/issues/APT-12`) or as the side
-// panel over a list.
+// attachments, timeline and comment box, with a properties sidebar (parent,
+// estimate and sprint included). Rendered as the full page (`/issues/APT-12`)
+// or as the side panel over a list.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, Copy, Maximize2, Pencil, Trash2, X } from 'lucide-react'
@@ -17,7 +17,7 @@ import { setUi } from '../ui-state'
 import { ReportFields, type ReportProblems } from '../report/report-fields'
 import { Attachments, markdownFor, transferFiles, useUploader } from './attachments'
 import { HierarchySection, IssueBreadcrumb, IssueParentPicker, parentLabel } from './hierarchy'
-import { AssigneePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, StatusPicker, TypePicker, useIssueEditor } from './properties'
+import { AssigneePicker, EstimatePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, SprintPicker, StatusPicker, TypePicker, useIssueEditor } from './properties'
 import { Relations } from './relations'
 import { CommentComposer, insertAtCaret, Timeline } from './timeline'
 import { useReference } from './use-reference'
@@ -364,6 +364,12 @@ function PropertiesBar({ issue }: { issue: Issue }) {
       <div className="w-56" role="group" aria-label={parentLabel(t, issue.type)}>
         <IssueParentPicker issue={issue} />
       </div>
+      <div className="w-32">
+        <EstimatePicker issue={issue} variant="row" />
+      </div>
+      <div className="w-40">
+        <SprintPicker issue={issue} variant="row" />
+      </div>
       <div className="min-w-32 flex-1">
         <LabelsPicker issue={issue} variant="row" />
       </div>
@@ -398,6 +404,8 @@ function PropertiesSidebar({ issue }: { issue: Issue }) {
       {row(t('tracker.property.labels'), <LabelsPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.type'), <TypePicker issue={issue} />)}
       {row(parentLabel(t, issue.type), <IssueParentPicker issue={issue} />)}
+      {row(t('tracker.property.estimate'), <EstimatePicker issue={issue} variant="row" />)}
+      {row(t('tracker.property.sprint'), <SprintPicker issue={issue} variant="row" />)}
       {row(
         t('tracker.property.due'),
         <input

@@ -1,15 +1,16 @@
 // `/settings/{workspace,statuses,labels,projects}`. Team Admins edit the
-// workspace, statuses and labels; everyone else sees them read-only with a
+// workspace (key, name, default sprint length and the timezone sprint dates
+// follow), statuses and labels; everyone else sees them read-only with a
 // note on who can change them. Projects are open to everyone (add, rename,
 // describe, recolor); archiving and deleting stay with Admins.
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import { useLabelMutations, useProjectMutations, useStatusMutations, useUpdateWorkspace } from '../../api/queries'
-import type { Label, LabelColor, Project, Status, StatusCategory } from '../../api/tracker'
+import type { Label, LabelColor, Project, SprintLength, Status, StatusCategory } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { CATEGORIES, PROJECT_DESCRIPTION_MAX_BYTES, PROJECT_NAME_MAX } from '../../model/issues'
 import { paths } from '../../routes/paths'
-import { ActionError, Button, ConfirmDialog, Field, HrefLink, Notice, Section, TextInput, useDocumentTitle } from '../../ui'
+import { ActionError, Button, ConfirmDialog, Field, HrefLink, Notice, Section, SelectInput, TextInput, useDocumentTitle } from '../../ui'
 import { nextProjectColor, ProjectSwatch } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
 import { ColorDot, ColorSelect, StatusIcon } from '../issues/visuals'
@@ -18,6 +19,17 @@ export type SettingsTab = 'workspace' | 'statuses' | 'labels' | 'projects'
 
 const KEY_PATTERN = /^[A-Z][A-Z0-9]{1,5}$/
 const STATUS_LABEL_NAME_MAX = 40
+/** IANA names for the timezone suggestions (the field accepts any name the browser knows). */
+const TIME_ZONES: readonly string[] = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : []
+
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
 
 export function SettingsPage({ tab }: { tab: SettingsTab }) {
   const { t } = useText()
@@ -58,14 +70,26 @@ function WorkspaceSettings() {
   const update = useUpdateWorkspace()
   const [key, setKey] = useState(workspace.key)
   const [name, setName] = useState(workspace.name)
+  const [sprintLength, setSprintLength] = useState<SprintLength>(workspace.sprintLengthWeeks)
+  const [timezone, setTimezone] = useState(workspace.timezone)
   const [saved, setSaved] = useState(false)
   const keyError = !KEY_PATTERN.test(key) ? t('tracker.settings.keyInvalid') : undefined
   const nameError = !name.trim() || name.trim().length > 100 ? t('tracker.settings.nameInvalid') : undefined
+  const timezoneError = !timezone.trim() || !isTimeZone(timezone.trim()) ? t('tracker.settings.timezoneInvalid') : undefined
+  const unchanged = key === workspace.key && name.trim() === workspace.name && sprintLength === workspace.sprintLengthWeeks && timezone.trim() === workspace.timezone
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (keyError || nameError) return
+    if (keyError || nameError || timezoneError) return
     setSaved(false)
-    update.mutate({ key: key !== workspace.key ? key : undefined, name: name.trim() !== workspace.name ? name.trim() : undefined }, { onSuccess: () => setSaved(true) })
+    update.mutate(
+      {
+        key: key !== workspace.key ? key : undefined,
+        name: name.trim() !== workspace.name ? name.trim() : undefined,
+        sprintLengthWeeks: sprintLength !== workspace.sprintLengthWeeks ? sprintLength : undefined,
+        timezone: timezone.trim() !== workspace.timezone ? timezone.trim() : undefined,
+      },
+      { onSuccess: () => setSaved(true) }
+    )
   }
   return (
     <form onSubmit={submit} className="max-w-md space-y-4" noValidate>
@@ -76,10 +100,25 @@ function WorkspaceSettings() {
         <TextInput id="workspace-name" value={name} disabled={!me.isAdmin} invalid={Boolean(nameError)} onChange={(event) => setName(event.target.value)} maxLength={100} />
       </Field>
       <p className="text-xs text-stone-500">{t('tracker.settings.issueCount', { count: workspace.issueCount })}</p>
+      <h2 className="pt-2 text-base font-semibold text-stone-900">{t('tracker.nav.sprints')}</h2>
+      <Field id="workspace-sprint-length" label={t('tracker.settings.sprintLength')} hint={t('tracker.settings.sprintLengthHint')}>
+        <SelectInput id="workspace-sprint-length" value={sprintLength} disabled={!me.isAdmin} onChange={(event) => setSprintLength(Number(event.target.value) as SprintLength)}>
+          <option value={1}>{t('tracker.sprints.oneWeek')}</option>
+          <option value={2}>{t('tracker.sprints.twoWeeks')}</option>
+        </SelectInput>
+      </Field>
+      <Field id="workspace-timezone" label={t('tracker.settings.timezone')} hint={t('tracker.settings.timezoneHint')} error={timezoneError}>
+        <TextInput id="workspace-timezone" list="workspace-timezones" value={timezone} disabled={!me.isAdmin} invalid={Boolean(timezoneError)} onChange={(event) => setTimezone(event.target.value)} spellCheck={false} autoComplete="off" />
+      </Field>
+      <datalist id="workspace-timezones">
+        {TIME_ZONES.map((zone) => (
+          <option key={zone} value={zone} />
+        ))}
+      </datalist>
       {update.error ? <ActionError error={update.error} /> : null}
       {saved ? <Notice tone="success">{t('tracker.settings.saved')}</Notice> : null}
       {me.isAdmin ? (
-        <Button type="submit" tone="primary" loading={update.isPending} disabled={key === workspace.key && name.trim() === workspace.name}>
+        <Button type="submit" tone="primary" loading={update.isPending} disabled={unchanged}>
           {t('tracker.common.save')}
         </Button>
       ) : null}

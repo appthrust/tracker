@@ -9,8 +9,9 @@ import { issueMessages } from './issues'
 import { projectMessages } from './projects'
 import { reportMessages } from './report'
 import { settingsMessages } from './settings'
+import { sprintMessages } from './sprints'
 
-export const catalogs: readonly DashboardMessageCatalog[] = [commonMessages, issueMessages, epicMessages, projectMessages, reportMessages, settingsMessages]
+export const catalogs: readonly DashboardMessageCatalog[] = [commonMessages, issueMessages, epicMessages, projectMessages, reportMessages, settingsMessages, sprintMessages]
 
 export type MessageId =
   | keyof typeof commonMessages
@@ -19,3 +20,4 @@ export type MessageId =
   | keyof typeof projectMessages
   | keyof typeof reportMessages
   | keyof typeof settingsMessages
+  | keyof typeof sprintMessages

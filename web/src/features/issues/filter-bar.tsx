@@ -1,17 +1,21 @@
 // Filter bar over a list or board. Every control maps to one API.md `Filter`
 // facet: text (`q`, focused by `/`), status/category, assignee, reporter,
 // priority, label, project (shown once the workspace has projects), epic and
-// story (with "none"), type, environment, surface, created-after and
-// top-level only (`parent: none`). Facets combine with AND, values within a
-// facet with OR. Sort and the grouping (none, by epic, by story) sit on the right.
+// story (with "none"), sprint (the active one, any sprint, or the backlog;
+// hidden on a sprint's own page), type, environment, surface, created-after
+// and top-level only (`parent: none`). Facets combine with AND, values within
+// a facet with OR. Sort and the grouping (none, by epic, story or sprint) sit
+// on the right.
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDownUp, BookMarked, CalendarDays, Circle, CircleDashed, FolderKanban, Globe, Layers, ListTree, MonitorSmartphone, Rows3, Search, SignalHigh, Tag, UserRound, UserRoundPen, X, Zap } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { epicsQuery, storiesQuery } from '../../api/queries'
+import { epicsQuery, sprintsQuery, storiesQuery } from '../../api/queries'
 import type { Filter, GroupBy, IssueSummary, IssueType, Priority, Sort, StatusCategory, Surface } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { CATEGORIES, ENVIRONMENT_SUGGESTIONS, GROUP_BYS, isEmptyFilter, ISSUE_TYPES, NO_GROUP, PRIORITIES, SORTS, SURFACES } from '../../model/issues'
+import { BACKLOG } from '../../model/sprints'
 import { Avatar, cn, Kbd, Picker, type PickerOption } from '../../ui'
+import { SprintIcon } from '../sprints/sprint-ui'
 import { NO_PROJECT, ProjectSwatch } from './projects'
 import { assigneeValue, usePeopleOptions } from './properties'
 import { useReference } from './use-reference'
@@ -44,6 +48,7 @@ export function FilterBar({
   onSort,
   onGroupBy,
   actions,
+  hideSprint = false,
 }: {
   filter: Filter
   sort: Sort
@@ -52,6 +57,8 @@ export function FilterBar({
   onSort: (sort: Sort) => void
   onGroupBy: (groupBy: GroupBy) => void
   actions?: ReactNode
+  /** A sprint's page fixes its sprint. */
+  hideSprint?: boolean
 }) {
   const { t, locale } = useText()
   const { statuses, labels, me, projects } = useReference()
@@ -65,6 +72,12 @@ export function FilterBar({
   // The epic and story lists load when their facet opens (or the filter already names one).
   const epics = useQuery({ ...epicsQuery, enabled: epicOpen || (filter.epic?.length ?? 0) > 0 })
   const stories = useQuery({ ...storiesQuery, enabled: storyOpen || (filter.story?.length ?? 0) > 0 })
+  const sprints = useQuery({ ...sprintsQuery, enabled: !hideSprint })
+  const sprintOptions: PickerOption[] = [
+    { value: 'active', label: t('tracker.sprint.activeOption'), icon: <SprintIcon state="active" /> },
+    ...(sprints.data ?? []).map((sprint) => ({ value: sprint.id, label: sprint.name, icon: <SprintIcon state={sprint.state} />, detail: t(`tracker.sprint.state.${sprint.state}`) })),
+    { value: BACKLOG, label: t('tracker.sprint.backlog'), icon: <CircleDashed className="text-stone-400" /> },
+  ]
 
   // Typing settles before it narrows the list; an outside change (a saved view, clear) resets the box.
   useEffect(() => setQ(filter.q ?? ''), [filter.q])
@@ -227,6 +240,18 @@ export function FilterBar({
       >
         <FacetButton icon={<BookMarked />} label={t('tracker.type.story')} count={filter.story?.length ?? 0} />
       </Picker>
+      {hideSprint ? null : (
+        <Picker
+          label={t('tracker.filter.sprint')}
+          options={sprintOptions}
+          selected={filter.sprint ?? []}
+          multiple
+          onPick={(value) => onFilter({ ...filter, sprint: toggle(filter.sprint, value) })}
+          empty={sprints.isFetching ? t('tracker.common.loading') : t('tracker.picker.empty')}
+        >
+          <FacetButton icon={<SprintIcon className="text-current" />} label={t('tracker.property.sprint')} count={filter.sprint?.length ?? 0} />
+        </Picker>
+      )}
       <Picker
         label={t('tracker.filter.type')}
         options={ISSUE_TYPES.map((type) => ({ value: type, label: t(`tracker.type.${type}`), icon: <TypeIcon type={type} /> }))}

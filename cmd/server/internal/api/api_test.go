@@ -24,8 +24,9 @@ import (
 )
 
 type harness struct {
-	t      *testing.T
-	server *httptest.Server
+	t        *testing.T
+	server   *httptest.Server
+	database *store.Store
 }
 
 func token(subject string) string {
@@ -55,7 +56,7 @@ func newHarness(t *testing.T) *harness {
 	require.NoError(t, err)
 	server := httptest.NewServer(New(database, auth, platformclient.New(upstream.URL, "pj-test"), directory.New(nil, ""), "pj-test"))
 	t.Cleanup(server.Close)
-	return &harness{t: t, server: server}
+	return &harness{t: t, server: server, database: database}
 }
 func call[T any](h *harness, subject, method, path string, body any, status int) T {
 	h.t.Helper()
@@ -197,7 +198,7 @@ func TestOpenAPIRouteInventory(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(openapiDocument, &document))
 	require.Equal(t, "3.1.0", document.OpenAPI)
-	for path, methods := range map[string][]string{"/me": {"get"}, "/workspace": {"get", "patch"}, "/statuses": {"get", "post"}, "/statuses/{id}": {"patch", "delete"}, "/statuses/order": {"put"}, "/labels": {"get", "post"}, "/labels/{id}": {"patch", "delete"}, "/issues": {"get", "post"}, "/issues/{id}": {"get", "patch", "delete"}, "/issues/{id}/timeline": {"get"}, "/issues/{id}/comments": {"post"}, "/comments/{id}": {"patch", "delete"}, "/issues/{id}/attachments": {"post"}, "/attachments/{id}": {"get", "delete"}, "/views": {"get", "post"}, "/views/{id}": {"patch", "delete"}, "/people": {"get"}, "/openapi.json": {"get"}} {
+	for path, methods := range map[string][]string{"/me": {"get"}, "/workspace": {"get", "patch"}, "/statuses": {"get", "post"}, "/statuses/{id}": {"patch", "delete"}, "/statuses/order": {"put"}, "/labels": {"get", "post"}, "/labels/{id}": {"patch", "delete"}, "/issues": {"get", "post"}, "/issues/{id}": {"get", "patch", "delete"}, "/issues/{id}/timeline": {"get"}, "/issues/{id}/comments": {"post"}, "/comments/{id}": {"patch", "delete"}, "/issues/{id}/attachments": {"post"}, "/attachments/{id}": {"get", "delete"}, "/views": {"get", "post"}, "/views/{id}": {"patch", "delete"}, "/people": {"get"}, "/openapi.json": {"get"}, "/sprints": {"get", "post"}, "/sprints/{id}": {"get", "patch", "delete"}, "/sprints/{id}/start": {"post"}, "/sprints/{id}/close": {"post"}, "/sprints/{id}/burndown": {"get"}, "/velocity": {"get"}} {
 		for _, method := range methods {
 			require.Contains(t, document.Paths[path], method, "%s %s", method, path)
 		}
@@ -247,9 +248,9 @@ func TestOpenAPIHierarchyContract(t *testing.T) {
 	require.NoError(t, json.Unmarshal(openapiDocument, &document))
 	schemas := document.Components.Schemas
 	require.Equal(t, domain.Types, schemas["IssueType"].Enum)
-	require.Equal(t, []string{"none", "epic", "story"}, schemas["GroupBy"].Enum)
+	require.Equal(t, []string{"none", "epic", "story", "sprint"}, schemas["GroupBy"].Enum)
 	require.Equal(t, "none", schemas["GroupBy"].Default)
-	require.ElementsMatch(t, []string{"total", "completed"}, schemas["Progress"].Required)
+	require.ElementsMatch(t, []string{"total", "completed", "points"}, schemas["Progress"].Required)
 	for _, field := range []string{"total", "completed"} {
 		require.JSONEq(t, `{"type":"integer","minimum":0}`, string(schemas["Progress"].Properties[field]))
 	}

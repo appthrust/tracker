@@ -3,7 +3,7 @@ import { createRootRouteWithContext, notFound, Outlet, useRouter, type ErrorComp
 import { FileQuestion } from 'lucide-react'
 import { useEffect } from 'react'
 import { isTrackerError } from '../api/tracker'
-import { labelsQuery, meQuery, projectsQuery, statusesQuery, viewsQuery, workspaceQuery } from '../api/queries'
+import { labelsQuery, meQuery, projectsQuery, sprintsQuery, statusesQuery, viewsQuery, workspaceQuery } from '../api/queries'
 import { useText } from '../i18n'
 import { Shell } from '../shell/shell'
 import { EmptyState, LinkButton, Loading, LoadFailed, useDocumentTitle } from '../ui'
@@ -75,12 +75,12 @@ function RootPending() {
 
 export const rootRoute = createRootRouteWithContext<RouterContext>()({
   // `GET /me` first (it proves the session), then the reference data every screen reads (workspace is created lazily on first read).
-  // Projects are prefetched, not required: a failing `GET /projects` leaves every screen usable without project names.
+  // Projects and sprints are prefetched, not required: a failing `GET /projects` or `GET /sprints` leaves every screen usable without them.
   beforeLoad: async ({ context }) => {
     await context.queryClient.ensureQueryData(meQuery)
     await context.queryClient.ensureQueryData(workspaceQuery)
     const client = context.queryClient
-    await Promise.all([client.ensureQueryData(statusesQuery), client.ensureQueryData(labelsQuery), client.ensureQueryData(viewsQuery), client.prefetchQuery(projectsQuery)])
+    await Promise.all([client.ensureQueryData(statusesQuery), client.ensureQueryData(labelsQuery), client.ensureQueryData(viewsQuery), client.prefetchQuery(projectsQuery), client.prefetchQuery(sprintsQuery)])
   },
   component: () => (
     <Shell>

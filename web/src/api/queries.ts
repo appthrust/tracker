@@ -4,14 +4,18 @@
 // every query refetches every 15 s while the tab is visible and on window
 // focus (no push in v1). Issue edits (status, priority, assignee, labels,
 // project, parent, …) are optimistic: lists and the open issue change at once
-// and roll back on failure.
+// and roll back on failure. Sprints, burndown and velocity share one key
+// prefix, refreshed by every issue write (estimates, statuses and membership
+// move the ledger).
 import { infiniteQueryOptions, QueryClient, queryOptions, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import { compactFilter, levelOf } from '../model/issues'
+import { sprintRef } from '../model/sprints'
 import {
   trackerApi,
   TrackerApiError,
   type CreateIssueInput,
   type CreateProjectInput,
+  type CreateSprintInput,
   type CreateViewInput,
   type Filter,
   type Issue,
@@ -22,10 +26,15 @@ import {
   type Person,
   type Project,
   type Sort,
+  type Sprint,
+  type SprintRef,
   type StatusCategory,
+  type Unit,
   type UpdateIssueInput,
   type UpdateProjectInput,
+  type UpdateSprintInput,
   type UpdateViewInput,
+  type UpdateWorkspaceInput,
 } from './tracker'
 
 /** Retries for a call nothing answered (rollout gap, network blip). */
@@ -52,6 +61,7 @@ export const queryClient = new QueryClient({
 export const TRACKER_KEY = ['tracker'] as const
 const ISSUES_KEY = [...TRACKER_KEY, 'issues'] as const
 const ISSUE_KEY = [...TRACKER_KEY, 'issue'] as const
+const SPRINTS_KEY = [...TRACKER_KEY, 'sprints'] as const
 
 export const meQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'me'], queryFn: () => trackerApi.me(), staleTime: 60_000 })
 export const workspaceQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'workspace'], queryFn: () => trackerApi.workspace.get() })
@@ -60,6 +70,12 @@ export const labelsQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'labels'], 
 export const viewsQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'views'], queryFn: () => trackerApi.views.list() })
 /** Every project, archived included: issues keep showing an archived project's name; pickers offer active ones only. */
 export const projectsQuery = queryOptions({ queryKey: [...TRACKER_KEY, 'projects'], queryFn: () => trackerApi.projects.list({ includeArchived: true }) })
+/** Every sprint in API order (active, planned by start, closed newest first). */
+export const sprintsQuery = queryOptions({ queryKey: [...SPRINTS_KEY, 'list'], queryFn: () => trackerApi.sprints.list() })
+export const sprintQuery = (id: string) => queryOptions({ queryKey: [...SPRINTS_KEY, 'one', id], queryFn: () => trackerApi.sprints.get(id) })
+export const burndownQuery = (id: string, unit: Unit, project?: string | null) =>
+  queryOptions({ queryKey: [...SPRINTS_KEY, 'burndown', id, unit, project ?? null], queryFn: () => trackerApi.sprints.burndown(id, { unit, project }) })
+export const velocityQuery = (unit: Unit, project?: string | null) => queryOptions({ queryKey: [...SPRINTS_KEY, 'velocity', unit, project ?? null], queryFn: () => trackerApi.velocity({ unit, project }) })
 
 /** Lists load the server maximum per page; "もっと見る" fetches the next cursor page. */
 export const ISSUE_PAGE_SIZE = 200
@@ -132,9 +148,10 @@ export const peopleQuery = (q: string) =>
 /**
  * The summary/issue as it will look after `input`; `assignee` is the picked
  * person for display, `parent` the picked parent's summary, from which the
- * derived `epic`/`story` follow at once (the server recomputes them).
+ * derived `epic`/`story` follow at once (the server recomputes them), and
+ * `sprint` the ref of the sprint `sprintId` names.
  */
-export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateIssueInput, assignee?: Person | null, parent?: IssueSummary | null): T {
+export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateIssueInput, assignee?: Person | null, parent?: IssueSummary | null, sprint?: SprintRef | null): T {
   const next: T = { ...issue }
   if (input.title !== undefined) next.title = input.title
   if (input.type !== undefined) next.type = input.type
@@ -144,6 +161,8 @@ export function applyIssuePatch<T extends IssueSummary>(issue: T, input: UpdateI
   if (input.dueOn !== undefined) next.dueOn = input.dueOn
   if (input.report !== undefined) next.report = input.report
   if (input.projectId !== undefined) next.projectId = input.projectId
+  if (input.estimate !== undefined) next.estimate = input.estimate
+  if (input.sprintId !== undefined) next.sprint = input.sprintId === null ? null : (sprint ?? issue.sprint)
   if (input.assigneeSub !== undefined) next.assignee = input.assigneeSub === null ? null : (assignee ?? issue.assignee)
   if (input.parentId === null) Object.assign(next, { parent: null, epic: null, story: null })
   else if (input.parentId !== undefined && parent?.id === input.parentId) {
@@ -176,7 +195,8 @@ export function useUpdateIssue() {
       await Promise.all([client.cancelQueries({ queryKey: ISSUES_KEY }), client.cancelQueries({ queryKey: ISSUE_KEY })])
       const lists = client.getQueriesData<IssueLists>({ queryKey: ISSUES_KEY })
       const details = client.getQueriesData<Issue>({ queryKey: ISSUE_KEY })
-      patchCaches(client, id, (issue) => applyIssuePatch(issue, input, assignee, parent))
+      const picked = input.sprintId ? client.getQueryData<Sprint[]>(sprintsQuery.queryKey)?.find((sprint) => sprint.id === input.sprintId) : undefined
+      patchCaches(client, id, (issue) => applyIssuePatch(issue, input, assignee, parent, picked ? sprintRef(picked) : undefined))
       return { lists, details }
     },
     onError: (_error, _edit, snapshot) => {
@@ -192,6 +212,8 @@ export function useUpdateIssue() {
       void client.invalidateQueries({ queryKey: [...TRACKER_KEY, 'timeline', id] })
       // Project and status changes move the per-project counts.
       void client.invalidateQueries({ queryKey: projectsQuery.queryKey })
+      // Estimates, statuses and membership move sprint tallies and charts.
+      void client.invalidateQueries({ queryKey: SPRINTS_KEY })
     },
   })
 }
@@ -211,6 +233,7 @@ const invalidateIssues = (client: QueryClient) =>
     client.invalidateQueries({ queryKey: ISSUE_KEY }),
     client.invalidateQueries({ queryKey: workspaceQuery.queryKey }),
     client.invalidateQueries({ queryKey: projectsQuery.queryKey }),
+    client.invalidateQueries({ queryKey: SPRINTS_KEY }),
   ])
 
 export function useCreateIssue() {
@@ -270,7 +293,7 @@ export function useViewMutations() {
 export function useUpdateWorkspace() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (input: { key?: string; name?: string }) => trackerApi.workspace.update(input),
+    mutationFn: (input: UpdateWorkspaceInput) => trackerApi.workspace.update(input),
     onSuccess: (workspace) => {
       client.setQueryData(workspaceQuery.queryKey, workspace)
       // A new key renames every identifier.
@@ -326,5 +349,25 @@ export function useProjectMutations() {
       },
     }),
     remove: useMutation({ mutationFn: (id: Project['id']) => trackerApi.projects.remove(id), onSuccess }),
+  }
+}
+
+/** Sprint writes refresh every sprint, chart and issue list (start re-dates; close and delete move members). */
+export function useSprintMutations() {
+  const client = useQueryClient()
+  const onSuccess = () => void Promise.all([client.invalidateQueries({ queryKey: SPRINTS_KEY }), client.invalidateQueries({ queryKey: ISSUES_KEY }), client.invalidateQueries({ queryKey: ISSUE_KEY })])
+  return {
+    create: useMutation({
+      mutationFn: (input: CreateSprintInput) => trackerApi.sprints.create(input),
+      // The caller may navigate to the new sprint at once.
+      onSuccess: (sprint) => {
+        client.setQueryData(sprintQuery(sprint.id).queryKey, sprint)
+        onSuccess()
+      },
+    }),
+    update: useMutation({ mutationFn: ({ id, input }: { id: string; input: UpdateSprintInput }) => trackerApi.sprints.update(id, input), onSuccess }),
+    start: useMutation({ mutationFn: (id: string) => trackerApi.sprints.start(id), onSuccess }),
+    close: useMutation({ mutationFn: ({ id, moveIncompleteTo }: { id: string; moveIncompleteTo: string | null }) => trackerApi.sprints.close(id, moveIncompleteTo), onSuccess }),
+    remove: useMutation({ mutationFn: (id: string) => trackerApi.sprints.remove(id), onSuccess }),
   }
 }

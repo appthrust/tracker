@@ -8,7 +8,9 @@ export type Person = { sub: string; name: string; avatarUrl?: string; email?: st
 export type Role = 'Admin' | 'Editor' | 'Viewer'
 export type Me = Person & { role: Role; isAdmin: boolean }
 
-export type Workspace = { id: string; key: string; name: string; issueCount: number; createdAt: string; updatedAt: string }
+/** `sprintLengthWeeks` is the default length of a new sprint; `timezone` (IANA) sets the day boundaries of sprint dates and charts. */
+export type Workspace = { id: string; key: string; name: string; issueCount: number; sprintLengthWeeks: SprintLength; timezone: string; createdAt: string; updatedAt: string }
+export type UpdateWorkspaceInput = { key?: string; name?: string; sprintLengthWeeks?: SprintLength; timezone?: string }
 
 export type StatusCategory = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
 export type Status = { id: string; name: string; category: StatusCategory; position: number; color: string }
@@ -39,8 +41,49 @@ export type Surface = 'dashboard' | 'platform-api' | 'apth' | 'builder-console' 
 export type Report = { environment: string; surface: Surface; version?: string; steps?: string; expected?: string; actual?: string }
 
 export type IssueRef = { id: string; identifier: string; title: string; statusId: string }
-/** Over all level-0 descendants: `total` excludes canceled ones, `completed` counts those in a completed status. */
-export type Progress = { total: number; completed: number }
+/** Over all level-0 descendants: `total` excludes canceled ones, `completed` counts those in a completed status; `points` sums their size weights the same way. */
+export type Progress = { total: number; completed: number; points: { total: number; completed: number } }
+
+/** T-shirt size estimate; each size has a fixed point weight used only for sprint sums (model/sprints.ts `SIZE_POINTS`). */
+export type Size = 'XS' | 'S' | 'M' | 'L' | 'XL'
+export type SprintState = 'planned' | 'active' | 'closed'
+export type SprintLength = 1 | 2
+/** scope = members not deleted and not canceled; done = scope members in a completed status; each in points and issues. */
+export type Tally = { scopePoints: number; scopeIssues: number; donePoints: number; doneIssues: number }
+export type Sprint = {
+  id: string
+  number: number
+  /** 1–60 characters, default "Sprint <number>". */
+  name: string
+  /** ≤ 4096 bytes. */
+  goal: string
+  state: SprintState
+  lengthWeeks: SprintLength
+  /** YYYY-MM-DD in the workspace timezone, inclusive; `endsOn = startsOn + 7·lengthWeeks − 1`. */
+  startsOn: string
+  endsOn: string
+  startedAt: string | null
+  closedAt: string | null
+  /** The sum of the sprint's ledger. */
+  current: Tally
+  /** The ledger at `startedAt`; null while planned. */
+  commitment: Tally | null
+  createdAt: string
+  updatedAt: string
+}
+export type SprintRef = { id: string; number: number; name: string; state: SprintState }
+export type Unit = 'points' | 'issues'
+/** Days after `today` carry only `day` and `ideal`. */
+export type BurndownPoint = { day: string; scope?: number; done?: number; remaining?: number; ideal: number }
+export type Burndown = { sprint: SprintRef; unit: Unit; today: string; points: BurndownPoint[] }
+export type VelocityEntry = { sprint: SprintRef; lengthWeeks: SprintLength; committed: number; completed: number }
+/** `items`: closed sprints, oldest first; `averagePerWeek` over the last three closed sprints, null before the first close. */
+export type Velocity = { unit: Unit; items: VelocityEntry[]; averagePerWeek: number | null }
+export type CreateSprintInput = { name?: string; goal?: string; startsOn?: string; lengthWeeks?: SprintLength }
+/** Dates (`startsOn`, `lengthWeeks`) only while planned. */
+export type UpdateSprintInput = Partial<{ name: string; goal: string; startsOn: string; lengthWeeks: SprintLength }>
+export type ChartScope = { unit: Unit; project?: string | null }
+
 export type Issue = {
   id: string
   /** `KEY-123` */
@@ -64,6 +107,10 @@ export type Issue = {
   story: IssueRef | null
   /** Non-null iff `type` is `epic` or `story`. */
   progress: Progress | null
+  /** Not allowed on an epic (always null there). */
+  estimate: Size | null
+  /** Null = backlog; an epic is never a member. */
+  sprint: SprintRef | null
   children: IssueRef[]
   blocks: IssueRef[]
   blockedBy: IssueRef[]
@@ -97,6 +144,8 @@ export type ActivityField =
   | 'attachment'
   | 'deleted'
   | 'project'
+  | 'estimate'
+  | 'sprint'
 export type Activity = { id: string; issueId: string; actor: Person; field: ActivityField; from: unknown; to: unknown; createdAt: string }
 export type TimelineItem = { kind: 'activity'; activity: Activity } | { kind: 'comment'; comment: Comment }
 
@@ -122,12 +171,14 @@ export type Filter = {
   epic?: string[]
   /** The issue's derived `story` is one of these ids, or `none` for issues without one. */
   story?: string[]
+  /** Sprint ids, `active` (the active sprint) or `none` (the backlog). */
+  sprint?: string[]
 }
-/** updated/created: desc; priority: urgent→none then updated desc; number: asc. */
-export type Sort = 'updated' | 'created' | 'priority' | 'number'
+/** updated/created: desc; priority: urgent→none then updated desc; number: asc; estimate: XL→XS, none last, then updated desc. */
+export type Sort = 'updated' | 'created' | 'priority' | 'number' | 'estimate'
 export type ViewLayout = 'list' | 'board'
-/** Client-side sectioning of a list or board by the issues' derived `epic` or `story`. */
-export type GroupBy = 'none' | 'epic' | 'story'
+/** Client-side sectioning of a list or board by the issues' derived `epic` or `story`, or by sprint (backlog last). */
+export type GroupBy = 'none' | 'epic' | 'story' | 'sprint'
 export type View = { id: string; name: string; owner: Person; shared: boolean; layout: ViewLayout; groupBy: GroupBy; filter: Filter; sort: Sort; position: number; createdAt: string; updatedAt: string }
 
 export type IssuePage = { items: IssueSummary[]; nextCursor: string | null }
@@ -146,6 +197,8 @@ export type CreateIssueInput = {
   dueOn?: string
   report?: Report
   projectId?: string
+  estimate?: Size
+  sprintId?: string
 }
 export type UpdateIssueInput = Partial<{
   title: string
@@ -161,6 +214,10 @@ export type UpdateIssueInput = Partial<{
   report: Report | null
   /** null clears the project. */
   projectId: string | null
+  /** null clears. */
+  estimate: Size | null
+  /** null moves the issue to the backlog. */
+  sprintId: string | null
 }>
 export type CreateViewInput = { name: string; layout?: ViewLayout; groupBy?: GroupBy; filter?: Filter; sort?: Sort; shared?: boolean }
 export type UpdateViewInput = Partial<CreateViewInput>
@@ -209,7 +266,7 @@ export interface TrackerApi {
   me(): Promise<Me>
   workspace: {
     get(): Promise<Workspace>
-    update(input: { key?: string; name?: string }): Promise<Workspace>
+    update(input: UpdateWorkspaceInput): Promise<Workspace>
   }
   statuses: {
     list(): Promise<Status[]>
@@ -257,6 +314,21 @@ export interface TrackerApi {
     update(id: string, input: UpdateViewInput): Promise<View>
     remove(id: string): Promise<void>
   }
+  sprints: {
+    /** Active, then planned by `startsOn`, then closed newest first. */
+    list(state?: SprintState): Promise<Sprint[]>
+    get(id: string): Promise<Sprint>
+    create(input: CreateSprintInput): Promise<Sprint>
+    update(id: string, input: UpdateSprintInput): Promise<Sprint>
+    /** 409 while another sprint is active or this one is not planned. */
+    start(id: string): Promise<Sprint>
+    /** Unfinished scope moves to `moveIncompleteTo` (a planned sprint) or the backlog (null). */
+    close(id: string, moveIncompleteTo: string | null): Promise<Sprint>
+    /** Planned sprints only (Admin); members return to the backlog. */
+    remove(id: string): Promise<void>
+    burndown(id: string, scope: ChartScope): Promise<Burndown>
+  }
+  velocity(scope: ChartScope & { limit?: number }): Promise<Velocity>
   people(q?: string): Promise<PeopleResult>
 }
 
@@ -269,6 +341,14 @@ export function issueSearch({ filter, sort, cursor, limit }: IssueListParams = {
   if (limit !== undefined) search.set('limit', String(limit))
   const text = search.toString()
   return text ? `?${text}` : ''
+}
+
+/** `?unit=&project=&limit=` with only the set parameters. */
+export function chartSearch({ unit, project, limit }: ChartScope & { limit?: number }): string {
+  const search = new URLSearchParams({ unit })
+  if (project) search.set('project', project)
+  if (limit !== undefined) search.set('limit', String(limit))
+  return `?${search}`
 }
 
 export function createTrackerApi(fetcher: Fetcher = (input, init) => fetch(input, init), reauth = browserReauth): TrackerApi {
@@ -359,6 +439,17 @@ export function createTrackerApi(fetcher: Fetcher = (input, init) => fetch(input
       update: (viewId, input) => send<View>('PATCH', `/views/${id(viewId)}`, input),
       remove: (viewId) => send<void>('DELETE', `/views/${id(viewId)}`),
     },
+    sprints: {
+      list: (state) => list<Sprint>(`/sprints${state ? `?state=${state}` : ''}`),
+      get: (sprintId) => send<Sprint>('GET', `/sprints/${id(sprintId)}`),
+      create: (input) => send<Sprint>('POST', '/sprints', input),
+      update: (sprintId, input) => send<Sprint>('PATCH', `/sprints/${id(sprintId)}`, input),
+      start: (sprintId) => send<Sprint>('POST', `/sprints/${id(sprintId)}/start`),
+      close: (sprintId, moveIncompleteTo) => send<Sprint>('POST', `/sprints/${id(sprintId)}/close`, { moveIncompleteTo }),
+      remove: (sprintId) => send<void>('DELETE', `/sprints/${id(sprintId)}`),
+      burndown: (sprintId, scope) => send<Burndown>('GET', `/sprints/${id(sprintId)}/burndown${chartSearch(scope)}`),
+    },
+    velocity: (scope) => send<Velocity>('GET', `/velocity${chartSearch(scope)}`),
     people: (q) => send<PeopleResult>('GET', `/people${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   }
 }

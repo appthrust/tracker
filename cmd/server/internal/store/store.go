@@ -8,16 +8,22 @@ import (
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/appserver-go/appserver/pgstore"
 	"github.com/lib/pq"
+	"time"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
 // Store owns the tracker's queries and schema over the shared transaction runner.
-type Store struct{ *pgstore.Store }
+type Store struct {
+	*pgstore.Store
+	// Now may be injected before serving requests for deterministic sprint clocks.
+	Now func() time.Time
+}
 type Tx struct {
 	*pgstore.Tx
 	WorkspaceID string
+	clock       func() time.Time
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -29,14 +35,26 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 }
 
 func (s *Store) Do(ctx context.Context, write bool, fn func(*Tx) error) error {
-	return translate(s.Store.Do(ctx, write, func(tx *pgstore.Tx) error { return fn(&Tx{Tx: tx}) }))
+	return translate(s.Store.Do(ctx, write, func(tx *pgstore.Tx) error { return fn(&Tx{Tx: tx, clock: s.Now}) }))
 }
 
 func (s *Store) InWorkspace(ctx context.Context, workspace string, write bool, fn func(*Tx) error) error {
 	return s.Do(ctx, write, func(tx *Tx) error {
 		tx.WorkspaceID = workspace
+		if write {
+			if err := tx.Exec(`SELECT id FROM tracker_workspace WHERE id=$1 FOR UPDATE`, workspace); err != nil {
+				return err
+			}
+		}
 		return fn(tx)
 	})
+}
+
+func (t *Tx) now() time.Time {
+	if t.clock != nil {
+		return t.clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func invalid(message string) error { return httpx.Fail(400, "invalid", message) }

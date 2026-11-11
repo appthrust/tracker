@@ -1,60 +1,89 @@
-// `/`, `/board`, `/reported` and `/views/<id>`: project scope switcher, filter
-// bar, list or board, and the side panel (`?issue=APT-12`). Keys: J/K (or
-// ↓/↑) move, X selects, Enter opens the panel, Esc closes it (then clears the
-// selection). The filter, sort, grouping, project scope and open issue live
-// in the URL so a link reproduces the screen. On `/`, `/board` and
-// `/reported` a single project in the filter travels as `?project=`
-// (paths.ts) and is the scope new issues default to; on a view it stays
-// inside the view's filter. `/reported` is the built-in "Reported by me"
-// view: it behaves like a saved view (its filter, sort and layout are
-// defaults the URL overrides, with a reset) but nothing is stored, so every
-// user has it even when no views exist. Grouping by epic or story (`?group=`,
-// a view's `groupBy`) loads every matching issue, so groups and counts are
-// complete; board lanes after the first few start collapsed.
+// `/`, `/board`, `/reported`, `/current-sprint`, `/sprints/<id>` and
+// `/views/<id>`: project scope switcher, filter bar, list or board, and the
+// side panel (`?issue=APT-12`). Keys: J/K (or ↓/↑) move, X selects, Enter
+// opens the panel, Esc closes it (then clears the selection). The filter,
+// sort, grouping, project scope and open issue live in the URL so a link
+// reproduces the screen. On `/`, `/board` and `/reported` a single project
+// in the filter travels as `?project=` (paths.ts) and is the scope new issues
+// default to; on a view it stays inside the view's filter. `/reported` is the
+// built-in "Reported by me" view and `/current-sprint` the built-in "Current
+// sprint" board: they behave like saved views (their filter, sort and layout
+// are defaults the URL overrides, with a reset) but nothing is stored, so
+// every user has them. A sprint's page shows only its members (the sprint is
+// fixed, not part of the editable filter) under the sprint's own header
+// (`top`). Grouping by epic, story or sprint (`?group=`, a view's `groupBy`)
+// loads every matching issue, so groups and counts are complete; board lanes
+// after the first few start collapsed. On the current sprint and a sprint's
+// page, the work under a member story is listed with that story.
 import { useInfiniteQuery, useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, Bookmark, Columns3, List, MoreHorizontal, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { allIssuesQuery, epicsQuery, issuesQuery, storiesQuery, useViewMutations } from '../../api/queries'
-import type { Filter, GroupBy, Sort, View, ViewLayout } from '../../api/tracker'
+import { allIssuesQuery, epicsQuery, issuesQuery, sprintsQuery, storiesQuery, useViewMutations } from '../../api/queries'
+import type { Filter, GroupBy, IssueSummary, Sort, Sprint, View, ViewLayout } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { compactFilter, groupIssues, isEmptyFilter, isSummary, type IssueSection } from '../../model/issues'
+import { BACKLOG, groupBySprint } from '../../model/sprints'
 import { filterParam, paths, parseFilterParam, parseGroupParam, parseLayoutParam, parseSortParam, type ListSearch } from '../../routes/paths'
 import { ActionError, Button, ConfirmDialog, EmptyState, HrefLink, Kbd, LinkButton, Loading, LoadFailed, useDocumentTitle, cn } from '../../ui'
+import { SprintIcon } from '../sprints/sprint-ui'
 import { isPlainShortcut, MOD_KEY, setUi, useUi } from '../ui-state'
 import { FilterBar } from './filter-bar'
 import { IssueBoard, type BoardLane } from './issue-board'
 import { IssuePanel } from './issue-detail'
-import { GroupedIssueList, IssueList, type IssueGroup } from './issue-list'
+import { GroupedIssueList, IssueList, type IssueGroup, type RowOptions } from './issue-list'
 import { NO_PROJECT, ProjectScopeSwitcher } from './projects'
 import { SaveViewDialog } from './save-view-dialog'
 import { useReference } from './use-reference'
 
-export type IssuesPageKind = { kind: 'all' } | { kind: 'board' } | { kind: 'reported' } | { kind: 'view'; view: View }
+export type IssuesPageKind = { kind: 'all' } | { kind: 'board' } | { kind: 'reported' } | { kind: 'currentSprint' } | { kind: 'sprint'; sprint: Sprint } | { kind: 'view'; view: View }
 
+type Preset = { filter: Filter; sort: Sort; layout: ViewLayout; groupBy: GroupBy }
 /** The built-in "Reported by me" view (API.md v0.1.2): the caller's reports, newest first. */
-export const REPORTED_VIEW: { filter: Filter; sort: Sort; layout: ViewLayout; groupBy: GroupBy } = { filter: { reporter: ['me'] }, sort: 'created', layout: 'list', groupBy: 'none' }
+export const REPORTED_VIEW: Preset = { filter: { reporter: ['me'] }, sort: 'created', layout: 'list', groupBy: 'none' }
+/** The built-in "Current sprint" view (API.md v0.1.10): the active sprint as a board. */
+export const CURRENT_SPRINT_VIEW: Preset = { filter: { sprint: ['active'] }, sort: 'updated', layout: 'board', groupBy: 'none' }
+/** A sprint's page: its members (the sprint itself is fixed, outside the filter) as a list. */
+const SPRINT_PAGE: Preset = { filter: {}, sort: 'updated', layout: 'list', groupBy: 'none' }
+
+const NO_ISSUES: IssueSummary[] = []
 
 /** Board lanes open by default; the rest start collapsed so a large board stays quick. */
 const OPEN_LANES = 3
 
 const sameFilter = (a: Filter, b: Filter) => JSON.stringify(compactFilter(a)) === JSON.stringify(compactFilter(b))
 
-export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path: string; search: ListSearch }) {
+export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; path: string; search: ListSearch; top?: ReactNode }) {
   const { t } = useText()
   const navigate = useNavigate()
   const { statuses, projectById } = useReference()
   const view = page.kind === 'view' ? page.view : undefined
-  // What the page starts from before the URL overrides it: a saved view's filter/sort/layout, the built-in view's, or none.
-  const preset = view ?? (page.kind === 'reported' ? REPORTED_VIEW : undefined)
-  // `base` is the filter without the `?project=` scope (views keep their project inside the filter).
+  const pageSprint = page.kind === 'sprint' ? page.sprint : undefined
+  // What the page starts from before the URL overrides it: a saved view's filter/sort/layout, a built-in view's, or none.
+  const preset: Preset | undefined = view ?? (page.kind === 'reported' ? REPORTED_VIEW : page.kind === 'currentSprint' ? CURRENT_SPRINT_VIEW : pageSprint ? SPRINT_PAGE : undefined)
+  // `base` is the filter without the `?project=` scope (views keep their project inside the filter) and without a sprint page's fixed sprint.
   const base = useMemo(() => parseFilterParam(search.filter) ?? preset?.filter ?? {}, [search.filter, preset])
-  const filter = useMemo(() => (!view && search.project ? { ...base, project: [search.project] } : base), [base, search.project, view])
+  const filter = useMemo(() => {
+    const scoped = !view && search.project ? { ...base, project: [search.project] } : base
+    return pageSprint ? { ...scoped, sprint: [pageSprint.id] } : scoped
+  }, [base, search.project, view, pageSprint])
   const sort: Sort = parseSortParam(search.sort) ?? preset?.sort ?? 'updated'
   const layout: ViewLayout = page.kind === 'board' ? 'board' : page.kind === 'all' ? 'list' : (parseLayoutParam(search.layout) ?? preset!.layout)
   const groupBy: GroupBy = parseGroupParam(search.group) ?? preset?.groupBy ?? 'none'
-  const title = view ? view.name : page.kind === 'board' ? t('tracker.nav.board') : page.kind === 'reported' ? t('tracker.nav.reported') : t('tracker.nav.issues')
+  const sprints = useQuery(sprintsQuery)
+  const activeSprint = sprints.data?.find((sprint) => sprint.state === 'active')
+  const title = view
+    ? view.name
+    : pageSprint
+      ? pageSprint.name
+      : page.kind === 'board'
+        ? t('tracker.nav.board')
+        : page.kind === 'reported'
+          ? t('tracker.nav.reported')
+          : page.kind === 'currentSprint'
+            ? t('tracker.nav.currentSprint')
+            : t('tracker.nav.issues')
   // One project in the filter is the scope; several show as "N projects" and keep the project chips on rows.
   const scope = filter.project?.length === 1 ? filter.project[0]! : null
   const scopeProject = scope && scope !== NO_PROJECT ? projectById.get(scope) : undefined
@@ -70,14 +99,16 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
     [navigate, path, search]
   )
   const onFilter = useCallback(
-    (next: Filter) => {
+    (input: Filter) => {
+      // A sprint page's sprint is not the filter's to change.
+      const next = pageSprint ? { ...input, sprint: undefined } : input
       if (view) return setSearch({ filter: filterParam(next) ?? (!isEmptyFilter(view.filter) ? '{}' : undefined) })
       const single = next.project?.length === 1 ? next.project[0] : undefined
       const rest = single ? { ...next, project: undefined } : next
       // The built-in view's own filter needs no URL; clearing it entirely is `{}`, so the default does not come back.
       setSearch({ project: single, filter: sameFilter(rest, preset?.filter ?? {}) ? undefined : (filterParam(rest) ?? '{}') })
     },
-    [setSearch, view, preset]
+    [setSearch, view, preset, pageSprint]
   )
   const onScope = (next: string | null) => onFilter({ ...filter, project: next ? [next] : undefined })
 
@@ -92,13 +123,28 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
   const whole = useQuery({ ...allIssuesQuery(filter, sort), placeholderData: keepPreviousData, enabled: grouped })
   const query = grouped ? whole : paged
   // Group headers need the grouping issues' status and progress even when the filter leaves them out.
-  const known = useQuery({ ...(groupBy === 'story' ? storiesQuery : epicsQuery), enabled: grouped })
+  const known = useQuery({ ...(groupBy === 'story' ? storiesQuery : epicsQuery), enabled: groupBy === 'epic' || groupBy === 'story' })
   const items = useMemo(() => (grouped ? (whole.data?.items ?? []) : (paged.data?.pages.flatMap((pageData) => pageData.items) ?? [])), [grouped, whole.data, paged.data])
   const groups: IssueGroup[] = useMemo(
     () => statuses.map((status) => ({ status, issues: items.filter((issue) => issue.statusId === status.id) })).filter((group) => layout === 'board' || group.issues.length > 0),
     [statuses, items, layout]
   )
-  const sections: IssueSection[] = useMemo(() => groupIssues(items, groupBy, known.data?.items), [items, groupBy, known.data])
+  const sections: IssueSection[] = useMemo(
+    () => (groupBy === 'sprint' ? groupBySprint(items, sprints.data ?? []) : groupIssues(items, groupBy, known.data?.items)),
+    [items, groupBy, known.data, sprints.data]
+  )
+  // On the sprint screens, the work under each member story (it belongs to the sprint through the story).
+  const sprintScreen = page.kind === 'sprint' || page.kind === 'currentSprint'
+  const memberStories = useMemo(() => (sprintScreen ? items.filter((issue) => issue.type === 'story').map((issue) => issue.id) : []), [sprintScreen, items])
+  const storyWork = useQuery({ ...allIssuesQuery({ story: memberStories }, 'number'), enabled: memberStories.length > 0 })
+  const rows: RowOptions = useMemo(() => {
+    const nested = new Map<string, IssueSummary[]>()
+    for (const work of memberStories.length > 0 ? (storyWork.data?.items ?? NO_ISSUES) : NO_ISSUES) {
+      if (!work.story || !memberStories.includes(work.story.id)) continue
+      nested.set(work.story.id, [...(nested.get(work.story.id) ?? []), work])
+    }
+    return { showProject: filter.project?.length !== 1, showSprint: !sprintScreen && groupBy !== 'sprint', nested }
+  }, [memberStories, storyWork.data, filter.project, sprintScreen, groupBy])
   const lanes: BoardLane[] = useMemo(
     () => sections.map((section) => ({ section, columns: statuses.map((status) => ({ status, issues: section.issues.filter((issue) => issue.statusId === status.id) })) })),
     [sections, statuses]
@@ -168,11 +214,24 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
 
   const selectedCount = useUi((state) => state.selectedIds.length)
   const [saving, setSaving] = useState(false)
-  // New issues land in the scoped project while it is active; "No project", archived or several projects give none.
-  const newIssue = (statusId?: string) => setUi({ newIssue: { statusId, projectId: scopeProject && !scopeProject.archived ? scopeProject.id : null } })
-  // "+" on a group: its epic/story becomes the parent (a header known only by ref has no type yet, so none is preset).
+  // New issues land in the scoped project while it is active; "No project", archived or several projects give none. On a sprint's screens they join that sprint.
+  const projectDefault = scopeProject && !scopeProject.archived ? scopeProject.id : null
+  const sprintDefault = pageSprint && pageSprint.state !== 'closed' ? pageSprint.id : page.kind === 'currentSprint' ? activeSprint?.id : undefined
+  // C anywhere on a sprint screen creates into that sprint, like the project scope.
+  useEffect(() => {
+    setUi({ sprintScope: sprintDefault ?? null })
+    return () => setUi({ sprintScope: null })
+  }, [sprintDefault])
+  const newIssue = (statusId?: string) => setUi({ newIssue: { statusId, projectId: projectDefault, sprintId: sprintDefault } })
+  // "+" on a group: its epic/story becomes the parent (a header known only by ref has no type yet, so none is preset); a sprint section's sprint the sprint.
   const newInGroup = (section: IssueSection) =>
-    setUi({ newIssue: { projectId: scopeProject && !scopeProject.archived ? scopeProject.id : null, parent: section.header && isSummary(section.header) ? section.header : undefined } })
+    setUi({
+      newIssue: {
+        projectId: projectDefault,
+        parent: section.header && isSummary(section.header) ? section.header : undefined,
+        sprintId: groupBy === 'sprint' && section.key !== BACKLOG ? section.key : sprintDefault,
+      },
+    })
   const dirty =
     preset !== undefined &&
     ((search.filter !== undefined && !sameFilter(base, preset.filter)) ||
@@ -182,18 +241,25 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
   const reset = () => setSearch({ filter: undefined, sort: undefined, layout: undefined, group: undefined })
   const onlyScope = scope !== null && Object.keys(compactFilter(filter)).length === 1
   const groupedProps = groupBy !== 'none' ? { groupBy, isCollapsed, onToggle, onNewInGroup: newInGroup } : undefined
+  const noActiveSprint = page.kind === 'currentSprint' && sprints.isSuccess && !activeSprint
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-white px-4 sm:px-6">
+        {sprintScreen ? <SprintIcon state={pageSprint?.state ?? 'active'} className="size-4" /> : null}
         <h1 className="min-w-0 shrink-0 truncate text-[15px] font-semibold text-stone-900">{title}</h1>
+        {page.kind === 'currentSprint' && activeSprint ? (
+          <HrefLink href={paths.sprint(activeSprint.id)} className="shrink-0 truncate text-[13px] text-stone-500 hover:text-stone-900 hover:underline">
+            {activeSprint.name}
+          </HrefLink>
+        ) : null}
         {view?.shared ? <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-500">{t('tracker.view.shared')}</span> : null}
         <ProjectScopeSwitcher value={scope} many={filter.project?.length ?? 0} onChange={onScope} />
         <span className="shrink-0 text-xs text-stone-400 tabular-nums max-sm:hidden">{query.data ? t('tracker.list.count', { count: items.length }) : null}</span>
         <div className="ml-auto flex items-center gap-1.5">
           <LayoutSwitch presetLayout={preset?.layout} layout={layout} search={search} setSearch={setSearch} />
           {view ? <ViewMenu view={view} dirty={dirty} filter={filter} sort={sort} layout={layout} groupBy={groupBy} reset={reset} /> : null}
-          {page.kind === 'reported' && dirty ? (
+          {(page.kind === 'reported' || page.kind === 'currentSprint' || page.kind === 'sprint') && dirty ? (
             <Button size="sm" tone="ghost" icon={<RotateCcw />} onClick={reset}>
               {t('tracker.view.reset')}
             </Button>
@@ -204,13 +270,15 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
           </Button>
         </div>
       </header>
+      {top}
       <FilterBar
-        filter={filter}
+        filter={pageSprint ? { ...filter, sprint: undefined } : filter}
         sort={sort}
         onFilter={onFilter}
         onSort={(next) => setSearch({ sort: next === (preset?.sort ?? 'updated') && !view ? undefined : next })}
         groupBy={groupBy}
         onGroupBy={(next) => setSearch({ group: next === (preset?.groupBy ?? 'none') ? undefined : next })}
+        hideSprint={Boolean(pageSprint)}
         actions={
           <Button size="sm" tone="ghost" icon={<Bookmark />} onClick={() => setSaving(true)} className="h-7 md:h-7">
             {t('tracker.view.saveAs')}
@@ -233,13 +301,44 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
         <div className={cn('min-h-0 min-w-0 flex-1', layout === 'list' ? 'overflow-y-auto' : 'overflow-hidden')} aria-busy={query.isFetching || undefined}>
           {query.isPending ? (
             <Loading className="px-6" />
+          ) : noActiveSprint ? (
+            <div className="p-6">
+              <EmptyState
+                icon={<SprintIcon />}
+                title={t('tracker.sprints.noActive')}
+                body={t('tracker.sprints.noActiveBody')}
+                action={
+                  <LinkButton tone="primary" href={paths.sprints}>
+                    {t('tracker.sprints.goSprints')}
+                  </LinkButton>
+                }
+              />
+            </div>
           ) : query.isError && !query.data ? (
             <div className="p-6">
               <LoadFailed error={query.error} onRetry={() => void query.refetch()} />
             </div>
-          ) : items.length === 0 && layout === 'list' ? (
+          ) : items.length === 0 && layout === 'list' && !(groupBy === 'sprint') ? (
             <div className="p-6">
-              {onlyScope ? (
+              {pageSprint && isEmptyFilter(base) && !search.project ? (
+                <EmptyState
+                  icon={<SprintIcon />}
+                  title={t('tracker.sprints.emptySprintTitle')}
+                  body={pageSprint.state === 'closed' ? undefined : t('tracker.sprints.emptySprintBody')}
+                  action={
+                    pageSprint.state === 'closed' ? undefined : (
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <LinkButton tone="primary" href={`${paths.home}?group=sprint`}>
+                          {t('tracker.sprints.planFromBacklog')}
+                        </LinkButton>
+                        <Button icon={<Plus />} onClick={() => newIssue()}>
+                          {t('tracker.nav.newIssue')}
+                        </Button>
+                      </div>
+                    )
+                  }
+                />
+              ) : onlyScope ? (
                 <EmptyState
                   title={scope === NO_PROJECT ? t('tracker.project.noneEmptyTitle') : t('tracker.project.emptyTitle', { name: scopeName ?? '' })}
                   body={scope === NO_PROJECT ? undefined : t('tracker.project.emptyBody')}
@@ -292,12 +391,12 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
             </div>
           ) : layout === 'list' ? (
             groupedProps ? (
-              <GroupedIssueList sections={sections} {...groupedProps} onOpen={open} showProject={scope === null} />
+              <GroupedIssueList sections={sections} {...groupedProps} onOpen={open} rows={rows} />
             ) : (
-              <IssueList groups={groups} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
+              <IssueList groups={groups} onOpen={open} onNewIssue={newIssue} rows={rows} />
             )
           ) : (
-            <IssueBoard lanes={groupedProps ? lanes : [{ section: sections[0]!, columns: groups }]} grouped={groupedProps} onOpen={open} onNewIssue={newIssue} showProject={scope === null} />
+            <IssueBoard lanes={groupedProps ? lanes : [{ section: sections[0]!, columns: groups }]} grouped={groupedProps} onOpen={open} onNewIssue={newIssue} rows={rows} />
           )}
           {!grouped && paged.hasNextPage ? (
             <div className="flex justify-center py-4">
@@ -315,7 +414,7 @@ export function IssuesPage({ page, path, search }: { page: IssuesPageKind; path:
   )
 }
 
-/** Views and the built-in view switch layout in place (`?layout=`, absent = their own); `/` and `/board` are separate pages. */
+/** Views, built-in views and sprint pages switch layout in place (`?layout=`, absent = their own); `/` and `/board` are separate pages. */
 function LayoutSwitch({ presetLayout, layout, search, setSearch }: { presetLayout?: ViewLayout; layout: ViewLayout; search: ListSearch; setSearch: (patch: Partial<ListSearch>) => void }) {
   const { t } = useText()
   const item = (value: ViewLayout, icon: ReactNode, label: string) => {

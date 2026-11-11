@@ -178,6 +178,9 @@ func ValidateIssue(issue Issue) error {
 			return errors.New("Due date must be YYYY-MM-DD")
 		}
 	}
+	if issue.Estimate != nil && (SizePoints(*issue.Estimate) == 0 || issue.Type == "epic") {
+		return &FieldError{Path: "estimate", Message: "Estimate must be XS, S, M, L, or XL and is not allowed on epics"}
+	}
 	return ValidateReport(issue.Type, issue.Report)
 }
 
@@ -226,6 +229,11 @@ func ValidateFilter(filter Filter) error {
 			return errors.New("Invalid project filter")
 		}
 	}
+	for _, id := range filter.Sprint {
+		if id != "none" && id != "active" && !ValidID(id) {
+			return &FieldError{Path: "filter.sprint", Message: "Sprint filter must contain sprint IDs, active, or none"}
+		}
+	}
 	for _, field := range []struct {
 		name string
 		ids  []string
@@ -268,7 +276,7 @@ func ValidateFilter(filter Filter) error {
 	return nil
 }
 func ValidSort(sort Sort) bool {
-	return sort == SortUpdated || sort == SortCreated || sort == SortPriority || sort == SortNumber
+	return sort == SortUpdated || sort == SortCreated || sort == SortPriority || sort == SortNumber || sort == SortEstimate
 }
 func ValidateView(view View) error {
 	if !Text(view.Name, 1, 60) {
@@ -277,8 +285,8 @@ func ValidateView(view View) error {
 	if view.Layout != "list" && view.Layout != "board" {
 		return errors.New("Layout must be list or board")
 	}
-	if view.GroupBy != "none" && view.GroupBy != "epic" && view.GroupBy != "story" {
-		return &FieldError{Path: "groupBy", Message: "Group by must be none, epic, or story"}
+	if view.GroupBy != "none" && view.GroupBy != "epic" && view.GroupBy != "story" && view.GroupBy != "sprint" {
+		return &FieldError{Path: "groupBy", Message: "Group by must be none, epic, story, or sprint"}
 	}
 	if !ValidSort(view.Sort) {
 		return errors.New("Invalid sort")

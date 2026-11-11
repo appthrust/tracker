@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
@@ -35,6 +34,8 @@ type IssueCreate struct {
 	AssigneeSub *string        `json:"assigneeSub"`
 	LabelIDs    []string       `json:"labelIds"`
 	ProjectID   *string        `json:"projectId"`
+	Estimate    *string        `json:"estimate"`
+	SprintID    *string        `json:"sprintId"`
 	ParentID    *string        `json:"parentId"`
 	DueOn       *string        `json:"dueOn"`
 	Report      *domain.Report `json:"report"`
@@ -48,6 +49,8 @@ type IssuePatch struct {
 	AssigneeSub Field[string]        `json:"assigneeSub"`
 	LabelIDs    Field[[]string]      `json:"labelIds"`
 	ProjectID   Field[string]        `json:"projectId"`
+	Estimate    Field[string]        `json:"estimate"`
+	SprintID    Field[string]        `json:"sprintId"`
 	ParentID    Field[string]        `json:"parentId"`
 	Blocks      Field[[]string]      `json:"blocks"`
 	DueOn       Field[string]        `json:"dueOn"`
@@ -183,11 +186,14 @@ func (t *Tx) replaceBlocks(id string, ids []string) ([]domain.IssueRef, error) {
 	return items, nil
 }
 func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domain.Person) (domain.Issue, error) {
-	item := domain.Issue{IssueSummary: domain.IssueSummary{ID: ulid.Make().String(), Title: strings.TrimSpace(input.Title), Type: input.Type, Priority: input.Priority, StatusID: input.StatusID, Assignee: assignee, Reporter: actor, ProjectID: input.ProjectID, DueOn: input.DueOn, Report: input.Report}, Description: input.Description}
+	item := domain.Issue{IssueSummary: domain.IssueSummary{ID: ulid.Make().String(), Title: strings.TrimSpace(input.Title), Type: input.Type, Priority: input.Priority, StatusID: input.StatusID, Assignee: assignee, Reporter: actor, ProjectID: input.ProjectID, Estimate: input.Estimate, DueOn: input.DueOn, Report: input.Report}, Description: input.Description}
 	if item.Priority == "" {
 		item.Priority = "none"
 	}
 	if err := domain.ValidateIssue(item); err != nil {
+		if _, ok := err.(*domain.FieldError); ok {
+			return item, err
+		}
 		return item, invalid(err.Error())
 	}
 	if err := t.validateProjectAssignment(item.ProjectID); err != nil {
@@ -202,12 +208,19 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	if err != nil {
 		return item, invalid("Status must belong to this workspace")
 	}
-	item.CompletedAt = domain.TransitionCompletedAt(status.Category, time.Now())
+	item.CompletedAt = domain.TransitionCompletedAt(status.Category, t.now())
 	if input.ParentID != nil {
 		item.Parent, err = t.parent(item.ID, *input.ParentID, item.Type, "parentId")
 		if err != nil {
 			return item, err
 		}
+	}
+	item.Sprint, err = t.sprintRef(input.SprintID)
+	if err != nil {
+		return item, err
+	}
+	if err := t.validateSprintMembership(item); err != nil {
+		return item, err
 	}
 	if err := t.SQL.QueryRowContext(t.Context, `UPDATE tracker_workspace SET issue_seq=issue_seq+1,updated_at=now() WHERE id=$1 RETURNING issue_seq`, t.WorkspaceID).Scan(&item.Number); err != nil {
 		return item, err
@@ -223,13 +236,20 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	if item.Parent != nil {
 		parent = item.Parent.ID
 	}
-	if err := t.Exec(`INSERT INTO tracker_issue (id,workspace_id,number,title,description,type,priority,status_id,assignee_sub,assignee_name,reporter_sub,reporter_name,parent_id,due_on,report,completed_at,project_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, item.ID, t.WorkspaceID, item.Number, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, actor.Sub, actor.Name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID); err != nil {
+	if err := t.Exec(`INSERT INTO tracker_issue (id,workspace_id,number,title,description,type,priority,status_id,assignee_sub,assignee_name,reporter_sub,reporter_name,parent_id,due_on,report,completed_at,project_id,estimate,sprint_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, item.ID, t.WorkspaceID, item.Number, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, actor.Sub, actor.Name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID, item.Estimate, sprintID(item.Sprint)); err != nil {
 		return item, err
 	}
 	if _, err := t.replaceLabels(item.ID, input.LabelIDs); err != nil {
 		return item, err
 	}
 	if err := t.activity(item.ID, actor, "created", nil, nil); err != nil {
+		return item, err
+	}
+	after, err := t.standing(item)
+	if err != nil {
+		return item, err
+	}
+	if err := t.sprintEvents(item.ID, domain.SprintStanding{}, after); err != nil {
 		return item, err
 	}
 	return t.Issue(item.ID)
@@ -266,6 +286,19 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 			}
 		}
 	}
+	if input.Estimate.Present {
+		item.Estimate = input.Estimate.Value
+	}
+	if input.SprintID.Present {
+		next, err := t.sprintRef(input.SprintID.Value)
+		if err != nil {
+			return item, err
+		}
+		if old.Sprint != nil && old.Sprint.State == "closed" {
+			return item, &domain.FieldError{Path: "sprintId", Message: "Membership of a closed sprint is frozen"}
+		}
+		item.Sprint = next
+	}
 	if input.DueOn.Present {
 		item.DueOn = input.DueOn.Value
 	}
@@ -276,6 +309,9 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		item.Report = nil
 	}
 	if err := domain.ValidateIssue(item); err != nil {
+		if _, ok := err.(*domain.FieldError); ok {
+			return item, err
+		}
 		return item, invalid(err.Error())
 	}
 	if input.ParentID.Present || item.Type != old.Type {
@@ -302,12 +338,17 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 			return item, err
 		}
 	}
+	if input.SprintID.Present || input.ParentID.Present || item.Type != old.Type {
+		if err := t.validateSprintMembership(item); err != nil {
+			return item, err
+		}
+	}
 	if item.StatusID != old.StatusID {
 		after, err := t.Status(item.StatusID)
 		if err != nil {
 			return item, invalid("Status must belong to this workspace")
 		}
-		item.CompletedAt = domain.TransitionCompletedAt(after.Category, time.Now())
+		item.CompletedAt = domain.TransitionCompletedAt(after.Category, t.now())
 	}
 	if input.LabelIDs.Present {
 		if input.LabelIDs.Value == nil {
@@ -335,6 +376,7 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	}{
 		{"title", old.Title, item.Title}, {"description", old.Description, item.Description}, {"type", old.Type, item.Type}, {"priority", old.Priority, item.Priority}, {"status", old.StatusID, item.StatusID}, {"assignee", old.Assignee, item.Assignee}, {"labels", old.LabelIDs, item.LabelIDs}, {"parent", old.Parent, item.Parent}, {"blocks", old.Blocks, item.Blocks}, {"due", old.DueOn, item.DueOn}, {"report", old.Report, item.Report},
 		{"project", old.ProjectID, item.ProjectID},
+		{"estimate", old.Estimate, item.Estimate}, {"sprint", old.Sprint, item.Sprint},
 	} {
 		if !reflect.DeepEqual(field.from, field.to) {
 			changed = true
@@ -357,7 +399,18 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	if err != nil {
 		return item, err
 	}
-	if err := t.Exec(`UPDATE tracker_issue SET title=$3,description=$4,type=$5,priority=$6,status_id=$7,assignee_sub=$8,assignee_name=$9,parent_id=$10,due_on=$11,report=$12,completed_at=$13,project_id=$14,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID); err != nil {
+	if err := t.Exec(`UPDATE tracker_issue SET title=$3,description=$4,type=$5,priority=$6,status_id=$7,assignee_sub=$8,assignee_name=$9,parent_id=$10,due_on=$11,report=$12,completed_at=$13,project_id=$14,estimate=$15,sprint_id=$16,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID, item.Estimate, sprintID(item.Sprint)); err != nil {
+		return item, err
+	}
+	before, err := t.standing(old)
+	if err != nil {
+		return item, err
+	}
+	after, err := t.standing(item)
+	if err != nil {
+		return item, err
+	}
+	if err := t.sprintEvents(item.ID, before, after); err != nil {
 		return item, err
 	}
 	return t.Issue(item.ID)
@@ -371,6 +424,15 @@ func (t *Tx) DeleteIssue(id string, actor domain.Actor) error {
 		return err
 	}
 	if err := t.Exec(`UPDATE tracker_issue SET deleted_at=now(),updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID); err != nil {
+		return err
+	}
+	before, err := t.standing(item)
+	if err != nil {
+		return err
+	}
+	after := before
+	after.Deleted = true
+	if err := t.sprintEvents(item.ID, before, after); err != nil {
 		return err
 	}
 	return t.activity(item.ID, actor.Person, "deleted", nil, nil)

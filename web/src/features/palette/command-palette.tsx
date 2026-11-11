@@ -1,30 +1,34 @@
-// ⌘/Ctrl+K command palette: navigate (lists, epics, "Reported by me",
-// projects, views, report, settings, issues by identifier or title) and, when
-// issues are focused or X-selected, change their status, priority, assignee,
-// labels or project (typing a new name offers to create that project and
-// move them into it), or put them in an epic or story (issues the hierarchy
-// forbids are skipped and counted in the summary toast).
-// ↑/↓ move, Enter runs, Backspace on an empty query goes back, Escape closes.
+// ⌘/Ctrl+K command palette: navigate (lists, epics, sprints, the current
+// sprint, "Reported by me", projects, views, report, settings, issues by
+// identifier or title) and, when issues are focused or X-selected, change
+// their status, priority, assignee, labels, project (typing a new name
+// offers to create that project and move them into it), estimate or sprint,
+// or put them in an epic or story (issues the hierarchy or the sprint rules
+// forbid are skipped and counted in the summary toast). E opens it straight
+// at the estimate. ↑/↓ move, Enter runs, Backspace on an empty query goes
+// back, Escape closes.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, BookMarked, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Settings, SignalHigh, Tag, UserRound, UserRoundPen, Zap } from 'lucide-react'
+import { ArrowRight, BookMarked, Bookmark, Bug, ChevronLeft, Circle, CircleDashed, Columns3, FolderKanban, Languages, List, Plus, Ruler, Settings, SignalHigh, SquareKanban, Tag, UserRound, UserRoundPen, Zap } from 'lucide-react'
 import { Dialog as RDialog } from 'radix-ui'
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { epicsQuery, issueSearchQuery, storiesQuery, useProjectMutations, useUpdateIssues } from '../../api/queries'
-import type { IssueSummary, Person } from '../../api/tracker'
+import type { IssueSummary, Person, UpdateIssueInput } from '../../api/tracker'
 import { setLanguage, useText } from '../../i18n'
 import { PRIORITIES } from '../../model/issues'
+import { SIZES, sprintChoiceProblem } from '../../model/sprints'
 import { listHref, paths } from '../../routes/paths'
 import { cn, errorDetail, errorMessageId, Kbd, showToast, splitHref } from '../../ui'
 import { useBundling } from '../issues/hierarchy'
-import { assigneeValue, usePeopleOptions } from '../issues/properties'
+import { assigneeValue, useSprintOptions, usePeopleOptions } from '../issues/properties'
 import { nextProjectColor, ProjectSwatch } from '../issues/projects'
 import { useReference } from '../issues/use-reference'
 import { ColorDot, PriorityIcon, StatusIcon, TypeIcon } from '../issues/visuals'
+import { SprintIcon } from '../sprints/sprint-ui'
 import { commandTargets, setUi, uiStore, useUi } from '../ui-state'
 
-type Page = 'root' | 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'epic' | 'story'
-type Command = { id: string; group: string; label: string; icon?: ReactNode; hint?: string; checked?: boolean; run: () => 'close' | 'stay' }
+type Page = 'root' | 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'epic' | 'story' | 'estimate' | 'sprint'
+type Command = { id: string; group: string; label: string; icon?: ReactNode; hint?: string; checked?: boolean; detail?: string; run: () => 'close' | 'stay' }
 
 export function CommandPalette() {
   const open = useUi((state) => state.palette)
@@ -40,7 +44,7 @@ function Palette() {
   // Snapshot the targets at open: commands keep applying to them while the list re-renders.
   const [targetIds] = useState(() => commandTargets(uiStore.state).map((issue) => issue.id))
   const current = targetIds.map((id) => context.find((issue) => issue.id === id)).filter((issue): issue is IssueSummary => issue !== undefined)
-  const [page, setPage] = useState<Page>('root')
+  const [page, setPage] = useState<Page>(() => uiStore.state.paletteStart)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const listId = useId()
@@ -49,9 +53,10 @@ function Palette() {
   const search = useQuery({ ...issueSearchQuery(query), enabled: page === 'root' && query.trim().length > 0 })
   const epics = useQuery({ ...epicsQuery, enabled: page === 'epic' })
   const stories = useQuery({ ...storiesQuery, enabled: page === 'story' })
+  const sprintChoices = useSprintOptions(current, page === 'sprint')
   const bundle = useBundling()
 
-  const close = () => setUi({ palette: false })
+  const close = () => setUi({ palette: false, paletteStart: 'root' })
   const go = (href: string) => () => {
     const { to, search: params } = splitHref(href)
     void navigate({ to, search: params } as never)
@@ -64,6 +69,25 @@ function Palette() {
         const known = errorMessageId(failure.reason)
         showToast({ tone: 'error', title: t('tracker.issue.saveFailed'), detail: [known ? t(known) : undefined, errorDetail(failure.reason)].filter(Boolean).join(' ') || undefined })
       }
+    })
+  }
+  /** Applies `input` to the targets `allowed` accepts; the rest are skipped and counted in one toast. */
+  const applySome = (input: UpdateIssueInput, allowed: (issue: IssueSummary) => boolean, done: (count: number) => string) => {
+    const movable = current.filter(allowed)
+    const skipped = current.length - movable.length
+    const skippedText = skipped > 0 ? t('tracker.sprint.skipped', { count: skipped }) : undefined
+    if (movable.length === 0) {
+      showToast({ tone: 'error', title: t('tracker.bundle.nothing'), detail: skippedText })
+      return
+    }
+    void updates.run(movable.map((issue) => issue.id), input).then((results) => {
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure && failure.status === 'rejected') {
+        const known = errorMessageId(failure.reason)
+        showToast({ tone: 'error', title: t('tracker.issue.saveFailed'), detail: [known ? t(known) : undefined, errorDetail(failure.reason), skippedText].filter(Boolean).join(' ') || undefined })
+      }
+      const succeeded = results.length - results.filter((result) => result.status === 'rejected').length
+      if (succeeded > 0) showToast({ tone: 'success', title: done(succeeded), detail: skippedText })
     })
   }
   const subject = current.length === 1 ? current[0]!.identifier : t('tracker.list.count', { count: current.length })
@@ -141,6 +165,35 @@ function Palette() {
         })),
       ]
     }
+    if (page === 'estimate')
+      return [null, ...SIZES].map((size) => ({
+        id: `estimate-${size ?? 'none'}`,
+        group: groupActions,
+        label: size ?? t('tracker.estimate.none'),
+        icon: size ? <Ruler /> : <CircleDashed />,
+        checked: current.length > 0 && current.every((issue) => issue.estimate === size),
+        run: () => (applySome({ estimate: size }, (issue) => issue.type !== 'epic', (count) => (size ? t('tracker.estimate.set', { count, size }) : t('tracker.estimate.cleared', { count }))), 'close' as const),
+      }))
+    if (page === 'sprint')
+      return sprintChoices.options.map((option) => {
+        const sprint = sprintChoices.sprints.find((candidate) => candidate.id === option.value) ?? null
+        return {
+          id: `sprint-${option.value}`,
+          group: groupActions,
+          label: option.label,
+          icon: sprint ? <SprintIcon state={sprint.state} /> : <CircleDashed />,
+          detail: option.disabled ? option.detail : undefined,
+          checked: current.length > 0 && current.every((issue) => (issue.sprint?.id ?? null) === (sprint?.id ?? null)),
+          run: () => (
+            applySome(
+              { sprintId: sprint?.id ?? null },
+              (issue) => (issue.sprint?.id ?? null) !== (sprint?.id ?? null) && !sprintChoiceProblem(issue, sprint),
+              (count) => (sprint ? t('tracker.sprint.moved', { count, name: sprint.name }) : t('tracker.sprint.movedBacklog', { count }))
+            ),
+            'close' as const
+          ),
+        }
+      })
     if (page === 'project') {
       const typed = query.trim()
       const moveTo = (projectId: string | null) => apply({ projectId })
@@ -203,7 +256,9 @@ function Palette() {
         { id: 'act-labels', group: groupActions, label: t('tracker.property.changeLabels'), icon: <Tag />, run: sub('labels') },
         { id: 'act-project', group: groupActions, label: t('tracker.project.change'), icon: <FolderKanban />, run: sub('project') },
         { id: 'act-epic', group: groupActions, label: t('tracker.palette.setEpic'), icon: <Zap />, run: sub('epic') },
-        { id: 'act-story', group: groupActions, label: t('tracker.palette.setStory'), icon: <BookMarked />, run: sub('story') }
+        { id: 'act-story', group: groupActions, label: t('tracker.palette.setStory'), icon: <BookMarked />, run: sub('story') },
+        { id: 'act-estimate', group: groupActions, label: t('tracker.estimate.change'), icon: <Ruler />, hint: 'E', run: sub('estimate') },
+        { id: 'act-sprint', group: groupActions, label: t('tracker.sprint.move'), icon: <SprintIcon />, run: sub('sprint') }
       )
       if (current.length === 1) list.push({ id: 'act-open', group: groupActions, label: t('tracker.palette.openIssue', { identifier: current[0]!.identifier }), icon: <ArrowRight />, run: go(paths.issue(current[0]!.identifier)) })
     }
@@ -214,6 +269,8 @@ function Palette() {
       { id: 'nav-issues', group: nav, label: t('tracker.nav.issues'), icon: <List />, run: go(paths.home) },
       { id: 'nav-board', group: nav, label: t('tracker.nav.board'), icon: <Columns3 />, run: go(paths.board) },
       { id: 'nav-epics', group: nav, label: t('tracker.palette.goEpics'), icon: <Zap />, run: go(paths.epics) },
+      { id: 'nav-sprints', group: nav, label: t('tracker.palette.goSprints'), icon: <SprintIcon />, hint: 'G S', run: go(paths.sprints) },
+      { id: 'nav-current-sprint', group: nav, label: t('tracker.palette.goCurrentSprint'), icon: <SquareKanban />, run: go(paths.currentSprint) },
       { id: 'nav-reported', group: nav, label: t('tracker.palette.goReported'), icon: <UserRoundPen />, run: go(paths.reported) },
       ...activeProjects.map((project) => ({
         id: `nav-project-${project.id}`,
@@ -337,6 +394,7 @@ function Palette() {
                 >
                   {command.icon ? <span className="flex shrink-0 items-center">{command.icon}</span> : null}
                   <span className="min-w-0 flex-1 truncate">{command.label}</span>
+                  {command.detail ? <span className="shrink-0 truncate text-[11px] text-stone-400">{command.detail}</span> : null}
                   {command.checked ? <span className="text-xs text-accent">✓</span> : null}
                   {command.hint ? <Kbd>{command.hint}</Kbd> : null}
                 </div>

@@ -4,15 +4,20 @@
 // command palette edits the selection, else the focused issue. `/`,
 // `/board`, `/reported` and `/epics` publish their project scope
 // (`?project=`), which stays while the person moves elsewhere: new issues
-// default to it and the sidebar's list links keep it.
+// default to it and the sidebar's list links keep it. Sprint charts share
+// one unit (points or issues) while the person moves between them.
 import { Store, useSelector } from '@tanstack/react-store'
-import type { IssueSummary, IssueType } from '../api/tracker'
+import type { IssueSummary, IssueType, Unit } from '../api/tracker'
 
-/** Defaults of the "new issue" dialog. `projectId` undefined = the project scope; null = no project. `parent` prefills the parent (an epic's "New story", a group's "+"). */
-export type NewIssueDefaults = { statusId?: string; projectId?: string | null; type?: IssueType; parent?: IssueSummary }
+/** Defaults of the "new issue" dialog. `projectId` undefined = the project scope; null = no project. `parent` prefills the parent (an epic's "New story", a group's "+"); `sprintId` the sprint (a sprint section's "+", the sprint page). */
+export type NewIssueDefaults = { statusId?: string; projectId?: string | null; type?: IssueType; parent?: IssueSummary; sprintId?: string }
+
+/** Where the command palette opens: its root, or straight at a pick for the targets (E opens the estimate). */
+export type PaletteStart = 'root' | 'estimate'
 
 type UiState = {
   palette: boolean
+  paletteStart: PaletteStart
   /** Open "new issue" dialog with its defaults, or null. */
   newIssue: NewIssueDefaults | null
   context: IssueSummary[]
@@ -20,9 +25,13 @@ type UiState = {
   selectedIds: string[]
   /** Last project scope of the list, board, "Reported by me" or epics overview: a project id, `none`, or null for all projects. */
   scope: string | null
+  /** Unit of the burndown and velocity charts. */
+  chartUnit: Unit
+  /** The open sprint a sprint screen shows (its page, the current sprint): new issues (C) join it. */
+  sprintScope: string | null
 }
 
-export const uiStore = new Store<UiState>({ palette: false, newIssue: null, context: [], focusedId: null, selectedIds: [], scope: null })
+export const uiStore = new Store<UiState>({ palette: false, paletteStart: 'root', newIssue: null, context: [], focusedId: null, selectedIds: [], scope: null, chartUnit: 'points', sprintScope: null })
 
 export function useUi<T>(select: (state: UiState) => T): T {
   return useSelector(uiStore, select)

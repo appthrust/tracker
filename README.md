@@ -56,7 +56,8 @@ Run the server with `go run ./cmd/server --static-dir web/dist`. Configure:
 
 - `PLATFORM_API_URL`, `PLATFORM_PROJECT_ID`, and the platform OIDC identity settings.
 - `TRACKER_DATABASE_URL` (or `DATABASE_URL`) for PostgreSQL. `TRACKER_DEV_SEED=1` enables
-  development seed data on an empty database.
+  development seed data on an empty database: 40 issues, three closed one-week sprints
+  with 18/21/24-point velocities, an active two-week sprint, and a planned sprint.
 - `TRACKER_PUBLIC_URL` for the HTTPS browser origin.
 - `TRACKER_DIRECTORY_URL` and `TRACKER_DIRECTORY_PUBLIC_URL` for optional Directory links.
 - `TRACKER_STATIC_DIR` or `--static-dir` to override `/srv/tracker`.
@@ -66,6 +67,16 @@ and `/healthz` remains 200. Missing database configuration leaves the API return
 `tracker_store_unavailable` (503). `/api/tracker/v1/openapi.json` exposes the API document
 when the API is available. `/releasez` uses `TRACKER_RELEASE_VERSION` and
 `TRACKER_ARTIFACT_DIGEST` supplied by the catalog.
+
+Sprint settings are workspace-wide: Admins can PATCH `sprintLengthWeeks` (1 or 2)
+and an IANA `timezone` (default `Asia/Tokyo`). Any signed-in user can plan, start,
+and close a sprint; only Admins can delete a planned sprint. Estimates are sizes
+(`XS`, `S`, `M`, `L`, `XL`), worth 1/2/3/5/8 points. The server writes a
+transactional ledger for burndown and velocity; closed ledgers never change.
+On close, unfinished scope moves to the selected planned sprint or the backlog.
+A lineage conflict in the destination sends that issue to the backlog.
+Chart days follow the workspace timezone; ideal lines skip weekends, not holidays.
+Sprint numbers are never reused after deletion.
 
 A request whose bearer the server refuses (401 `unauthenticated`) writes one
 `tracker auth rejected:` log line: method, path, the edge `X-Request-Id`, a
@@ -102,14 +113,14 @@ a required BuildKit secret, never through build arguments or committed files.
 
 ## Catalog and release
 
-The next app release is **0.1.9**, also recorded in `web/package.json`.
+The next app release is **0.1.10**, also recorded in `web/package.json`.
 `catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`)
 created `versions[]` with `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
 stream `0.1`; later tags append at publication time. Do not add a version with
 an unbuilt or placeholder image digest. OpenAPI's `info.version` describes the
 API schema, not the app release. This repository has no hand-maintained changelog.
 
-After the release prerequisites are available, push the SemVer tag `v0.1.9`.
+After the release prerequisites are available, push the SemVer tag `v0.1.10`.
 The tag workflow:
 
 1. Performs one multi-platform build on `ubuntu-24.04` for Linux amd64 and arm64,
@@ -129,8 +140,8 @@ The tag workflow:
 Publication commands used by the workflow:
 
 ```sh
-bun hack/publish-entry.ts submit --version 0.1.9 --digest sha256:<image-index-digest>
-bun hack/publish-entry.ts await --version 0.1.9 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts submit --version 0.1.10 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts await --version 0.1.10 --digest sha256:<image-index-digest>
 ```
 
 Writers are serialized by `tracker-catalog-publish`; the workflow is guarded to
@@ -151,8 +162,8 @@ After publication, each estate's `AppCatalogSource` syncs the signed catalog.
 Install Issues from the Project Marketplace (Directory is an automatic
 dependency). Existing `follow` installations on stream `0.1` roll to the new
 version; `pinned` installations show `UpdateAvailable` and require an explicit
-version update. Confirm the installation is Ready, `/releasez` reports `0.1.9`,
-and a signed-in Tracker page lists the Epics page in the navigation. These are release steps,
+version update. Confirm the installation is Ready, `/releasez` reports `0.1.10`,
+and a signed-in Tracker page lists the Sprints page in the navigation. These are release steps,
 not actions performed by a source-only version bump.
 
 Migration authority:

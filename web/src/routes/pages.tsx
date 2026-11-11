@@ -2,12 +2,14 @@
 // their state in the query (routes/paths.ts).
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { createRoute, notFound, redirect } from '@tanstack/react-router'
-import { issueQuery, viewsQuery } from '../api/queries'
+import { issueQuery, sprintQuery, viewsQuery } from '../api/queries'
 import { IssuePage } from '../features/issues/issue-detail'
 import { EpicsPage } from '../features/issues/epics-page'
 import { IssuesPage } from '../features/issues/issues-page'
 import { ReportPage } from '../features/report/report-page'
 import { SettingsPage, type SettingsTab } from '../features/settings/settings-page'
+import { SprintPage } from '../features/sprints/sprint-page'
+import { SprintsPage } from '../features/sprints/sprints-page'
 import { paths, validateListSearch } from './paths'
 import { notFoundOn404, rootRoute } from './root'
 
@@ -44,6 +46,33 @@ export const epicsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { project?: string } => (typeof search.project === 'string' && search.project ? { project: search.project } : {}),
   component: function EpicsRoute() {
     return <EpicsPage project={epicsRoute.useSearch().project} />
+  },
+})
+
+export const sprintsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/sprints',
+  component: SprintsPage,
+})
+
+export const sprintRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/sprints/$sprintId',
+  validateSearch: validateListSearch,
+  loader: ({ context, params }) => context.queryClient.ensureQueryData(sprintQuery(params.sprintId)).catch(notFoundOn404),
+  component: function SprintRoute() {
+    const { sprintId } = sprintRoute.useParams()
+    // Remount per sprint so selection, focus and the chart state never leak between sprints.
+    return <SprintPage key={sprintId} sprintId={sprintId} search={sprintRoute.useSearch()} />
+  },
+})
+
+export const currentSprintRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/current-sprint',
+  validateSearch: validateListSearch,
+  component: function CurrentSprintRoute() {
+    return <IssuesPage page={{ kind: 'currentSprint' }} path={paths.currentSprint} search={currentSprintRoute.useSearch()} />
   },
 })
 
@@ -106,6 +135,9 @@ export const routeTree = rootRoute.addChildren([
   boardRoute,
   reportedRoute,
   epicsRoute,
+  sprintsRoute,
+  sprintRoute,
+  currentSprintRoute,
   viewRoute,
   issueRoute,
   reportRoute,
