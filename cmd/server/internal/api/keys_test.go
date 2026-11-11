@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -74,6 +75,24 @@ func TestAccessKeyActsAsItsUserWithinScopeAndProject(t *testing.T) {
 
 	page := call[store.Page](h, "admin", "GET", "/issues?filter="+url.QueryEscape(`{"reporter":["me"]}`), nil, 200)
 	require.Len(t, page.Items, 1, "the signed-in user owns what their key reported")
+
+	// A key carries no name: it takes the one its user last wrote under while
+	// signed in, and falls back to the subject before any such write.
+	require.Equal(t, "admin", issue.Reporter.Name)
+	owner := assertion("pj-test", user("owner"), scopeRead, scopeWrite)
+	status, data = do(owner, "GET", "/me", nil)
+	require.Equal(t, 200, status, string(data))
+	require.Contains(t, string(data), `"name":"owner"`)
+	claims, err := json.Marshal(map[string]string{"sub": "owner", "email": "owner@example.test", "name": "Olivia Owner"})
+	require.NoError(t, err)
+	session := "Bearer " + base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(claims) + "."
+	status, data = do(session, "POST", "/issues", map[string]string{"title": "Signed in", "type": "task"})
+	require.Equal(t, 201, status, string(data))
+	status, data = do(owner, "POST", "/issues/"+issue.ID+"/comments", map[string]string{"body": "From the key"})
+	require.Equal(t, 201, status, string(data))
+	var comment domain.Comment
+	require.NoError(t, json.Unmarshal(data, &comment))
+	require.Equal(t, domain.Person{Sub: "owner", Name: "Olivia Owner"}, comment.Author)
 
 	issue2 := map[string]string{"title": "Refused", "type": "task"}
 	for _, test := range []struct {

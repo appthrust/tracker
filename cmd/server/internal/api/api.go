@@ -111,14 +111,15 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			return
 		}
 		s := &request{r: r, w: w}
-		if claims.Principal.Kind == "key" {
+		key := claims.Principal.Kind == "key"
+		if key {
 			actor, err := keyActor(claims.Principal, a.workspace, mutation)
 			if err != nil {
 				httpx.WriteError(w, err, "tracker")
 				return
 			}
 			// The assertion is addressed to Tracker only: it is never forwarded
-			// to Directory, so people stay the stored snapshots.
+			// to Directory. The person's name comes from Tracker's own record.
 			s.actor = actor
 			if mutation {
 				log.Printf("tracker access key mutation: %s %s key=%q subject=%q request_id=%q", r.Method, r.URL.Path, claims.Principal.KeyName, actor.Sub, r.Header.Get("X-Request-Id"))
@@ -149,7 +150,21 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 		}
 		var body any
 		var status int
-		err := a.store.InWorkspace(ctx, a.workspace, mutation, func(tx *store.Tx) error { s.tx = tx; var err error; body, status, err = fn(s); return err })
+		err := a.store.InWorkspace(ctx, a.workspace, mutation, func(tx *store.Tx) error {
+			s.tx = tx
+			if key {
+				name, err := tx.KnownName(s.actor.Sub)
+				if err != nil {
+					return err
+				}
+				if name != "" {
+					s.actor.Name = name
+				}
+			}
+			var err error
+			body, status, err = fn(s)
+			return err
+		})
 		if err != nil {
 			writeStoreError(w, err)
 			return

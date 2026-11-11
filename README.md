@@ -119,14 +119,14 @@ a required BuildKit secret, never through build arguments or committed files.
 
 ## Catalog and release
 
-The next app release is **0.1.11**, also recorded in `web/package.json`.
+The next app release is **0.1.12**, also recorded in `web/package.json`.
 `catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`)
 created `versions[]` with `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
 stream `0.1`; later tags append at publication time. Do not add a version with
 an unbuilt or placeholder image digest. OpenAPI's `info.version` describes the
 API schema, not the app release. This repository has no hand-maintained changelog.
 
-After the release prerequisites are available, push the SemVer tag `v0.1.11`.
+After the release prerequisites are available, push the SemVer tag `v0.1.12`.
 The tag workflow:
 
 1. Performs one multi-platform build on `ubuntu-24.04` for Linux amd64 and arm64,
@@ -146,8 +146,8 @@ The tag workflow:
 Publication commands used by the workflow:
 
 ```sh
-bun hack/publish-entry.ts submit --version 0.1.11 --digest sha256:<image-index-digest>
-bun hack/publish-entry.ts await --version 0.1.11 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts submit --version 0.1.12 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts await --version 0.1.12 --digest sha256:<image-index-digest>
 ```
 
 Writers are serialized by `tracker-catalog-publish`; the workflow is guarded to
@@ -168,7 +168,7 @@ After publication, each estate's `AppCatalogSource` syncs the signed catalog.
 Install Issues from the Project Marketplace (Directory is an automatic
 dependency). Existing `follow` installations on stream `0.1` roll to the new
 version; `pinned` installations show `UpdateAvailable` and require an explicit
-version update. Confirm the installation is Ready, `/releasez` reports `0.1.11`,
+version update. Confirm the installation is Ready, `/releasez` reports `0.1.12`,
 the Project lists the `tracker` Access Key space as Ready, and an exchanged key reads `/api/tracker/v1/me`. These are release steps,
 not actions performed by a source-only version bump.
 

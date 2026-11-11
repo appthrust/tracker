@@ -461,9 +461,12 @@ Rules (`cmd/server/internal/api/keys.go`, `keyActor`):
 
 What the user's key creates belongs to that user: `reporter: ['me']` in the
 SPA lists it. The assertion carries no name or email and is never forwarded to
-Directory, so a key write stores `name = sub` as the person snapshot and
+Directory. Since v0.1.12 the key's person takes the display name of that
+user's most recent signed-in write in this workspace (`store.KnownName`, from
+the activity log); before any such write the name is the subject id. `GET /me`
+returns `{ sub, name, role: 'Viewer', isAdmin: false }` with the same name.
 `GET /people` answers `source: 'unavailable'`; a signed-in reader still sees
-the Directory name. `GET /me` returns `{ sub, name: sub, role: 'Viewer', isAdmin: false }`.
+the Directory name.
 
 Each mutation request made with a key writes one `tracker access key mutation:`
 log line (method, path, key name, subject, edge `X-Request-Id`) before
