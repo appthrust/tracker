@@ -23,6 +23,12 @@ export const paths = {
   sprint: (sprintId: string) => `/sprints/${encodeURIComponent(sprintId)}`,
   /** Built-in "Current sprint" view (issues-page.tsx `CURRENT_SPRINT_VIEW`): the active sprint's board; not a stored View. */
   currentSprint: '/current-sprint',
+  /** Built-in "Agents at work" view (issues-page.tsx `AT_WORK_VIEW`): issues with a live run; not a stored View. */
+  atWork: '/agents-at-work',
+  /** Built-in "Waiting for people" view (issues-page.tsx `WAITING_VIEW`): issues with open requests; not a stored View. */
+  waiting: '/waiting-for-people',
+  /** The caller's queue of requests, answers and mentions (`?issue=` opens the side panel). */
+  inbox: '/inbox',
   view: (viewId: string) => `/views/${encodeURIComponent(viewId)}`,
   issue: (identifier: string) => `/issues/${encodeURIComponent(identifier)}`,
   report: '/report',
@@ -31,6 +37,7 @@ export const paths = {
   settingsStatuses: '/settings/statuses',
   settingsLabels: '/settings/labels',
   settingsProjects: '/settings/projects',
+  settingsAgents: '/settings/agents',
 }
 
 /** Keeps only the string params a list page understands. */

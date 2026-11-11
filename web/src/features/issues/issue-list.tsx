@@ -3,7 +3,8 @@
 // backlog last). Each row: checkbox (X), priority, identifier, status, title
 // (epics and stories add their mark and progress), project (when the list
 // spans projects), sprint (when it spans sprints), labels, counts, estimate,
-// assignee, updated. Grouped by sprint, rows drag between sections to change
+// assignee, updated; an agent's live or stalled run (state and latest
+// report) and the open-request count sit before the title's end. Grouped by sprint, rows drag between sections to change
 // their sprint. On a sprint's own screens the work items under a member story
 // render nested below it, read-only for membership (they belong to the
 // sprint through the story). Rows are roving-focus targets for J/K; clicking
@@ -17,6 +18,7 @@ import { levelOf, NO_GROUP, type IssueSection } from '../../model/issues'
 import { isSprintSection } from '../../model/sprints'
 import { paths } from '../../routes/paths'
 import { cn, formatDate, HrefLink } from '../../ui'
+import { OpenRequestMarker, RunLine } from '../agents/run-status'
 import { EstimateBadge } from '../sprints/sprint-ui'
 import { SprintHeading, useSprintMove } from '../sprints/sprint-sections'
 import { setUi, useUi } from '../ui-state'
@@ -207,6 +209,8 @@ function IssueRow({ issue, onOpen, rows, draggable = false }: { issue: IssueSumm
         >
           {issue.title}
         </HrefLink>
+        {issue.activeRun ? <RunLine run={issue.activeRun} variant="row" /> : null}
+        <OpenRequestMarker count={issue.openRequestCount} />
         <span className="hidden min-w-0 items-center gap-2 md:flex">
           {issue.progress ? <ProgressBar progress={issue.progress} /> : null}
           {rows.showProject && issue.projectId ? <IssueProjectPicker issue={issue} /> : null}

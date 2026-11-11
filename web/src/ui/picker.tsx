@@ -9,9 +9,10 @@ import { cn } from './cn'
 
 /**
  * `hint`: a digit picks the option while the search is empty (status 1–9, priority 0–4); `detail`: extra right-aligned text (a count), never a shortcut;
- * `disabled`: shown but not pickable (a choice the rules forbid here), with `detail` saying why.
+ * `disabled`: shown but not pickable (a choice the rules forbid here), with `detail` saying why; `description`: a second, muted line (an agent's
+ * "what to delegate"); `group`: options sharing it sit under one heading (the first option of a group starts it).
  */
-export type PickerOption = { value: string; label: string; icon?: ReactNode; hint?: string; detail?: string; keywords?: string; disabled?: boolean }
+export type PickerOption = { value: string; label: string; icon?: ReactNode; hint?: string; detail?: string; keywords?: string; disabled?: boolean; description?: string; group?: string }
 
 export function Picker({
   label,
@@ -57,7 +58,7 @@ export function Picker({
   const [active, setActive] = useState(0)
   const listId = useId()
   const needle = query.trim().toLowerCase()
-  const visible = onQueryChange || !needle ? options : options.filter((option) => `${option.label} ${option.keywords ?? ''}`.toLowerCase().includes(needle))
+  const visible = onQueryChange || !needle ? options : options.filter((option) => `${option.label} ${option.keywords ?? ''} ${option.description ?? ''}`.toLowerCase().includes(needle))
   const activeIndex = Math.min(active, Math.max(visible.length - 1, 0))
 
   const pick = (option: PickerOption) => {
@@ -93,7 +94,7 @@ export function Picker({
           align={align}
           sideOffset={4}
           collisionPadding={8}
-          className="z-50 w-64 overflow-hidden rounded-lg border border-line bg-white shadow-lg animate-pop-in focus:outline-none"
+          className={cn('z-50 overflow-hidden rounded-lg border border-line bg-white shadow-lg animate-pop-in focus:outline-none', options.some((option) => option.description) ? 'w-80' : 'w-64')}
           onKeyDown={(event) => event.stopPropagation()}
         >
           <input
@@ -114,33 +115,44 @@ export function Picker({
             onKeyDown={onKeyDown}
             className="block h-9 w-full border-b border-line px-3 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none"
           />
-          <ul id={listId} role="listbox" aria-label={label} aria-multiselectable={multiple || undefined} className="max-h-72 overflow-y-auto p-1">
+          <ul id={listId} role="listbox" aria-label={label} aria-multiselectable={multiple || undefined} className="max-h-80 overflow-y-auto p-1">
             {visible.length === 0 ? <li className="px-2 py-2 text-xs text-stone-500">{empty}</li> : null}
             {visible.map((option, index) => {
               const isSelected = selected.includes(option.value)
-              return (
+              const heading = option.group && option.group !== visible[index - 1]?.group ? option.group : undefined
+              return [
+                heading ? (
+                  <li key={`group:${heading}`} role="presentation" className="px-2 pt-2 pb-1 text-[11px] font-medium text-stone-400 first:pt-1">
+                    {heading}
+                  </li>
+                ) : null,
                 <li
                   key={option.value}
                   id={`${listId}-${index}`}
                   role="option"
                   aria-selected={isSelected}
                   aria-disabled={option.disabled || undefined}
+                  aria-description={option.description}
                   onPointerMove={() => setActive(index)}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => pick(option)}
                   className={cn(
                     'flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] text-stone-700 [&_svg]:size-3.5 [&_svg]:shrink-0',
+                    option.description && 'items-start py-1.5',
                     index === activeIndex && 'bg-stone-100 text-stone-900',
                     option.disabled && 'cursor-not-allowed text-stone-400 [&_svg]:opacity-50'
                   )}
                 >
-                  {option.icon ? <span className="flex shrink-0 items-center">{option.icon}</span> : null}
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  {option.icon ? <span className={cn('flex shrink-0 items-center', option.description && 'mt-px')}>{option.icon}</span> : null}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{option.label}</span>
+                    {option.description ? <span className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-stone-500">{option.description}</span> : null}
+                  </span>
                   {option.detail ? <span className="shrink-0 text-[11px] text-stone-400 tabular-nums">{option.detail}</span> : null}
                   {option.hint ? <span className="shrink-0 text-[11px] text-stone-400">{option.hint}</span> : null}
                   {isSelected ? <Check aria-hidden className="text-accent" /> : null}
-                </li>
-              )
+                </li>,
+              ]
             })}
           </ul>
         </Popover.Content>

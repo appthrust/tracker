@@ -36,7 +36,7 @@ func TestSprintRequestValidationWithoutDatabase(t *testing.T) {
 			r := httptest.NewRequest("POST", "/", strings.NewReader(tc.body))
 			r.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			_, _, err := tc.handler(&request{r: r, w: w})
+			_, _, err := tc.handler(&request{r: r, w: w, actor: domain.Actor{Person: domain.Person{Sub: "viewer"}, Kind: "person"}})
 			require.Error(t, err)
 			writeStoreError(w, err)
 			require.Equal(t, 400, w.Code)

@@ -90,8 +90,8 @@ export function compareIssues(sort: Sort): (a: IssueSummary, b: IssueSummary) =>
   }
 }
 
-/** `activeSprintId` resolves the `active` sprint filter value (null: no sprint is active, so `active` matches nothing). */
-type FilterContext = { me: string; statuses: readonly Status[]; description?: (issue: IssueSummary) => string; activeSprintId?: string | null }
+/** `activeSprintId` resolves the `active` sprint filter value (null: no sprint is active, so `active` matches nothing); `raisedOpenRequest` answers `request: ['mine']` (the issue has an open request the caller raised). */
+type FilterContext = { me: string; statuses: readonly Status[]; description?: (issue: IssueSummary) => string; activeSprintId?: string | null; raisedOpenRequest?: (issue: IssueSummary) => boolean }
 
 /** Whether `issue` passes every set facet of `filter` (facets AND, values within a facet OR). */
 export function matchesFilter(issue: IssueSummary, filter: Filter, context: FilterContext): boolean {
@@ -126,6 +126,14 @@ export function matchesFilter(issue: IssueSummary, filter: Filter, context: Filt
     !filter.sprint.some((value) => (value === 'none' ? issue.sprint === null : value === 'active' ? Boolean(context.activeSprintId) && issue.sprint?.id === context.activeSprintId : issue.sprint?.id === value))
   )
     return false
+  if (filter.assigneeKind && filter.assigneeKind.length > 0 && !(issue.assignee && filter.assigneeKind.includes(issue.assignee.kind))) return false
+  if (filter.agent && filter.agent.length > 0 && !(issue.assignee?.agent && filter.agent.includes(issue.assignee.agent.id))) return false
+  if (filter.run && filter.run.length > 0) {
+    const run = issue.activeRun
+    const facet = !run ? 'none' : run.state === 'stalled' ? 'stalled' : run.state === 'running' || run.state === 'waiting' ? 'active' : 'none'
+    if (!filter.run.includes(facet)) return false
+  }
+  if (filter.request && filter.request.length > 0 && !filter.request.some((value) => (value === 'open' ? issue.openRequestCount > 0 : context.raisedOpenRequest?.(issue) === true))) return false
   const q = filter.q?.trim().toLowerCase()
   if (q) {
     const text = `${issue.identifier} ${issue.title} ${context.description?.(issue) ?? ''}`.toLowerCase()

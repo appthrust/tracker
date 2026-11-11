@@ -18,12 +18,14 @@ var migrations embed.FS
 type Store struct {
 	*pgstore.Store
 	// Now may be injected before serving requests for deterministic sprint clocks.
-	Now func() time.Time
+	Now      func() time.Time
+	RunLease time.Duration
 }
 type Tx struct {
 	*pgstore.Tx
 	WorkspaceID string
 	clock       func() time.Time
+	runLease    time.Duration
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -35,7 +37,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 }
 
 func (s *Store) Do(ctx context.Context, write bool, fn func(*Tx) error) error {
-	return translate(s.Store.Do(ctx, write, func(tx *pgstore.Tx) error { return fn(&Tx{Tx: tx, clock: s.Now}) }))
+	return translate(s.Store.Do(ctx, write, func(tx *pgstore.Tx) error { return fn(&Tx{Tx: tx, clock: s.Now, runLease: s.RunLease}) }))
 }
 
 func (s *Store) InWorkspace(ctx context.Context, workspace string, write bool, fn func(*Tx) error) error {
@@ -50,11 +52,13 @@ func (s *Store) InWorkspace(ctx context.Context, workspace string, write bool, f
 	})
 }
 
+// PostgreSQL timestamps have microsecond precision. Use the same clock
+// resolution for SQL predicates and Go-derived lease states.
 func (t *Tx) now() time.Time {
 	if t.clock != nil {
-		return t.clock().UTC()
+		return t.clock().UTC().Truncate(time.Microsecond)
 	}
-	return time.Now().UTC()
+	return time.Now().UTC().Truncate(time.Microsecond)
 }
 
 func invalid(message string) error { return httpx.Fail(400, "invalid", message) }

@@ -1,18 +1,26 @@
-// One issue: breadcrumb (epic › story › parent), title, Markdown description,
-// bug report fields, an epic's or story's children with progress, relations,
-// attachments, timeline and comment box, with a properties sidebar (parent,
-// estimate and sprint included). Rendered as the full page (`/issues/APT-12`)
-// or as the side panel over a list.
-import { useQuery } from '@tanstack/react-query'
+// One issue: breadcrumb (epic › story › parent), title, the agent's live run
+// and the open requests (pinned above the description, answerable in place),
+// Markdown description, bug report fields, an epic's or story's children with
+// progress, relations, attachments, timeline and comment box, with a
+// properties sidebar (parent, estimate, sprint and, for an agent assignee, the
+// person who delegated it). Title and description edits carry the
+// `updatedAt` they were made against: if someone else wrote in between, the
+// draft stays and a notice offers to load the latest version instead of
+// overwriting it. Rendered as the full page (`/issues/APT-12`) or as the side
+// panel over a list.
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Bug, Copy, Maximize2, Pencil, Trash2, X } from 'lucide-react'
+import { Bug, Copy, Maximize2, Pencil, RotateCw, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react'
-import { issueQuery, timelineQuery, useDeleteIssue } from '../../api/queries'
-import { isTrackerError, type Issue, type Report } from '../../api/tracker'
+import { issueQuery, timelineQuery, useDeleteIssue, useUpdateIssue } from '../../api/queries'
+import { isTrackerError, type Issue, type Report, type TrackerRequest, type UpdateIssueInput } from '../../api/tracker'
 import { useText } from '../../i18n'
 import { attachmentsOf, levelOf, reportProblems, toReport, TITLE_MAX, type ReportDraft } from '../../model/issues'
 import { paths } from '../../routes/paths'
-import { Avatar, Button, cn, ConfirmDialog, EmptyState, formatDate, formatDateTime, formatRelative, HrefLink, Loading, LoadFailed, Markdown, showToast, TextArea, useDocumentTitle } from '../../ui'
+import { Button, cn, ConfirmDialog, EmptyState, errorDetail, errorMessageId, formatDate, formatDateTime, formatRelative, HrefLink, Loading, LoadFailed, Markdown, Notice, showToast, TextArea, useDocumentTitle } from '../../ui'
+import { ActorAvatar, ActorName } from '../agents/actor'
+import { RequestCard } from '../agents/request-card'
+import { RunBlock } from '../agents/run-block'
 import { setUi } from '../ui-state'
 import { ReportFields, type ReportProblems } from '../report/report-fields'
 import { Attachments, markdownFor, transferFiles, useUploader } from './attachments'
@@ -99,10 +107,26 @@ function IssueDetail({ identifier, variant }: { identifier: string; variant: Var
   const data = issue.data
   const items = timeline.data ?? []
   const attachments = attachmentsOf(items)
+  const openRequests = items.flatMap((item): TrackerRequest[] => (item.kind === 'request' && item.request.state === 'open' ? [item.request] : []))
   const main = (
     <div className="min-w-0 flex-1 space-y-8">
       <div>
         <TitleEditor issue={data} variant={variant} />
+        {data.activeRun || openRequests.length > 0 ? (
+          <div className="mt-4 space-y-3">
+            {data.activeRun ? <RunBlock run={data.activeRun} /> : null}
+            {openRequests.length > 0 ? (
+              <section aria-labelledby={`requests-${data.id}`} className="space-y-2">
+                <h2 id={`requests-${data.id}`} className="text-xs font-medium text-stone-500">
+                  {t('tracker.request.pinned')} <span className="text-stone-400 tabular-nums">{openRequests.length}</span>
+                </h2>
+                {openRequests.map((request) => (
+                  <RequestCard key={request.id} request={request} variant="pinned" />
+                ))}
+              </section>
+            ) : null}
+          </div>
+        ) : null}
         <DescriptionEditor issue={data} attachmentCount={attachments.length} />
       </div>
       {data.report ? <ReportSection issue={data} report={data.report} /> : null}
@@ -113,7 +137,7 @@ function IssueDetail({ identifier, variant }: { identifier: string; variant: Var
         <h2 id={`activity-${data.id}`} className="text-xs font-medium text-stone-500">
           {t('tracker.issue.activity')}
         </h2>
-        {timeline.isPending ? <Loading /> : timeline.isError ? <LoadFailed error={timeline.error} onRetry={() => void timeline.refetch()} /> : <Timeline issueId={data.id} items={items} />}
+        {timeline.isPending ? <Loading /> : timeline.isError ? <LoadFailed error={timeline.error} onRetry={() => void timeline.refetch()} /> : <Timeline issueId={data.id} items={items.filter((item) => !(item.kind === 'request' && item.request.state === 'open'))} />}
         <CommentComposer issueId={data.id} attachmentCount={attachments.length} />
       </section>
     </div>
@@ -136,9 +160,75 @@ function IssueDetail({ identifier, variant }: { identifier: string; variant: Var
   )
 }
 
+/**
+ * Title and description writes guarded by the revision the draft was started
+ * from: `begin()` records `updatedAt` when the editor opens and every save
+ * sends that, so a change someone else made meanwhile — even one the 15 s
+ * refetch already brought into this screen — is a 409, never a silent
+ * overwrite. A 409 keeps the draft (`onConflict`) and the editor shows the
+ * conflict notice; only the explicit "Load latest" moves the base to the
+ * fetched revision. Other refusals toast like every other edit.
+ */
+function useGuardedEdit(issue: Issue) {
+  const { t } = useText()
+  const mutation = useUpdateIssue()
+  const client = useQueryClient()
+  const [conflict, setConflict] = useState(false)
+  const [base, setBase] = useState<string | null>(null)
+  const begin = () => {
+    setConflict(false)
+    setBase(issue.updatedAt)
+  }
+  const save = (input: UpdateIssueInput, onConflict: () => void) => {
+    setConflict(false)
+    mutation.mutate(
+      { id: issue.id, input: { ...input, expectedUpdatedAt: base ?? issue.updatedAt } },
+      {
+        onSuccess: () => setBase(null),
+        onError: (error) => {
+          if (isTrackerError(error, 'conflict')) {
+            setConflict(true)
+            onConflict()
+            return
+          }
+          const known = errorMessageId(error)
+          showToast({ tone: 'error', title: t('tracker.issue.saveFailed'), detail: [known ? t(known) : undefined, errorDetail(error)].filter(Boolean).join(' ') || undefined })
+        },
+      }
+    )
+  }
+  const reload = () => {
+    setConflict(false)
+    void client.invalidateQueries({ queryKey: timelineQuery(issue.id).queryKey })
+    void client.fetchQuery({ ...issueQuery(issue.identifier), staleTime: 0 }).then((fresh) => setBase(fresh.updatedAt))
+  }
+  const dismiss = () => {
+    setConflict(false)
+    setBase(null)
+  }
+  return { begin, save, conflict, reload, dismiss }
+}
+
+function ConflictNotice({ onReload }: { onReload: () => void }) {
+  const { t } = useText()
+  return (
+    <Notice
+      tone="warning"
+      title={t('tracker.issue.conflictTitle')}
+      actions={
+        <Button size="sm" icon={<RotateCw />} onClick={onReload}>
+          {t('tracker.issue.conflictReload')}
+        </Button>
+      }
+    >
+      {t('tracker.issue.conflictBody')}
+    </Notice>
+  )
+}
+
 function TitleEditor({ issue, variant }: { issue: Issue; variant: Variant }) {
   const { t } = useText()
-  const { update } = useIssueEditor()
+  const guarded = useGuardedEdit(issue)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(issue.title)
   const save = () => {
@@ -149,7 +239,7 @@ function TitleEditor({ issue, variant }: { issue: Issue; variant: Variant }) {
       setDraft(issue.title)
       return showToast({ tone: 'error', title: t('tracker.issue.saveFailed'), detail: t('tracker.form.tooLong', { max: TITLE_MAX }) })
     }
-    update({ id: issue.id, input: { title } })
+    guarded.save({ title }, () => setEditing(true))
   }
   const Heading = variant === 'page' ? 'h1' : 'h2'
   return (
@@ -171,6 +261,7 @@ function TitleEditor({ issue, variant }: { issue: Issue; variant: Variant }) {
               event.stopPropagation()
               setDraft(issue.title)
               setEditing(false)
+              guarded.dismiss()
             }
           }}
           className="mt-1 block w-full rounded-md border border-accent px-2 py-1 text-xl font-semibold text-stone-900 focus:outline-none"
@@ -179,7 +270,7 @@ function TitleEditor({ issue, variant }: { issue: Issue; variant: Variant }) {
         <Heading className="mt-1">
           <button
             type="button"
-            onClick={() => (setDraft(issue.title), setEditing(true))}
+            onClick={() => (setDraft(issue.title), guarded.begin(), setEditing(true))}
             title={t('tracker.issue.editTitle')}
             className="-mx-2 block w-[calc(100%+1rem)] rounded-md px-2 py-1 text-left text-xl leading-snug font-semibold text-stone-900 hover:bg-stone-50"
           >
@@ -187,13 +278,14 @@ function TitleEditor({ issue, variant }: { issue: Issue; variant: Variant }) {
           </button>
         </Heading>
       )}
+      {guarded.conflict ? <ConflictNotice onReload={guarded.reload} /> : null}
     </div>
   )
 }
 
 function DescriptionEditor({ issue, attachmentCount }: { issue: Issue; attachmentCount: number }) {
   const { t } = useText()
-  const { update } = useIssueEditor()
+  const guarded = useGuardedEdit(issue)
   const { upload, pending } = useUploader(issue.id, attachmentCount)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(issue.description)
@@ -204,11 +296,12 @@ function DescriptionEditor({ issue, attachmentCount }: { issue: Issue; attachmen
   }
   const save = () => {
     setEditing(false)
-    if (draft !== issue.description) update({ id: issue.id, input: { description: draft } })
+    if (draft !== issue.description) guarded.save({ description: draft }, () => setEditing(true))
   }
   if (editing) {
     return (
       <div className="mt-3 space-y-2">
+        {guarded.conflict ? <ConflictNotice onReload={guarded.reload} /> : null}
         <TextArea
           ref={area}
           autoFocus
@@ -234,13 +327,14 @@ function DescriptionEditor({ issue, attachmentCount }: { issue: Issue; attachmen
               event.stopPropagation()
               setEditing(false)
               setDraft(issue.description)
+              guarded.dismiss()
             }
           }}
           className="font-mono text-[13px]"
         />
         <div className="flex items-center justify-end gap-2">
           <span className="mr-auto text-[11px] text-stone-400">{pending ? t('tracker.attachment.uploading') : t('tracker.comment.hint')}</span>
-          <Button size="sm" onClick={() => (setEditing(false), setDraft(issue.description))}>
+          <Button size="sm" onClick={() => (setEditing(false), setDraft(issue.description), guarded.dismiss())}>
             {t('tracker.common.cancel')}
           </Button>
           <Button size="sm" tone="primary" onClick={save}>
@@ -259,7 +353,7 @@ function DescriptionEditor({ issue, attachmentCount }: { issue: Issue; attachmen
       )}
       <button
         type="button"
-        onClick={() => (setDraft(issue.description), setEditing(true))}
+        onClick={() => (setDraft(issue.description), guarded.begin(), setEditing(true))}
         className="mt-2 inline-flex h-7 items-center gap-1 rounded px-1.5 text-xs text-stone-500 hover:bg-stone-100 hover:text-stone-900"
       >
         <Pencil aria-hidden className="size-3" />
@@ -352,8 +446,9 @@ function PropertiesBar({ issue }: { issue: Issue }) {
       <div className="w-32">
         <PriorityPicker issue={issue} variant="row" />
       </div>
-      <div className="w-40">
+      <div className="w-56">
         <AssigneePicker issue={issue} variant="row" />
+        {issue.delegator ? <p className="px-2 pb-0.5 text-[11px] text-stone-500">{t('tracker.agent.delegatedBy', { name: issue.delegator.name })}</p> : null}
       </div>
       <div className="w-44">
         <IssueProjectPicker issue={issue} variant="row" />
@@ -401,6 +496,8 @@ function PropertiesSidebar({ issue }: { issue: Issue }) {
       {row(t('tracker.project.label'), <IssueProjectPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.priority'), <PriorityPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.assignee'), <AssigneePicker issue={issue} variant="row" />)}
+      {issue.assignee?.kind === 'agent' && issue.assignee.agent ? row('', <p className="px-2 text-[11px] text-stone-500">{t('tracker.agent.ownedBy', { name: issue.assignee.agent.owner.name })}</p>) : null}
+      {issue.delegator ? row(t('tracker.property.delegator'), <span className="flex items-center gap-2 px-2 text-[13px] text-stone-700"><ActorAvatar actor={{ ...issue.delegator, kind: 'person' }} />{issue.delegator.name}</span>) : null}
       {row(t('tracker.property.labels'), <LabelsPicker issue={issue} variant="row" />)}
       {row(t('tracker.property.type'), <TypePicker issue={issue} />)}
       {row(parentLabel(t, issue.type), <IssueParentPicker issue={issue} />)}
@@ -417,7 +514,7 @@ function PropertiesSidebar({ issue }: { issue: Issue }) {
         />
       )}
       <div className="my-3 border-t border-line" />
-      {row(t('tracker.property.reporter'), <span className="flex items-center gap-2 px-2 text-[13px] text-stone-700"><Avatar person={issue.reporter} size="xs" />{issue.reporter.name}</span>)}
+      {row(t('tracker.property.reporter'), <span className="flex min-w-0 items-center gap-2 px-2 text-[13px] text-stone-700"><ActorAvatar actor={issue.reporter} /><ActorName actor={issue.reporter} /></span>)}
       {row(t('tracker.property.created'), stamp(issue.createdAt))}
       {row(t('tracker.property.updated'), stamp(issue.updatedAt))}
       {issue.completedAt ? row(t('tracker.property.completed'), <span className="px-2 text-[13px] text-stone-700">{formatDate(issue.completedAt, locale)}</span>) : null}

@@ -49,6 +49,9 @@ func (a *API) assignee(s *request, sub *string) (*domain.Person, error) {
 	if !domain.Text(*sub, 1, 4096) {
 		return nil, invalid("Invalid assignee subject")
 	}
+	if domain.ActorKind(*sub) == "agent" {
+		return s.tx.AgentAssignee(*sub)
+	}
 	person := domain.Person{Sub: *sub, Name: *sub}
 	if *sub == s.actor.Sub {
 		person = s.actor.Person

@@ -40,49 +40,9 @@ type endpoint func(*request) (any, int, error)
 func New(database *store.Store, auth *identity.Authenticator, upstream *platformclient.Client, people *directory.Client, workspace string) http.Handler {
 	a := &API{store: database, identity: auth, platform: upstream, directory: people, workspace: workspace, mux: http.NewServeMux()}
 	a.mux.HandleFunc("GET /api/tracker/v1/openapi.json", a.openapi)
-	a.route("GET /me", false, true, a.me)
-	a.route("GET /workspace", false, false, a.workspaceGet)
-	a.route("PATCH /workspace", true, true, a.workspacePatch)
-	a.route("GET /statuses", false, false, a.statusList)
-	a.route("POST /statuses", true, true, a.statusCreate)
-	a.route("PATCH /statuses/{id}", true, true, a.statusPatch)
-	a.route("DELETE /statuses/{id}", true, true, a.statusDelete)
-	a.route("PUT /statuses/order", true, true, a.statusOrder)
-	a.route("GET /labels", false, false, a.labelList)
-	a.route("POST /labels", true, true, a.labelCreate)
-	a.route("PATCH /labels/{id}", true, true, a.labelPatch)
-	a.route("DELETE /labels/{id}", true, true, a.labelDelete)
-	a.route("GET /projects", false, false, a.projectList)
-	a.route("POST /projects", true, false, a.projectCreate)
-	a.route("GET /projects/{id}", false, false, a.projectGet)
-	a.route("PATCH /projects/{id}", true, true, a.projectPatch)
-	a.route("DELETE /projects/{id}", true, true, a.projectDelete)
-	a.route("GET /sprints", false, false, a.sprintList)
-	a.route("POST /sprints", true, false, a.sprintCreate)
-	a.route("GET /sprints/{id}", false, false, a.sprintGet)
-	a.route("PATCH /sprints/{id}", true, false, a.sprintPatch)
-	a.route("POST /sprints/{id}/start", true, false, a.sprintStart)
-	a.route("POST /sprints/{id}/close", true, false, a.sprintClose)
-	a.route("DELETE /sprints/{id}", true, true, a.sprintDelete)
-	a.route("GET /sprints/{id}/burndown", false, false, a.sprintBurndown)
-	a.route("GET /velocity", false, false, a.velocity)
-	a.route("GET /issues", false, false, a.issueList)
-	a.route("POST /issues", true, false, a.issueCreate)
-	a.route("GET /issues/{id}", false, false, a.issueGet)
-	a.route("PATCH /issues/{id}", true, false, a.issuePatch)
-	a.route("DELETE /issues/{id}", true, true, a.issueDelete)
-	a.route("GET /issues/{id}/timeline", false, false, a.timeline)
-	a.route("POST /issues/{id}/comments", true, false, a.commentCreate)
-	a.route("PATCH /comments/{id}", true, false, a.commentPatch)
-	a.route("DELETE /comments/{id}", true, true, a.commentDelete)
-	a.route("POST /issues/{id}/attachments", true, false, a.attachmentCreate)
-	a.route("GET /attachments/{id}", false, false, a.attachmentGet)
-	a.route("DELETE /attachments/{id}", true, true, a.attachmentDelete)
-	a.route("GET /views", false, false, a.viewList)
-	a.route("POST /views", true, true, a.viewCreate)
-	a.route("PATCH /views/{id}", true, true, a.viewPatch)
-	a.route("DELETE /views/{id}", true, true, a.viewDelete)
-	a.route("GET /people", false, false, a.people)
+	for _, route := range a.routes() {
+		a.route(route.pattern, route.mutation, route.roles, route.handler)
+	}
 	a.mux.HandleFunc("GET /api/tracker/v1/people/{id}/avatar", a.avatar)
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { httpx.WriteError(w, httpx.NotFound(), "tracker") })
 	return a
@@ -126,7 +86,7 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			}
 		} else {
 			s.bearer = r.Header.Get("Authorization")
-			s.actor = domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer"}
+			s.actor = domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer", Kind: "person"}
 			if s.actor.Name == "" {
 				s.actor.Name = s.actor.Sub
 			}
@@ -148,11 +108,27 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			writeStoreError(w, err)
 			return
 		}
+		if key && s.actor.Kind == "agent" {
+			if err := a.store.Do(ctx, true, func(tx *store.Tx) error {
+				tx.WorkspaceID = a.workspace
+				return tx.ObserveAgent(s.actor.Sub)
+			}); err != nil {
+				writeStoreError(w, err)
+				return
+			}
+		}
 		var body any
 		var status int
 		err := a.store.InWorkspace(ctx, a.workspace, mutation, func(tx *store.Tx) error {
 			s.tx = tx
-			if key {
+			if key && s.actor.Kind == "agent" {
+				actor, err := tx.AgentBySubject(s.actor.Sub)
+				if err != nil {
+					return err
+				}
+				actor.Scopes = s.actor.Scopes
+				s.actor = actor
+			} else if key {
 				name, err := tx.KnownName(s.actor.Sub)
 				if err != nil {
 					return err
@@ -162,7 +138,7 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 				}
 			}
 			var err error
-			body, status, err = fn(s)
+			body, status, err = a.execute(s, fn)
 			return err
 		})
 		if err != nil {
@@ -175,6 +151,18 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 		}
 		if download, ok := body.(attachmentDownload); ok {
 			download.write(w)
+			return
+		}
+		if text, ok := body.(markdown); ok {
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, string(text))
+			return
+		}
+		if replay, ok := body.(store.Replay); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(replay.Status)
+			_, _ = w.Write(replay.Body)
 			return
 		}
 		a.enrich(s, body)

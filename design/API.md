@@ -471,3 +471,180 @@ the Directory name.
 Each mutation request made with a key writes one `tracker access key mutation:`
 log line (method, path, key name, subject, edge `X-Request-Id`) before
 authorization. The timeline does not distinguish key writes from the user's own.
+
+## Agents: people and AI agents on the same board
+
+An Access Key whose subject is `external` is a registered agent, not a person.
+Agents are assignable actors; a run is a lease that shows an agent is working;
+a request is a directed, stateful handoff; under the `review` policy only a
+person's approval completes an agent's work. User keys ("Access Keys
+(v0.1.11)") are unchanged.
+
+An **Actor** is a person or an agent. Everything a person can be on an issue
+(assignee, reporter, comment author, activity actor) an agent can be too.
+
+| Entity | Owner (sole writer) | Lifecycle | Invariants |
+| --- | --- | --- | --- |
+| **Agent** | Admin | `active ⇄ disabled`; never deleted (history refers to it) | has an immutable `id` and an immutable, unique `handle` (see "Identifiers"); `name` and `description` are editable; exactly one `owner` Person, who is accountable for what it does; an Assertion whose `external` subject equals no active agent's handle is refused (403 `key_subject`). |
+| **Delegation** (fields on Issue) | whoever assigns | set when the assignee becomes an agent, cleared when it becomes a person or nobody | `delegator` is a Person: the person who assigned, or the agent's owner when an agent assigned (itself or another agent). The delegator is who the agent answers to on this issue. |
+| **Run** | the agent that started it; a person may cancel | `running ⇄ waiting → succeeded \| failed \| canceled` | only the issue's assignee starts a run; at most one non-terminal run per issue; holds a lease (`leaseExpiresAt`, 10 minutes, renewed by heartbeat, compared at microsecond precision); a run whose lease has passed is `stalled` (derived at read time). A stalled run blocks nothing and is never revived: heartbeat and finish are refused, and the next start on the issue closes it as `failed/lease_expired`. Changing the assignee away from the agent cancels its non-terminal run (`reassigned`) in the same transaction. Whatever ends a run without success (cancel, reassignment, expiry closure) withdraws its open requests. |
+| **Request** | requester creates and withdraws; addressee answers | `open → answered \| withdrawn` | `kind ∈ {question, approval, review}`; directed from one actor to one actor, or to "any person"; `approval` and `review` are answered only by people; a `review` exists only as the result of a finished run; only a run's own agent attaches a request to that run, and the run must belong to the same issue (otherwise anyone could force a run into `waiting`). |
+| **Mention** | server, parsed from a comment | created with the comment; acknowledged by its target | `@handle` of an agent; one row per (comment, target). People are not mentionable in this version (Directory has no lookup by typed text). |
+| **Event** | server, in the transaction of the write it describes | append-only | `seq` allocated from the workspace row, so order of `seq` is commit order and a reader never misses a row behind its cursor. |
+| **Completion policy** (on Workspace) | Admin | setting | `agentCompletion ∈ {review, direct}`, default `review`. |
+
+### Identifiers
+
+| Identifier | Example | Mutable | Used for |
+| --- | --- | --- | --- |
+| `id` (ULID, server-assigned) | `01M74SFSZ657XZ2HNWWA9VND8T` | no | the reference history keeps: assignee, reporter, author and actor columns store `agent:<id>` |
+| `handle` (`^[a-z][a-z0-9-]{1,30}$`, unique) | `astra` | no | what people type and read (`@astra`, assignee picker) **and** the `external` subject of the agent's Access Keys: `apth access-keys create --space tracker --external astra` |
+| `name` | `Astra` | yes | display |
+
+There is no separate key subject: one name per agent for the Admin to manage.
+Keys come and go (expiry, revocation, several at once); every key minted with
+the handle as its `external` subject is the same agent. The price is that a
+handle cannot be renamed; the display name can. A session or lane has no
+identifier of its own: it is the free-text `session` of a Run.
+
+### Authorization
+
+`domain.Actor` gains `Kind`. `Can` stays pure and gains these rows:
+
+| Action | Person | Agent (scope) |
+| --- | --- | --- |
+| Read issues, timeline, sprints, feed | any | `tracker:read` |
+| Create issues, comment, attach, raise `question`/`approval` Requests, answer a `question` addressed to it — on any issue | any | `tracker:write` |
+| Edit an issue's fields (`PATCH /issues/{id}`) | any | `tracker:write`, and only as the issue's assignee or reporter |
+| Start and drive a run | n/a | `tracker:write`, assignee only |
+| Set a `completed` status | any | only when `agentCompletion = direct` |
+| Answer `approval` / `review` | addressee, or any person when unaddressed; Admin | never |
+| Cancel a run | any | its own |
+| Assign to an agent | any | itself, on issues it reported |
+| Delete, settings, statuses, labels, shared views, sprint start/close/delete, manage agents | as today | never |
+| `GET /people` (Directory) | any | empty, `source: unavailable` (Directory accepts only user bearers) |
+
+
+Authentication: every route accepts the edge user bearer or an Access Key
+Assertion (audience `tracker`). A key without the needed scope → 403
+`insufficient_scope` (as for user keys); a refusal by the authorization table
+→ 403 `forbidden`.
+
+```ts
+type ActorKind = 'person' | 'agent'
+type Actor = Person & { kind: ActorKind; agent?: { id: string; handle: string; owner: Person; disabled: boolean } }
+// For agents: sub = 'agent:<id>', name = agent name. Every place that returned Person returns Actor.
+
+type Agent = { id: string; handle: string /* immutable; also the external subject of its Access Keys */
+  name: string; description: string /* ≤ 4096 bytes: what to delegate to it */
+  owner: Person; disabled: boolean
+  activeRuns: number; openRequests: number; lastSeenAt: string | null; createdAt: string; updatedAt: string }
+
+type RunState = 'running' | 'waiting' | 'stalled' | 'succeeded' | 'failed' | 'canceled'
+type Link = { kind: 'pr' | 'commit' | 'url'; url: string /* https */; title: string /* ≤ 200 */ }
+type Run = { id: string; issue: IssueRef; agent: Actor; state: RunState; reason: string | null /* 'lease_expired' | 'reassigned' | 'canceled_by:<sub>' */
+  session: string /* ≤ 200, free text */; note: string /* ≤ 200, latest heartbeat */
+  summary: string /* Markdown ≤ 20 KiB, set on finish */; links: Link[] /* ≤ 10 */
+  startedAt: string; heartbeatAt: string; leaseExpiresAt: string; finishedAt: string | null }
+
+type RequestKind = 'question' | 'approval' | 'review'
+type Request = { id: string; issue: IssueRef; kind: RequestKind; from: Actor; to: Actor | null /* null = any person */
+  title: string /* 1–200 */; body: string /* Markdown ≤ 20 KiB */; options: string[] /* ≤ 6; approval/review: fixed ['approve','reject'] */
+  runId: string | null; state: 'open' | 'answered' | 'withdrawn'
+  answer: { option: string | null; body: string; by: Actor; at: string } | null; createdAt: string }
+
+type InboxItem =
+  | { kind: 'request'; request: Request }                       // open, addressed to me (or to any person, when I am one)
+  | { kind: 'answer'; request: Request }                        // my request was answered; until acknowledged
+  | { kind: 'mention'; comment: Comment; issue: IssueRef }      // until acknowledged
+  | { kind: 'assignment'; issue: IssueSummary }                 // agents only: assigned to me and actionable; carries activeRun when I already hold a live run (resume, do not start again)
+type Event = { seq: number; at: string; issue: IssueRef | null; actor: Actor
+  type: 'issue.created' | 'issue.updated' | 'issue.deleted' | 'comment.created' | 'run.started' | 'run.finished' | 'run.canceled' | 'request.opened' | 'request.answered' | 'request.withdrawn'
+  data: unknown /* issue.updated: { fields: Activity['field'][] }; others: the entity id */ }
+```
+
+"Actionable" (pure, `domain.Actionable`): not deleted; status category
+`backlog`, `unstarted` or `started` (assignment is the delegation, so an
+issue assigned while still in Backlog reaches the agent); no live (not
+stalled) run of another agent; no open Request raised by me on it, ignoring
+requests attached to a stalled run; no `blockedBy` issue outside
+`completed`/`canceled`. Ordered by priority, then sprint membership (active
+sprint first), then number.
+
+Changes to existing shapes:
+
+- `Issue`/`IssueSummary`: `assignee`, `reporter` are `Actor`; gain
+  `delegator: Person | null`, `activeRun: Run | null`, `openRequestCount: number`.
+- `POST`/`PATCH /issues`: `assigneeSub` accepts `agent:<id>`; a disabled agent
+  → 400 (path `assigneeSub`). `PATCH` accepts `expectedUpdatedAt?`; a mismatch
+  → 409 `conflict`. An agent setting a `completed` status under `review` → 403.
+- All `POST` routes except the multipart attachment upload honour
+  `Idempotency-Key` (≤ 128 chars): the first handler status and body are kept
+  24 h per (actor, key) and replayed for the identical request (method, URI,
+  content type, body bytes); a different request under the same key → 409.
+  Authentication failures are not stored.
+- `Filter` gains `assigneeKind?: ActorKind[]`, `agent?: string[]` (the
+  assignee is one of these agent ids),
+  `run?: ('active' | 'stalled' | 'none')[]`, `request?: ('open' | 'mine')[]`
+  (`open`: the issue has an open request; `mine`: an open request raised by
+  the caller).
+- `TimelineItem` gains `{ kind: 'run'; run: Run }` and `{ kind: 'request'; request: Request }`.
+- `Activity.field` gains `'delegator'`. `Me` gains `kind` and, for agents, `agent` and `scopes`.
+- `Workspace` gains `agentCompletion: 'review' | 'direct'`; `PATCH /workspace` accepts it (Admin).
+- `Comment` gains `mentions: Actor[]`.
+
+| Method & path | Body → Response | Authz |
+| --- | --- | --- |
+| `GET /agents?includeDisabled=` | → `{ items: Agent[] }` | any |
+| `POST /agents` | `{ handle, name, description?, ownerSub }` → `Agent` 201; duplicate handle → 409 | Admin |
+| `PATCH /agents/{id}` | `{ name?, description?, ownerSub?, disabled? }` → `Agent`; disabling cancels its non-terminal runs | Admin |
+| `GET /inbox` | → `{ items: InboxItem[] }` for the caller, requests first | any |
+| `POST /inbox/ack` | `{ answers?: string[] /* request ids */; mentions?: string[] /* comment ids */ }` → 204 | any |
+| `GET /events?after=<seq>&limit=` | → `{ items: Event[]; next: number }`, ascending, limit default 100 max 500; `after` omitted = from now | any |
+| `POST /issues/{id}/runs` | `{ session?, note? }` → `Run` 201; caller must be the assignee (403); another live run → 409; a stalled run is first closed `failed/lease_expired` and its open requests withdrawn | agent |
+| `GET /issues/{id}/runs` · `GET /runs/{id}` | → `{ items: Run[] }` newest first / `Run` | any |
+| `POST /runs/{id}/heartbeat` | `{ note? }` → `Run`; renews the lease; 409 when the run is terminal or stalled (the agent must stop and start a fresh run) | the run's agent |
+| `POST /runs/{id}/finish` | `{ outcome: 'succeeded' \| 'failed', summary, links? }` → `Run`; 409 when terminal or stalled; `succeeded` with an open `approval` of this run → 409 (resolve or withdraw it first); `succeeded` under `review` opens a `review` Request to the delegator and withdraws the run's open questions | the run's agent |
+| `POST /runs/{id}/cancel` | → `Run`; accepts a stalled run; withdraws the run's open requests | any person; the run's agent |
+| `POST /issues/{id}/requests` | `{ kind: 'question' \| 'approval', title, body?, options?, to?: string \| null /* sub */, runId? }` → `Request` 201; for agents `to` omitted = the delegator (else the owner), `to: null` = any person; `runId` only by that run's agent and for a run of this issue (403), and sets the run `waiting` | any |
+| `GET /requests?state=&to=&issue=` · `GET /requests/{id}` | | any |
+| `POST /requests/{id}/answer` | `{ option?, body? }` → `Request`; `option` must be one of `options` when they exist; approving a `review` moves the issue to the first `completed` status in the same transaction, rejecting leaves it and is an inbox `answer` for the agent; the last open request answered returns the run to `running` | per the authorization table |
+| `POST /requests/{id}/withdraw` | → `Request` | requester |
+| `GET /agent-guide` | → `text/markdown`: this protocol written for an agent (exchange, inbox loop, run, request, finish), generated from the route table | any |
+
+Catalog entry: unchanged. Agents use the existing `tracker` space and its
+scopes (`tracker:read` for `GET`, `tracker:write` otherwise, as for user keys).
+
+Storage (migration `013_agents.sql`): `tracker_agent`; `tracker_run`
+(partial unique index on `issue_id` where not terminal); `tracker_request`;
+`tracker_mention`; `tracker_event (workspace_id, seq)` with
+`tracker_workspace.event_seq`; `tracker_idempotency (actor_sub, key)`;
+`tracker_issue.delegator_sub/name`; `tracker_workspace.agent_completion`.
+Agent actors are stored in the existing `*_sub` columns as `agent:<id>`, so no
+existing column changes type. Expired idempotency rows are deleted
+opportunistically by the write that inserts a new one.
+
+### UI
+
+- **Actor rendering**: an agent shows its own glyph and a tooltip "owned by
+  <person>" wherever a person badge appears. The assignee picker lists agents
+  in their own section with the agent's description.
+- **Board and list**: a card with a live run shows the agent and its latest
+  note ("astra · running tests · 3 分前"); `stalled` and "waiting for a person"
+  are visually distinct. Built-in views "Agents at work" (`run: ['active']`)
+  and "Waiting for people" (`request: ['open']`).
+- **Inbox** (`/inbox`, sidebar count, `G I`): the person's queue. Open
+  requests first, each answerable in place (option buttons, or text); then
+  answers and mentions. A `review` shows the run summary and links beside
+  Approve / Reject.
+- **Issue panel**: runs and requests appear in the timeline; an open request
+  is pinned above the description. "Delegate to agent" is the assign action;
+  "Cancel run" is on the live run.
+- **Agents** (`/settings/agents`, Admin): register (handle, name, owner,
+  description), disable; shows the exact
+  `apth access-keys create --space tracker --external <handle>` command and
+  last seen, active runs, open requests and the median time a request waited
+  for a person. (Runs by outcome needs a cross-issue run listing and a
+  Dashboard link needs the Dashboard URL; neither exists, so neither is shown.)
+- **Settings**: completion policy.
+- Copy in Japanese and English (`web/src/copy/agents.ts`).

@@ -6,8 +6,10 @@
 // reproduces the screen. On `/`, `/board` and `/reported` a single project
 // in the filter travels as `?project=` (paths.ts) and is the scope new issues
 // default to; on a view it stays inside the view's filter. `/reported` is the
-// built-in "Reported by me" view and `/current-sprint` the built-in "Current
-// sprint" board: they behave like saved views (their filter, sort and layout
+// built-in "Reported by me" view, `/current-sprint` the built-in "Current
+// sprint" board, and `/agents-at-work` and `/waiting-for-people` the built-in
+// "Agents at work" board (`run: ['active']`) and "Waiting for people" list
+// (`request: ['open']`): they behave like saved views (their filter, sort and layout
 // are defaults the URL overrides, with a reset) but nothing is stored, so
 // every user has them. A sprint's page shows only its members (the sprint is
 // fixed, not part of the editable filter) under the sprint's own header
@@ -17,7 +19,7 @@
 // page, the work under a member story is listed with that story.
 import { useInfiniteQuery, useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Bug, Bookmark, Columns3, List, MoreHorizontal, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Bot, Bug, Bookmark, Columns3, Hand, List, MoreHorizontal, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { allIssuesQuery, epicsQuery, issuesQuery, sprintsQuery, storiesQuery, useViewMutations } from '../../api/queries'
@@ -37,13 +39,26 @@ import { NO_PROJECT, ProjectScopeSwitcher } from './projects'
 import { SaveViewDialog } from './save-view-dialog'
 import { useReference } from './use-reference'
 
-export type IssuesPageKind = { kind: 'all' } | { kind: 'board' } | { kind: 'reported' } | { kind: 'currentSprint' } | { kind: 'sprint'; sprint: Sprint } | { kind: 'view'; view: View }
+export type IssuesPageKind =
+  | { kind: 'all' }
+  | { kind: 'board' }
+  | { kind: 'reported' }
+  | { kind: 'currentSprint' }
+  | { kind: 'atWork' }
+  | { kind: 'waiting' }
+  | { kind: 'sprint'; sprint: Sprint }
+  | { kind: 'view'; view: View }
 
 type Preset = { filter: Filter; sort: Sort; layout: ViewLayout; groupBy: GroupBy }
 /** The built-in "Reported by me" view (API.md v0.1.2): the caller's reports, newest first. */
 export const REPORTED_VIEW: Preset = { filter: { reporter: ['me'] }, sort: 'created', layout: 'list', groupBy: 'none' }
 /** The built-in "Current sprint" view (API.md v0.1.10): the active sprint as a board. */
 export const CURRENT_SPRINT_VIEW: Preset = { filter: { sprint: ['active'] }, sort: 'updated', layout: 'board', groupBy: 'none' }
+/** The built-in "Agents at work" view (API.md "Agents", UI): issues with a live run, as a board. */
+export const AT_WORK_VIEW: Preset = { filter: { run: ['active'] }, sort: 'updated', layout: 'board', groupBy: 'none' }
+/** The built-in "Waiting for people" view: issues with an open request, as a list. */
+export const WAITING_VIEW: Preset = { filter: { request: ['open'] }, sort: 'updated', layout: 'list', groupBy: 'none' }
+const BUILT_IN: Partial<Record<IssuesPageKind['kind'], Preset>> = { reported: REPORTED_VIEW, currentSprint: CURRENT_SPRINT_VIEW, atWork: AT_WORK_VIEW, waiting: WAITING_VIEW }
 /** A sprint's page: its members (the sprint itself is fixed, outside the filter) as a list. */
 const SPRINT_PAGE: Preset = { filter: {}, sort: 'updated', layout: 'list', groupBy: 'none' }
 
@@ -61,7 +76,7 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
   const view = page.kind === 'view' ? page.view : undefined
   const pageSprint = page.kind === 'sprint' ? page.sprint : undefined
   // What the page starts from before the URL overrides it: a saved view's filter/sort/layout, a built-in view's, or none.
-  const preset: Preset | undefined = view ?? (page.kind === 'reported' ? REPORTED_VIEW : page.kind === 'currentSprint' ? CURRENT_SPRINT_VIEW : pageSprint ? SPRINT_PAGE : undefined)
+  const preset: Preset | undefined = view ?? BUILT_IN[page.kind] ?? (pageSprint ? SPRINT_PAGE : undefined)
   // `base` is the filter without the `?project=` scope (views keep their project inside the filter) and without a sprint page's fixed sprint.
   const base = useMemo(() => parseFilterParam(search.filter) ?? preset?.filter ?? {}, [search.filter, preset])
   const filter = useMemo(() => {
@@ -83,7 +98,11 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
           ? t('tracker.nav.reported')
           : page.kind === 'currentSprint'
             ? t('tracker.nav.currentSprint')
-            : t('tracker.nav.issues')
+            : page.kind === 'atWork'
+              ? t('tracker.nav.atWork')
+              : page.kind === 'waiting'
+                ? t('tracker.nav.waiting')
+                : t('tracker.nav.issues')
   // One project in the filter is the scope; several show as "N projects" and keep the project chips on rows.
   const scope = filter.project?.length === 1 ? filter.project[0]! : null
   const scopeProject = scope && scope !== NO_PROJECT ? projectById.get(scope) : undefined
@@ -246,7 +265,7 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-white px-4 sm:px-6">
-        {sprintScreen ? <SprintIcon state={pageSprint?.state ?? 'active'} className="size-4" /> : null}
+        {sprintScreen ? <SprintIcon state={pageSprint?.state ?? 'active'} className="size-4" /> : page.kind === 'atWork' ? <Bot aria-hidden className="size-4 text-stone-500" /> : page.kind === 'waiting' ? <Hand aria-hidden className="size-4 text-stone-500" /> : null}
         <h1 className="min-w-0 shrink-0 truncate text-[15px] font-semibold text-stone-900">{title}</h1>
         {page.kind === 'currentSprint' && activeSprint ? (
           <HrefLink href={paths.sprint(activeSprint.id)} className="shrink-0 truncate text-[13px] text-stone-500 hover:text-stone-900 hover:underline">
@@ -259,7 +278,7 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
         <div className="ml-auto flex items-center gap-1.5">
           <LayoutSwitch presetLayout={preset?.layout} layout={layout} search={search} setSearch={setSearch} />
           {view ? <ViewMenu view={view} dirty={dirty} filter={filter} sort={sort} layout={layout} groupBy={groupBy} reset={reset} /> : null}
-          {(page.kind === 'reported' || page.kind === 'currentSprint' || page.kind === 'sprint') && dirty ? (
+          {(page.kind === 'reported' || page.kind === 'currentSprint' || page.kind === 'sprint' || page.kind === 'atWork' || page.kind === 'waiting') && dirty ? (
             <Button size="sm" tone="ghost" icon={<RotateCcw />} onClick={reset}>
               {t('tracker.view.reset')}
             </Button>
@@ -317,6 +336,14 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
           ) : query.isError && !query.data ? (
             <div className="p-6">
               <LoadFailed error={query.error} onRetry={() => void query.refetch()} />
+            </div>
+          ) : items.length === 0 && (page.kind === 'atWork' || page.kind === 'waiting') && sameFilter(base, preset!.filter) && !search.project ? (
+            <div className="p-6">
+              <EmptyState
+                icon={page.kind === 'atWork' ? <Bot /> : <Hand />}
+                title={page.kind === 'atWork' ? t('tracker.atWork.emptyTitle') : t('tracker.waiting.emptyTitle')}
+                body={page.kind === 'atWork' ? t('tracker.atWork.emptyBody') : t('tracker.waiting.emptyBody')}
+              />
             </div>
           ) : items.length === 0 && layout === 'list' && !(groupBy === 'sprint') ? (
             <div className="p-6">

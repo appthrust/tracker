@@ -13,37 +13,58 @@
 // on its fourth day with a scope increase and a cancellation, and a planned
 // one; 17 work items carry a size. The exact fixture (shared authority with
 // the server seed) is `SPRINT_FIXTURE` below.
+// Agents (API.md "Agents"): four registered agents (astra, opus-ui, claude,
+// legacy-bot disabled), delegations, runs (running, waiting, stalled,
+// succeeded), requests, a mention and two agent-reported issues (APT-41/42),
+// all relative to the moment of seeding — the shared fixture is
+// `.tmp/agents-ui/fixture.md`, mirrored by `seedAgents` below. Leases are
+// real: ten minutes after a reset the live runs turn stalled.
 // The caller is Alex Chen as Team Admin; MOCK_ROLE=Editor (or Viewer) makes
 // them a non-admin. `POST /api/tracker/v1/__mock/caller {sub, role?}` switches
 // the signed-in person (role default Editor); a `sub` outside the seed needs a
 // `name` and signs in someone who has reported and been assigned nothing.
+// A request with `X-Mock-Agent: <handle>` acts as that agent's Access Key
+// assertion instead (`X-Mock-Scopes: tracker:read,tracker:write`, the default
+// being both): an unknown or disabled handle is 403 `key_subject`.
+// `POST /api/tracker/v1/__mock/clock {advanceMs}` moves the mock's clock
+// forward (leases expire without waiting).
 // `POST /api/tracker/v1/__mock/reset` reseeds all state (body
 // `{"projects":"none"}` reseeds without projects).
 // MOCK_PROJECTS=none starts with no projects (a workspace from before v0.2,
 // like the live install). MOCK_DIRECTORY=absent makes `GET /people` answer
 // `source: unavailable`. The issue cursor is base64url(offset), opaque to the SPA.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type {
   Activity,
   ActivityField,
+  Actor,
+  Agent,
+  AgentCompletion,
   ApiError,
   Attachment,
   Burndown,
   Comment,
+  EventType,
   Filter,
   GroupBy,
+  InboxItem,
   Issue,
   IssueRef,
   IssueSummary,
   IssueType,
   Label,
   LabelColor,
+  Link,
   Me,
   Person,
   Priority,
   Progress,
   Project,
   Report,
+  RequestKind,
+  RequestState,
   Role,
+  Run,
   Size,
   Sort,
   Sprint,
@@ -54,6 +75,8 @@ import type {
   StatusCategory,
   Tally,
   TimelineItem,
+  TrackerEvent,
+  TrackerRequest,
   Unit,
   Velocity,
   VelocityEntry,
@@ -61,6 +84,36 @@ import type {
   ViewLayout,
   Workspace,
 } from '../api/tracker'
+import {
+  ACCESS_KEY_SCOPES,
+  AGENT_COMPLETIONS,
+  AGENT_DESCRIPTION_MAX_BYTES,
+  AGENT_HANDLE_PATTERN,
+  AGENT_NAME_MAX,
+  agentIdOf,
+  agentSub,
+  canAnswer,
+  canCancelRun,
+  compareActionable,
+  DECISION_OPTIONS,
+  deriveRunState,
+  IDEMPOTENCY_KEY_MAX,
+  isActionable,
+  isAddressedTo,
+  isLiveRun,
+  isTerminalRun,
+  LEASE_MS,
+  LINK_TITLE_MAX,
+  maySetCompleted,
+  parseMentions,
+  REQUEST_BODY_MAX_BYTES,
+  REQUEST_OPTIONS_MAX,
+  REQUEST_TITLE_MAX,
+  RUN_LINKS_MAX,
+  RUN_SUMMARY_MAX_BYTES,
+  RUN_TEXT_MAX,
+  type StoredRunState,
+} from '../model/agents'
 import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_TYPES,
@@ -137,6 +190,10 @@ const FILTER_KEYS: Record<keyof Filter, true> = {
   epic: true,
   story: true,
   sprint: true,
+  assigneeKind: true,
+  agent: true,
+  run: true,
+  request: true,
 }
 const VELOCITY_LIMIT_DEFAULT = 8
 const VELOCITY_LIMIT_MAX = 26
@@ -166,6 +223,9 @@ export const MOCK_PEOPLE = {
   jordan: { sub: 'dev-jordan', name: 'Jordan Lee' },
 } as const satisfies Record<string, Person>
 
+/** A person as an API Actor. */
+const personActor = (person: Person): Actor => ({ ...person, kind: 'person' })
+
 export const MOCK_WORKSPACE_ID = 'pj-mock'
 
 type StoredIssue = {
@@ -176,8 +236,10 @@ type StoredIssue = {
   type: IssueType
   priority: Priority
   statusId: string
-  assignee: Person | null
-  reporter: Person
+  /** Agent actors are stored by `sub` and resolved at read time (name, owner and `disabled` stay current). */
+  assignee: Actor | null
+  reporter: Actor
+  delegator: Person | null
   labelIds: string[]
   projectId: string | null
   parentId: string | null
@@ -190,7 +252,30 @@ type StoredIssue = {
   estimate: Size | null
   sprintId: string | null
 }
-type StoredComment = Comment & { deleted: boolean }
+type StoredComment = Omit<Comment, 'mentions'> & { deleted: boolean }
+type StoredAgent = { id: string; handle: string; name: string; description: string; owner: Person; disabled: boolean; createdAt: string; updatedAt: string; lastSeenAt: string | null }
+/** `state` never holds `stalled`: it is derived from `leaseExpiresAt` on read, as on the server. */
+type StoredRun = Omit<Run, 'issue' | 'agent' | 'state'> & { issueId: string; agentId: string; state: StoredRunState }
+type StoredRequest = {
+  id: string
+  issueId: string
+  kind: RequestKind
+  fromSub: string
+  toSub: string | null
+  title: string
+  body: string
+  options: string[]
+  runId: string | null
+  state: RequestState
+  answer: { option: string | null; body: string; bySub: string; at: string } | null
+  createdAt: string
+  /** The requester acknowledged the answer in its inbox. */
+  answerAcked: boolean
+}
+type StoredMention = { commentId: string; issueId: string; targetSub: string; acked: boolean }
+type StoredIdempotency = { body: string; status: number; response: string; at: number }
+/** Who a request acts as: the signed-in person, or an agent's Access Key assertion with its scopes. */
+type Caller = { actor: Actor; role: Role; agent: StoredAgent | null; scopes: readonly string[] }
 type StoredAttachment = Attachment & { bytes: Uint8Array<ArrayBuffer>; deleted: boolean }
 type StoredProject = { id: string; name: string; description: string; color: LabelColor; archivedAt: string | null; createdAt: string; updatedAt: string }
 type Block = { blockerId: string; blockedId: string }
@@ -346,7 +431,7 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
   const projects: StoredProject[] = withProjects
     ? PROJECT_SEED.map(([name, color]) => ({ id: ulid(T0, seq++), name, description: '', color, archivedAt: null, createdAt: at(0), updatedAt: at(0) }))
     : []
-  const people = [MOCK_PEOPLE.alex, MOCK_PEOPLE.sam, MOCK_PEOPLE.jordan]
+  const people = [MOCK_PEOPLE.alex, MOCK_PEOPLE.sam, MOCK_PEOPLE.jordan].map(personActor)
   const issues: StoredIssue[] = []
   const activities: Activity[] = []
   SEED_TITLES.forEach((title, i) => {
@@ -363,6 +448,7 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
       statusId: status.id,
       assignee: people[(i + 1) % people.length]!,
       reporter: people[i % people.length]!,
+      delegator: null,
       labelIds: [labels[i % labels.length]!.id],
       projectId: projects[seedProjectIndex(i + 1) ?? -1]?.id ?? null,
       parentId: null,
@@ -402,7 +488,8 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
       priority: 'medium',
       statusId: status.id,
       assignee: null,
-      reporter: MOCK_PEOPLE.alex,
+      reporter: personActor(MOCK_PEOPLE.alex),
+      delegator: null,
       labelIds: [],
       projectId: null,
       parentId,
@@ -449,13 +536,13 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
     })
   )
   const views: (View & { ownerSub: string })[] = [
-    { id: ulid(T0, seq++), name: 'Bugs', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { type: ['bug'] }, sort: 'updated', position: 0, createdAt: at(0), updatedAt: at(0) },
-    { id: ulid(T0, seq++), name: 'My issues', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { assignee: ['me'] }, sort: 'updated', position: 1, createdAt: at(0), updatedAt: at(0) },
-    { id: ulid(T0, seq++), name: 'By epic', owner: MOCK_PEOPLE.alex, ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'board', groupBy: 'epic', filter: {}, sort: 'updated', position: 2, createdAt: at(0), updatedAt: at(0) },
+    { id: ulid(T0, seq++), name: 'Bugs', owner: personActor(MOCK_PEOPLE.alex), ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { type: ['bug'] }, sort: 'updated', position: 0, createdAt: at(0), updatedAt: at(0) },
+    { id: ulid(T0, seq++), name: 'My issues', owner: personActor(MOCK_PEOPLE.alex), ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'list', groupBy: 'none', filter: { assignee: ['me'] }, sort: 'updated', position: 1, createdAt: at(0), updatedAt: at(0) },
+    { id: ulid(T0, seq++), name: 'By epic', owner: personActor(MOCK_PEOPLE.alex), ownerSub: MOCK_PEOPLE.alex.sub, shared: true, layout: 'board', groupBy: 'epic', filter: {}, sort: 'updated', position: 2, createdAt: at(0), updatedAt: at(0) },
   ]
   const role = process.env.MOCK_ROLE === 'Editor' || process.env.MOCK_ROLE === 'Viewer' ? (process.env.MOCK_ROLE as Role) : 'Admin'
   return {
-    workspace: { id: MOCK_WORKSPACE_ID, key: 'APT', name: MOCK_WORKSPACE_ID, sprintLengthWeeks: 1 as SprintLength, timezone: DEFAULT_TIMEZONE, createdAt: at(0), updatedAt: at(0) },
+    workspace: { id: MOCK_WORKSPACE_ID, key: 'APT', name: MOCK_WORKSPACE_ID, sprintLengthWeeks: 1 as SprintLength, timezone: DEFAULT_TIMEZONE, agentCompletion: 'review' as AgentCompletion, createdAt: at(0), updatedAt: at(0) },
     statuses,
     labels,
     projects,
@@ -470,18 +557,222 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
     caller: MOCK_PEOPLE.alex as Person,
     role,
     clock: T0 + 100 * HOUR,
+    /** Added to the wall clock (`POST /__mock/clock`). */
+    offset: 0,
     seq: seq + 1000,
+    agents: [] as StoredAgent[],
+    runs: [] as StoredRun[],
+    requests: [] as StoredRequest[],
+    mentions: [] as StoredMention[],
+    events: [] as TrackerEvent[],
+    eventSeq: 0,
+    idempotency: new Map<string, StoredIdempotency>(),
   }
 }
 
-let state = seedTracker()
+type MockState = ReturnType<typeof seedTracker>
+
+/** One agent of the fixture (`.tmp/agents-ui/fixture.md`, "Agents"); times are offsets from the moment of seeding. */
+type AgentFixture = { handle: string; name: string; owner: Person; disabled: boolean; description: string; created: number; updated: number; seen: number }
+const MINUTE = 60_000
+const DAY = 24 * HOUR
+export const AGENT_FIXTURE = {
+  agents: [
+    { handle: 'astra', name: 'Astra', owner: MOCK_PEOPLE.sam, disabled: false, description: 'Backend implementer. Go handlers, store queries, migrations and their tests. Delegate issues with a clear acceptance check.', created: -14 * DAY, updated: -14 * DAY, seen: -2 * MINUTE },
+    { handle: 'opus-ui', name: 'Opus UI', owner: MOCK_PEOPLE.alex, disabled: false, description: 'UI implementer. React screens, copy and accessibility in the SPA. Delegate issues that include the expected screen or a screenshot.', created: -7 * DAY, updated: -7 * DAY, seen: -1 * MINUTE },
+    { handle: 'claude', name: 'Claude', owner: MOCK_PEOPLE.jordan, disabled: false, description: 'Planner and triage. Reads new reports, finds duplicates, proposes priority and sprint. Does not change code.', created: -14 * DAY, updated: -14 * DAY, seen: -2 * HOUR },
+    { handle: 'legacy-bot', name: 'Legacy bot', owner: MOCK_PEOPLE.alex, disabled: true, description: 'Old nightly triage script. Replaced by claude.', created: -60 * DAY, updated: -30 * DAY, seen: -32 * DAY },
+  ] as AgentFixture[],
+  /** [issue number, agent handle, delegator, assigned at] */
+  delegations: [
+    [15, 'astra', MOCK_PEOPLE.alex, -40 * MINUTE],
+    [27, 'opus-ui', MOCK_PEOPLE.alex, -45 * MINUTE],
+    [9, 'astra', MOCK_PEOPLE.sam, -4 * HOUR],
+    [16, 'astra', MOCK_PEOPLE.alex, -3 * HOUR],
+    [4, 'astra', MOCK_PEOPLE.sam, -27 * HOUR],
+    [21, 'claude', MOCK_PEOPLE.alex, -4 * HOUR],
+    [13, 'opus-ui', MOCK_PEOPLE.alex, -1 * DAY],
+    [26, 'opus-ui', MOCK_PEOPLE.jordan, -1 * DAY],
+    [19, 'astra', MOCK_PEOPLE.sam, -2 * DAY],
+  ] as [number, string, Person, number][],
+  reviewSummary16: [
+    'The CLI refreshed its login only after a request failed with 401, so the first command after one hour always failed.',
+    '',
+    '- Refresh the token when less than 5 minutes of its lifetime remain.',
+    '- Retry once on 401 after a refresh.',
+    '- Added `TestLoginRefreshBeforeExpiry`.',
+  ].join('\n'),
+  reviewSummary4: 'Status reads now bypass the list cache after a status change. Added a regression test for the list endpoint.',
+}
+
+/**
+ * The agents fixture (`.tmp/agents-ui/fixture.md`), applied after the rest of
+ * the seed: agents, delegations, APT-41/42 reported by agents, runs, requests,
+ * a comment with a mention. `at(offset)` is relative to the seeding instant.
+ */
+function seedAgents(seeded: MockState) {
+  const base = Math.max(Date.now(), seeded.clock)
+  const at = (offset: number) => new Date(base + offset).toISOString()
+  const id = (offset: number) => ulid(base + offset, seeded.seq++)
+  const issueNo = (number: number) => seeded.issues.find((issue) => issue.number === number)!
+  const agents = AGENT_FIXTURE.agents.map((fixture): StoredAgent => ({
+    id: id(fixture.created),
+    handle: fixture.handle,
+    name: fixture.name,
+    description: fixture.description,
+    owner: fixture.owner,
+    disabled: fixture.disabled,
+    createdAt: at(fixture.created),
+    updatedAt: at(fixture.updated),
+    lastSeenAt: at(fixture.seen),
+  }))
+  seeded.agents = agents
+  const agent = (handle: string) => agents.find((candidate) => candidate.handle === handle)!
+  const stub = (handle: string): Actor => ({ sub: agentSub(agent(handle).id), name: agent(handle).name, kind: 'agent' })
+  for (const [number, handle, delegator, offset] of AGENT_FIXTURE.delegations) {
+    const issue = issueNo(number)
+    const time = at(offset)
+    const actor = personActor(delegator)
+    seeded.activities.push({ id: id(offset), issueId: issue.id, actor, field: 'assignee', from: issue.assignee, to: stub(handle), createdAt: time })
+    seeded.activities.push({ id: id(offset), issueId: issue.id, actor, field: 'delegator', from: null, to: delegator, createdAt: time })
+    Object.assign(issue, { assignee: stub(handle), delegator, updatedAt: time })
+  }
+  // APT-41 and APT-42: reported by agents, appended after the existing issues.
+  const backlog = seeded.statuses.find((status) => status.name === 'Backlog')!
+  const todo = seeded.statuses.find((status) => status.name === 'Todo')!
+  const platformApi = seeded.projects.find((project) => project.name === 'Platform API')?.id ?? null
+  const reported = (title: string, type: IssueType, priority: Priority, statusId: string, reporter: string, offset: number, description: string, extra: Partial<StoredIssue>) => {
+    const time = at(offset)
+    const issue: StoredIssue = {
+      id: id(offset),
+      number: seeded.issues.length + 1,
+      title,
+      description,
+      type,
+      priority,
+      statusId,
+      assignee: null,
+      reporter: stub(reporter),
+      delegator: null,
+      labelIds: [],
+      projectId: platformApi,
+      parentId: null,
+      dueOn: null,
+      report: null,
+      createdAt: time,
+      updatedAt: time,
+      completedAt: null,
+      deleted: false,
+      estimate: null,
+      sprintId: null,
+      ...extra,
+    }
+    seeded.issues.push(issue)
+    seeded.activities.push({ id: id(offset), issueId: issue.id, actor: issue.reporter, field: 'created', from: null, to: null, createdAt: time })
+    return issue
+  }
+  const apt41 = reported('Three reports describe the same stale status', 'task', 'high', backlog.id, 'claude', -5 * HOUR, 'APT-4, APT-22 and APT-28 all show a status that lags behind the real one by one refresh. Proposal: keep APT-4 and close the other two as duplicates.', {})
+  reported('Flaky test: lease renewal in store/runs_test', 'bug', 'medium', todo.id, 'astra', -3 * HOUR, 'TestHeartbeatRenewsLease fails about 1 in 30 runs on CI.', {
+    assignee: stub('astra'),
+    delegator: agent('astra').owner,
+    report: { environment: 'local', surface: 'platform-api', version: '0.1.13', steps: 'go test -count=30 ./cmd/server/internal/store -run TestHeartbeatRenewsLease', expected: 'All runs pass.', actual: 'One run fails with lease_expired.' },
+  })
+  const run = (number: number, handle: string, state: StoredRunState, session: string, note: string, started: number, heartbeat: number, finished: number | null, summary = '', links: Link[] = []): StoredRun => {
+    const stored: StoredRun = {
+      id: id(started),
+      issueId: issueNo(number).id,
+      agentId: agent(handle).id,
+      state,
+      reason: null,
+      session,
+      note,
+      summary,
+      links,
+      startedAt: at(started),
+      heartbeatAt: at(heartbeat),
+      leaseExpiresAt: at(heartbeat + LEASE_MS),
+      finishedAt: finished === null ? null : at(finished),
+    }
+    seeded.runs.push(stored)
+    return stored
+  }
+  const run15 = run(15, 'astra', 'running', 'astra · lane-2', 'running go test ./cmd/server/... after removing 14 unused fixtures', -35 * MINUTE, -2 * MINUTE, null)
+  const run27 = run(27, 'opus-ui', 'waiting', 'opus-ui · a11y pass', 'waiting for a decision on the close-button label', -40 * MINUTE, -1 * MINUTE, null)
+  run(9, 'astra', 'running', 'astra · lane-1', 'comparing the Gateway page with the current kubeconfig flow', -3 * HOUR, -52 * MINUTE, null)
+  const run16 = run(16, 'astra', 'succeeded', 'astra · lane-2', 'opening the pull request', -2 * HOUR, -25 * MINUTE, -25 * MINUTE, AGENT_FIXTURE.reviewSummary16, [
+    { kind: 'pr', url: 'https://github.com/appthrust/tracker/pull/142', title: 'Refresh the CLI login before the token expires' },
+  ])
+  const run4 = run(4, 'astra', 'succeeded', 'astra · lane-1', 'opening the pull request', -26 * HOUR, -24 * HOUR, -24 * HOUR, AGENT_FIXTURE.reviewSummary4, [
+    { kind: 'pr', url: 'https://github.com/appthrust/tracker/pull/138', title: 'Invalidate the status cache on change' },
+  ])
+  const subOf = (handle: string) => agentSub(agent(handle).id)
+  const request = (number: number, kind: RequestKind, fromSub: string, toSub: string | null, runId: string | null, title: string, created: number, extra: Partial<StoredRequest> = {}): StoredRequest => {
+    const stored: StoredRequest = {
+      id: id(created),
+      issueId: issueNo(number).id,
+      kind,
+      fromSub,
+      toSub,
+      title,
+      body: '',
+      options: kind === 'question' ? [] : [...DECISION_OPTIONS],
+      runId,
+      state: 'open',
+      answer: null,
+      createdAt: at(created),
+      answerAcked: false,
+      ...extra,
+    }
+    seeded.requests.push(stored)
+    return stored
+  }
+  request(27, 'question', subOf('opus-ui'), MOCK_PEOPLE.alex.sub, run27.id, "Which label should the panel's close button use?", -8 * MINUTE, {
+    body: 'The panel\'s close button has no visible text. "Close" matches the rest of the app; "Dismiss" is what the screen reader announces today.',
+    options: ['Close', 'Dismiss', 'Keep both: visible "Close", spoken "Dismiss"'],
+  })
+  request(15, 'question', subOf('astra'), MOCK_PEOPLE.alex.sub, run15.id, 'Delete the fixtures under testdata/legacy too?', -28 * MINUTE, {
+    options: ['Yes, delete them', 'No, keep them'],
+    state: 'answered',
+    answer: { option: 'Yes, delete them', body: 'They are unused since 0.1.7.', bySub: MOCK_PEOPLE.alex.sub, at: at(-20 * MINUTE) },
+    answerAcked: true,
+  })
+  request(16, 'review', subOf('astra'), MOCK_PEOPLE.alex.sub, run16.id, `Review: ${issueNo(16).title}`, -25 * MINUTE, { body: run16.summary })
+  request(4, 'review', subOf('astra'), MOCK_PEOPLE.sam.sub, run4.id, `Review: ${issueNo(4).title}`, -24 * HOUR, {
+    body: run4.summary,
+    state: 'answered',
+    answer: { option: 'reject', body: 'Still stale right after a status change: the 304 path keeps the old ETag. Please add a test for it.', bySub: MOCK_PEOPLE.sam.sub, at: at(-20 * HOUR) },
+  })
+  request(1, 'approval', subOf('claude'), null, null, 'Add APT-1 to the current sprint?', -90 * MINUTE, { body: 'Two people lost their filters on appthrust.dev this week. It is urgent but sits in the backlog without a sprint.' })
+  request(21, 'question', MOCK_PEOPLE.alex.sub, subOf('claude'), null, 'Which open bugs look like duplicates of APT-22?', -3 * HOUR, {
+    state: 'answered',
+    answer: { option: null, body: 'APT-4 and APT-28 describe the same stale-cache symptom; I filed APT-41 to merge them.', bySub: subOf('claude'), at: at(-2 * HOUR) },
+  })
+  const comment = (number: number, author: Actor, offset: number, text: string) => {
+    const stored: StoredComment = { id: id(offset), issueId: issueNo(number).id, author, body: text, createdAt: at(offset), editedAt: null, deleted: false }
+    seeded.comments.push(stored)
+    return stored
+  }
+  const mention = comment(22, personActor(MOCK_PEOPLE.sam), -1 * HOUR, '@astra could you check whether the cursor encoding changed with APT-15? The skipped rows start after page 2.')
+  seeded.mentions.push({ commentId: mention.id, issueId: mention.issueId, targetSub: subOf('astra'), acked: false })
+  comment(apt41.number, stub('claude'), -5 * HOUR, 'Filed from triage. Evidence: the three reports name the same endpoint and the same one-refresh lag.')
+  return seeded
+}
+
+let state = seedAgents(seedTracker())
+
+/** The mock's wall clock: real time plus the `__mock/clock` offset. */
+const wallClock = () => Date.now() + state.offset
 
 /** Strictly increasing wall-clock time, so two writes in one millisecond still order. */
 function now(): string {
-  state.clock = Math.max(Date.now(), state.clock + 1)
+  state.clock = Math.max(wallClock(), state.clock + 1)
   return new Date(state.clock).toISOString()
 }
 const nextId = () => ulid(state.clock, state.seq++)
+
+const callerContext = new AsyncLocalStorage<Caller>()
+/** The caller of the request being handled (`trackerRoutes` runs each request inside its own context, so concurrent requests never mix). */
+const who = (): Caller => callerContext.getStore() ?? { actor: personActor(state.caller), role: state.role, agent: null, scopes: ACCESS_KEY_SCOPES }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
 const fail = (status: number, error: string, message: string, issues?: ApiError['issues']) => json({ error, message, ...(issues ? { issues } : {}) } satisfies ApiError, status)
@@ -500,7 +791,8 @@ async function body(request: Request): Promise<Record<string, unknown> | undefin
   }
 }
 
-const isAdmin = () => state.role === 'Admin'
+/** Signed-in Admins only: an agent's key acts with role Viewer (API.md "Access Keys"). */
+const isAdmin = () => who().agent === null && who().role === 'Admin'
 const bytes = (text: string) => new TextEncoder().encode(text).length
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string')
 const live = () => state.issues.filter((issue) => !issue.deleted)
@@ -627,8 +919,12 @@ function summary(issue: StoredIssue): IssueSummary {
     type: issue.type,
     priority: issue.priority,
     statusId: issue.statusId,
-    assignee: issue.assignee,
-    reporter: issue.reporter,
+    assignee: issue.assignee ? actorView(issue.assignee) : null,
+    reporter: actorView(issue.reporter),
+    // People on the wire carry `kind`, as the server writes every Person-valued field (delegator, owner).
+    delegator: issue.delegator ? personActor(issue.delegator) : null,
+    activeRun: activeRunOf(issue.id) ? runView(activeRunOf(issue.id)!) : null,
+    openRequestCount: state.requests.filter((request) => request.issueId === issue.id && request.state === 'open').length,
     labelIds: [...issue.labelIds],
     projectId: issue.projectId,
     parent: parent ? ref(parent) : null,
@@ -672,8 +968,104 @@ function personFor(sub: string): Person {
   return Object.values(MOCK_PEOPLE).find((person) => person.sub === sub) ?? { sub, name: sub }
 }
 
-function record(issue: StoredIssue, field: ActivityField, from: unknown, to: unknown, createdAt: string) {
-  state.activities.push({ id: nextId(), issueId: issue.id, actor: state.caller, field, from, to, createdAt })
+function record(issue: StoredIssue, field: ActivityField, from: unknown, to: unknown, createdAt: string, actor: Actor = who().actor) {
+  state.activities.push({ id: nextId(), issueId: issue.id, actor, field, from, to, createdAt })
+}
+
+// --- agents (API.md "Agents") --------------------------------------------------------
+
+const agentById = (id: string | null) => (id ? state.agents.find((agent) => agent.id === id) : undefined)
+const agentBySub = (sub: string) => agentById(agentIdOf(sub))
+
+function agentActor(agent: StoredAgent): Actor {
+  return { sub: agentSub(agent.id), name: agent.name, kind: 'agent', agent: { id: agent.id, handle: agent.handle, owner: personActor(agent.owner), disabled: agent.disabled } }
+}
+
+/** A stored actor as readers see it now: agents resolve to their current name, owner and state; people keep their stored name. */
+function actorView(actor: Actor): Actor {
+  const agent = agentBySub(actor.sub)
+  if (agent) return agentActor(agent)
+  const { agent: _agent, ...person } = actor
+  return { ...person, kind: 'person' }
+}
+
+/** The Actor for a subject: an agent, else a person (seeded name or the subject itself). */
+function actorFor(sub: string): Actor {
+  const agent = agentBySub(sub)
+  return agent ? agentActor(agent) : personActor(personFor(sub))
+}
+
+function agentView(agent: StoredAgent): Agent {
+  const runs = state.runs.filter((run) => run.agentId === agent.id)
+  return {
+    ...agent,
+    owner: personActor(agent.owner),
+    activeRuns: runs.filter((run) => isLiveRun({ state: derived(run) })).length,
+    openRequests: state.requests.filter((request) => request.fromSub === agentSub(agent.id) && request.state === 'open').length,
+  }
+}
+
+/** The run's state as readers see it (`stalled` once the lease has passed). */
+const derived = (run: StoredRun) => deriveRunState(run.state, run.leaseExpiresAt, wallClock())
+const isStalledRun = (run: StoredRun) => derived(run) === 'stalled'
+/** The issue's non-terminal run (live or stalled), if any. */
+const activeRunOf = (issueId: string) => state.runs.find((run) => run.issueId === issueId && !isTerminalRun(run.state))
+
+function runView(run: StoredRun): Run {
+  const { issueId, agentId, ...rest } = run
+  const issue = state.issues.find((candidate) => candidate.id === issueId)!
+  return { ...rest, issue: ref(issue), agent: agentActor(agentById(agentId)!), state: derived(run), links: run.links.map((link) => ({ ...link })) }
+}
+
+function requestView(request: StoredRequest): TrackerRequest {
+  const issue = state.issues.find((candidate) => candidate.id === request.issueId)!
+  return {
+    id: request.id,
+    issue: ref(issue),
+    kind: request.kind,
+    from: actorFor(request.fromSub),
+    to: request.toSub === null ? null : actorFor(request.toSub),
+    title: request.title,
+    body: request.body,
+    options: [...request.options],
+    runId: request.runId,
+    state: request.state,
+    answer: request.answer ? { option: request.answer.option, body: request.answer.body, by: actorFor(request.answer.bySub), at: request.answer.at } : null,
+    createdAt: request.createdAt,
+  }
+}
+
+function commentView({ deleted: _deleted, ...comment }: StoredComment): Comment {
+  return { ...comment, author: actorView(comment.author), mentions: state.mentions.filter((mention) => mention.commentId === comment.id).map((mention) => actorFor(mention.targetSub)) }
+}
+
+/** Appends one Event in the transaction of the write it describes (`seq` from the workspace counter). */
+function emit(type: EventType, issue: StoredIssue | null, data: unknown, at: string, actor: Actor = who().actor) {
+  state.eventSeq += 1
+  state.events.push({ seq: state.eventSeq, at, issue: issue ? ref(issue) : null, actor: actorView(actor), type, data })
+}
+
+/** Withdraws the run's open requests (whatever ends a run without success, and a successful finish for its questions). */
+function withdrawRunRequests(run: StoredRun, time: string, kinds: readonly RequestKind[] = ['question', 'approval', 'review']) {
+  const issue = issueById(run.issueId) ?? state.issues.find((candidate) => candidate.id === run.issueId)!
+  for (const request of state.requests.filter((candidate) => candidate.runId === run.id && candidate.state === 'open' && kinds.includes(candidate.kind))) {
+    request.state = 'withdrawn'
+    emit('request.withdrawn', issue, request.id, time)
+  }
+}
+
+/** Ends a non-terminal run without success (`canceled` or `failed`) and withdraws its open requests. */
+function endRun(run: StoredRun, state_: 'canceled' | 'failed', reason: string, time: string) {
+  const issue = state.issues.find((candidate) => candidate.id === run.issueId)!
+  Object.assign(run, { state: state_, reason, finishedAt: time })
+  withdrawRunRequests(run, time)
+  emit(state_ === 'canceled' ? 'run.canceled' : 'run.finished', issue, run.id, time)
+}
+
+/** After a request on the run closes: a waiting run with no open request left is running again. */
+function resumeIfClear(runId: string | null) {
+  const run = state.runs.find((candidate) => candidate.id === runId)
+  if (run?.state === 'waiting' && !state.requests.some((request) => request.runId === run.id && request.state === 'open')) run.state = 'running'
 }
 
 function closedStatus(statusId: string): boolean {
@@ -807,8 +1199,16 @@ function parseFilter(raw: string | null): Filter | Problem {
   }
   const enumProblem = (key: string, allowed: readonly string[]) =>
     (filter[key] as string[] | undefined)?.some((value) => !allowed.includes(value)) ? { path: `filter.${key}`, message: `${key} must be one of ${allowed.join(', ')}` } : undefined
-  const problem = enumProblem('category', CATEGORIES) ?? enumProblem('type', ISSUE_TYPES) ?? enumProblem('priority', PRIORITIES) ?? enumProblem('surface', SURFACES)
+  const problem =
+    enumProblem('category', CATEGORIES) ??
+    enumProblem('type', ISSUE_TYPES) ??
+    enumProblem('priority', PRIORITIES) ??
+    enumProblem('surface', SURFACES) ??
+    enumProblem('assigneeKind', ['person', 'agent']) ??
+    enumProblem('run', ['active', 'stalled', 'none']) ??
+    enumProblem('request', ['open', 'mine'])
   if (problem) return problem
+  if ((filter.agent as string[] | undefined)?.some((value) => !ULID_PATTERN.test(value))) return { path: 'filter.agent', message: 'agent must list agent ids' }
   const reporter = filter.reporter as string[] | undefined
   if (reporter && (reporter.length > REPORTER_FILTER_MAX || reporter.some((value) => value.length === 0 || value.length > 4096)))
     return { path: 'filter.reporter', message: `reporter must list at most ${REPORTER_FILTER_MAX} subjects of 1 to 4096 characters` }
@@ -840,12 +1240,42 @@ function listIssues(url: URL): Response {
   const descriptions = new Map(state.issues.map((issue) => [issue.id, issue.description]))
   const matching = live()
     .map(summary)
-    .filter((issue) => matchesFilter(issue, filter, { me: state.caller.sub, statuses: state.statuses, description: (candidate) => descriptions.get(candidate.id) ?? '', activeSprintId: activeSprint()?.id ?? null }))
+    .filter((issue) =>
+      matchesFilter(issue, filter, {
+        me: who().actor.sub,
+        statuses: state.statuses,
+        description: (candidate) => descriptions.get(candidate.id) ?? '',
+        activeSprintId: activeSprint()?.id ?? null,
+        raisedOpenRequest: (candidate) => state.requests.some((stored) => stored.issueId === candidate.id && stored.state === 'open' && stored.fromSub === who().actor.sub),
+      })
+    )
     .sort(compareIssues(sort))
   const page = matching.slice(offset, offset + limit)
   const next = offset + limit < matching.length ? Buffer.from(String(offset + limit), 'utf8').toString('base64url') : null
   return json({ items: page, nextCursor: next })
 }
+
+const personOf = ({ kind: _kind, agent: _agent, ...person }: Actor): Person => person
+
+/**
+ * `assigneeSub` on an issue write: a person's subject, or `agent:<id>` of an
+ * active agent (unknown or disabled → 400). An agent assigns only itself, on
+ * issues it reported (403). Assigning an agent makes the delegator the person
+ * who assigned, or the assigning agent's owner.
+ */
+function resolveAssignee(sub: string, reporterSub: string): { assignee: Actor; delegator: Person | null } | Response {
+  const caller = who()
+  const id = agentIdOf(sub)
+  if (id === null) return { assignee: personActor(personFor(sub)), delegator: null }
+  const agent = agentById(id)
+  if (!agent) return invalid('assigneeSub', 'unknown agent')
+  if (agent.disabled) return invalid('assigneeSub', 'the agent is disabled')
+  if (caller.agent && (caller.agent.id !== agent.id || reporterSub !== caller.actor.sub)) return forbidden()
+  return { assignee: { sub, name: agent.name, kind: 'agent' }, delegator: caller.agent ? caller.agent.owner : personOf(caller.actor) }
+}
+
+/** An agent setting a completed status under the `review` policy (403). */
+const completionRefused = (statusId: string) => who().agent !== null && categoryOf(statusId) === 'completed' && !maySetCompleted('agent', state.workspace.agentCompletion)
 
 async function createIssue(request: Request): Promise<Response> {
   const input = await body(request)
@@ -864,6 +1294,9 @@ async function createIssue(request: Request): Promise<Response> {
   const statusId = typeof input.statusId === 'string' ? input.statusId : backlog.id
   if (!state.statuses.some((status) => status.id === statusId)) return invalid('statusId', 'unknown status')
   if (input.assigneeSub !== undefined && input.assigneeSub !== null && typeof input.assigneeSub !== 'string') return invalid('assigneeSub', 'assigneeSub must be a string')
+  if (completionRefused(statusId)) return forbidden()
+  const assigned = typeof input.assigneeSub === 'string' ? resolveAssignee(input.assigneeSub, who().actor.sub) : { assignee: null, delegator: null }
+  if (assigned instanceof Response) return assigned
   if (input.labelIds !== undefined && (!isStringArray(input.labelIds) || input.labelIds.some((id) => !state.labels.some((label) => label.id === id)))) return invalid('labelIds', 'unknown label')
   if (input.parentId !== undefined && input.parentId !== null && (typeof input.parentId !== 'string' || !issueById(input.parentId))) return invalid('parentId', 'unknown parent')
   const parent = issueById((input.parentId as string | null | undefined) ?? null)
@@ -889,8 +1322,9 @@ async function createIssue(request: Request): Promise<Response> {
     type,
     priority: (input.priority as Priority | undefined) ?? 'none',
     statusId,
-    assignee: typeof input.assigneeSub === 'string' ? personFor(input.assigneeSub) : null,
-    reporter: state.caller,
+    assignee: assigned.assignee,
+    reporter: who().actor,
+    delegator: assigned.delegator,
     labelIds: [...new Set((input.labelIds as string[] | undefined) ?? [])],
     projectId: typeof input.projectId === 'string' ? input.projectId : null,
     parentId: (input.parentId as string | undefined) ?? null,
@@ -905,6 +1339,7 @@ async function createIssue(request: Request): Promise<Response> {
   }
   state.issues.push(issue)
   record(issue, 'created', null, null, time)
+  emit('issue.created', issue, issue.id, time)
   writeLedger(issue.id, { sprintId: null, size: null, category: undefined, deleted: false }, standingOf(issue), time)
   return json(full(issue), 201)
 }
@@ -912,9 +1347,16 @@ async function createIssue(request: Request): Promise<Response> {
 async function updateIssue(issue: StoredIssue, request: Request): Promise<Response> {
   const input = await body(request)
   if (!input) return invalid('', 'A JSON object is required')
-  const known = ['title', 'description', 'type', 'priority', 'statusId', 'assigneeSub', 'labelIds', 'parentId', 'blocks', 'dueOn', 'report', 'projectId', 'estimate', 'sprintId']
+  const known = ['title', 'description', 'type', 'priority', 'statusId', 'assigneeSub', 'labelIds', 'parentId', 'blocks', 'dueOn', 'report', 'projectId', 'estimate', 'sprintId', 'expectedUpdatedAt']
   const unknownKey = Object.keys(input).find((key) => !known.includes(key))
   if (unknownKey) return invalid(unknownKey, `unknown field ${unknownKey}`)
+  // An agent edits an issue's fields only as its assignee or reporter.
+  const caller = who()
+  if (caller.agent && issue.assignee?.sub !== caller.actor.sub && issue.reporter.sub !== caller.actor.sub) return forbidden()
+  if ('expectedUpdatedAt' in input) {
+    if (typeof input.expectedUpdatedAt !== 'string') return invalid('expectedUpdatedAt', 'expectedUpdatedAt must be an RFC 3339 timestamp')
+    if (input.expectedUpdatedAt !== issue.updatedAt) return conflict('the issue changed since it was read; reload it and apply the change again')
+  }
   if ('title' in input) {
     const problem = titleProblem(input.title)
     if (problem) return invalid(problem.path, problem.message)
@@ -923,7 +1365,11 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
   if ('type' in input && !ISSUE_TYPES.includes(input.type as IssueType)) return invalid('type', 'unknown type')
   if ('priority' in input && !PRIORITIES.includes(input.priority as Priority)) return invalid('priority', 'unknown priority')
   if ('statusId' in input && !state.statuses.some((status) => status.id === input.statusId)) return invalid('statusId', 'unknown status')
+  if ('statusId' in input && input.statusId !== issue.statusId && completionRefused(input.statusId as string)) return forbidden()
   if ('assigneeSub' in input && input.assigneeSub !== null && typeof input.assigneeSub !== 'string') return invalid('assigneeSub', 'assigneeSub must be a string or null')
+  const assigneeChanged = 'assigneeSub' in input && (input.assigneeSub ?? null) !== (issue.assignee?.sub ?? null)
+  const assigned = !assigneeChanged ? undefined : typeof input.assigneeSub === 'string' ? resolveAssignee(input.assigneeSub, issue.reporter.sub) : { assignee: null, delegator: null }
+  if (assigned instanceof Response) return assigned
   if ('labelIds' in input && (!isStringArray(input.labelIds) || input.labelIds.some((id) => !state.labels.some((label) => label.id === id)))) return invalid('labelIds', 'unknown label')
   if ('parentId' in input && input.parentId !== null) {
     if (typeof input.parentId !== 'string' || !issueById(input.parentId)) return invalid('parentId', 'unknown parent')
@@ -977,10 +1423,10 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
 
   const time = now()
   const before = standingOf(issue)
-  let changed = false
+  const fields: ActivityField[] = []
   const change = (field: ActivityField, from: unknown, to: unknown) => {
     record(issue, field, from, to, time)
-    changed = true
+    fields.push(field)
   }
   if ('title' in input && (input.title as string).trim() !== issue.title) {
     change('title', issue.title, (input.title as string).trim())
@@ -1007,10 +1453,16 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
     issue.statusId = input.statusId as string
     issue.completedAt = closedStatus(issue.statusId) ? time : null
   }
-  if ('assigneeSub' in input && (input.assigneeSub ?? null) !== (issue.assignee?.sub ?? null)) {
-    const next = typeof input.assigneeSub === 'string' ? personFor(input.assigneeSub) : null
-    change('assignee', issue.assignee, next)
-    issue.assignee = next
+  if (assigned) {
+    // Away from an agent: its non-terminal run (stalled included) is canceled in the same write.
+    const run = issue.assignee && agentIdOf(issue.assignee.sub) ? activeRunOf(issue.id) : undefined
+    if (run) endRun(run, 'canceled', 'reassigned', time)
+    change('assignee', issue.assignee ? actorView(issue.assignee) : null, assigned.assignee ? actorView(assigned.assignee) : null)
+    issue.assignee = assigned.assignee
+    if ((assigned.delegator?.sub ?? null) !== (issue.delegator?.sub ?? null)) {
+      change('delegator', issue.delegator, assigned.delegator)
+    }
+    issue.delegator = assigned.delegator
   }
   if ('labelIds' in input) {
     const next = [...new Set(input.labelIds as string[])]
@@ -1053,21 +1505,29 @@ async function updateIssue(issue: StoredIssue, request: Request): Promise<Respon
     issue.sprintId = nextSprintId
   }
   writeLedger(issue.id, before, standingOf(issue), time)
-  if (changed) issue.updatedAt = time
+  if (fields.length > 0) {
+    issue.updatedAt = time
+    emit('issue.updated', issue, { fields: [...new Set(fields)] }, time)
+  }
   return json(full(issue))
 }
 
+/** An activity as readers see it: the actor, and assignee values, resolved to current agent names and state. */
+function activityView(activity: Activity): Activity {
+  const resolve = (value: unknown) => (activity.field === 'assignee' && value && typeof value === 'object' ? actorView(value as Actor) : value)
+  return { ...activity, actor: actorView(activity.actor), from: resolve(activity.from), to: resolve(activity.to) }
+}
+
+/** Activities, comments, runs (at `startedAt`) and requests (at `createdAt`), ascending. */
 function timeline(issue: StoredIssue): Response {
-  const items: TimelineItem[] = [
-    ...state.activities.filter((activity) => activity.issueId === issue.id).map((activity): TimelineItem => ({ kind: 'activity', activity })),
-    ...state.comments
-      .filter((comment) => comment.issueId === issue.id && !comment.deleted)
-      .map(({ deleted: _deleted, ...comment }): TimelineItem => ({ kind: 'comment', comment })),
+  const stamped: [string, string, TimelineItem][] = [
+    ...state.activities.filter((activity) => activity.issueId === issue.id).map((activity): [string, string, TimelineItem] => [activity.createdAt, activity.id, { kind: 'activity', activity: activityView(activity) }]),
+    ...state.comments.filter((comment) => comment.issueId === issue.id && !comment.deleted).map((comment): [string, string, TimelineItem] => [comment.createdAt, comment.id, { kind: 'comment', comment: commentView(comment) }]),
+    ...state.runs.filter((run) => run.issueId === issue.id).map((run): [string, string, TimelineItem] => [run.startedAt, run.id, { kind: 'run', run: runView(run) }]),
+    ...state.requests.filter((request) => request.issueId === issue.id).map((request): [string, string, TimelineItem] => [request.createdAt, request.id, { kind: 'request', request: requestView(request) }]),
   ]
-  const at = (item: TimelineItem) => (item.kind === 'activity' ? item.activity.createdAt : item.comment.createdAt)
-  const id = (item: TimelineItem) => (item.kind === 'activity' ? item.activity.id : item.comment.id)
-  items.sort((a, b) => at(a).localeCompare(at(b)) || id(a).localeCompare(id(b)))
-  return json({ items })
+  stamped.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]))
+  return json({ items: stamped.map(([, , item]) => item) })
 }
 
 async function attach(issue: StoredIssue, request: Request): Promise<Response> {
@@ -1093,7 +1553,7 @@ async function attach(issue: StoredIssue, request: Request): Promise<Response> {
     mediaType,
     size: file.size,
     url: `${BASE}/attachments/${id}`,
-    uploader: state.caller,
+    uploader: who().actor,
     createdAt: now(),
     bytes: new Uint8Array(await file.arrayBuffer()),
     deleted: false,
@@ -1105,7 +1565,7 @@ async function attach(issue: StoredIssue, request: Request): Promise<Response> {
 }
 
 function viewsVisible() {
-  return state.views.filter((view) => view.shared || view.ownerSub === state.caller.sub).sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt))
+  return state.views.filter((view) => view.shared || view.ownerSub === who().actor.sub).sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt))
 }
 
 function viewOut({ ownerSub: _ownerSub, ...view }: View & { ownerSub: string }): View {
@@ -1273,6 +1733,8 @@ async function sprintRoutes(request: Request, url: URL, route: string): Promise<
       return json(burndownOf(sprint, scope.unit, scope.keep))
     }
     if (method !== 'POST' || action === 'burndown') return notFound()
+    // Sprint start and close stay with people (API.md "Agents", Authorization).
+    if (who().agent) return forbidden()
     if (action === 'start') {
       if (sprintState(sprint) !== 'planned') return conflict('only a planned sprint can be started')
       if (activeSprint()) return conflict('another sprint is active; close it first')
@@ -1299,15 +1761,447 @@ async function sprintRoutes(request: Request, url: URL, route: string): Promise<
   return undefined
 }
 
+// --- agents, runs, requests, inbox, events (API.md "Agents") --------------------------------
+
+const IDEMPOTENCY_TTL_MS = 24 * HOUR
+const EVENTS_LIMIT_DEFAULT = 100
+const EVENTS_LIMIT_MAX = 500
+const REQUEST_OPTION_MAX = 200
+
+const runById = (id: string | null) => (id ? state.runs.find((run) => run.id === id) : undefined)
+const requestById = (id: string) => state.requests.find((request) => request.id === id)
+/** The parts of a stored request the pure rules read. */
+const requestShape = (request: StoredRequest) => ({ kind: request.kind, state: request.state, from: { sub: request.fromSub }, to: request.toSub === null ? null : { sub: request.toSub } })
+
+/** `domain.Actionable` for one agent over one live issue. */
+function actionableFor(issue: StoredIssue, agentSubject: string): boolean {
+  const run = activeRunOf(issue.id)
+  return isActionable({
+    deleted: issue.deleted,
+    category: categoryOf(issue.statusId),
+    activeRun: run ? { state: derived(run), agent: { sub: agentSub(run.agentId) } } : null,
+    agentSub: agentSubject,
+    ownOpenRequest: state.requests.some((request) => request.issueId === issue.id && request.fromSub === agentSubject && request.state === 'open' && !(request.runId && runById(request.runId) && isStalledRun(runById(request.runId)!))),
+    openBlocker: state.blocks.some((block) => block.blockedId === issue.id && issueById(block.blockerId) !== undefined && !closedStatus(issueById(block.blockerId)!.statusId)),
+  })
+}
+
+/** The caller's queue: open requests for them (oldest first), then unacknowledged answers and mentions (newest first), then — for agents — actionable assignments. */
+function inboxOf(caller: Caller): InboxItem[] {
+  const me = caller.actor
+  const requests = state.requests
+    .filter((request) => issueById(request.issueId) && isAddressedTo(requestShape(request), me))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((request): InboxItem => ({ kind: 'request', request: requestView(request) }))
+  const answers = state.requests
+    .filter((request) => issueById(request.issueId) && request.fromSub === me.sub && request.state === 'answered' && !request.answerAcked)
+    .map((request): [string, InboxItem] => [request.answer!.at, { kind: 'answer', request: requestView(request) }])
+  const mentions = state.mentions
+    .filter((mention) => mention.targetSub === me.sub && !mention.acked)
+    .flatMap((mention): [string, InboxItem][] => {
+      const comment = state.comments.find((candidate) => candidate.id === mention.commentId && !candidate.deleted)
+      const issue = issueById(mention.issueId)
+      return comment && issue ? [[comment.createdAt, { kind: 'mention', comment: commentView(comment), issue: ref(issue) }]] : []
+    })
+  const updates = [...answers, ...mentions].sort((a, b) => b[0].localeCompare(a[0])).map(([, item]) => item)
+  const assignments = caller.agent
+    ? live()
+        .filter((issue) => issue.assignee?.sub === me.sub && actionableFor(issue, me.sub))
+        .map(summary)
+        .sort(compareActionable(activeSprint()?.id ?? null))
+        .map((issue): InboxItem => ({ kind: 'assignment', issue }))
+    : []
+  return [...requests, ...updates, ...assignments]
+}
+
+function agentInputProblem(input: Record<string, unknown>, creating: boolean): Problem | undefined {
+  const known = creating ? ['handle', 'name', 'description', 'ownerSub'] : ['name', 'description', 'ownerSub', 'disabled']
+  if (!creating && 'handle' in input) return { path: 'handle', message: 'handle is immutable' }
+  const unknownKey = Object.keys(input).find((key) => !known.includes(key))
+  if (unknownKey) return { path: unknownKey, message: `unknown field ${unknownKey}` }
+  if (creating && (typeof input.handle !== 'string' || !AGENT_HANDLE_PATTERN.test(input.handle))) return { path: 'handle', message: 'handle must match ^[a-z][a-z0-9-]{1,30}$' }
+  if ((creating || 'name' in input) && (typeof input.name !== 'string' || !input.name.trim() || Array.from(input.name.trim()).length > AGENT_NAME_MAX)) return { path: 'name', message: `name must be 1–${AGENT_NAME_MAX} characters` }
+  if ('description' in input && (typeof input.description !== 'string' || bytes(input.description) > AGENT_DESCRIPTION_MAX_BYTES)) return { path: 'description', message: `description must be at most ${AGENT_DESCRIPTION_MAX_BYTES} bytes` }
+  if ((creating || 'ownerSub' in input) && (typeof input.ownerSub !== 'string' || !input.ownerSub || agentIdOf(input.ownerSub) !== null)) return { path: 'ownerSub', message: 'ownerSub must name a person' }
+  if ('disabled' in input && typeof input.disabled !== 'boolean') return { path: 'disabled', message: 'disabled must be a boolean' }
+  return undefined
+}
+
+const isHttpsUrl = (value: unknown) => {
+  if (typeof value !== 'string') return false
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function linksProblem(value: unknown): Problem | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length > RUN_LINKS_MAX) return { path: 'links', message: `links must be a list of at most ${RUN_LINKS_MAX}` }
+  for (const [index, link] of value.entries()) {
+    const candidate = link as Partial<Link> | null
+    if (!candidate || !['pr', 'commit', 'url'].includes(candidate.kind as string)) return { path: `links.${index}.kind`, message: 'kind must be pr, commit or url' }
+    if (!isHttpsUrl(candidate.url)) return { path: `links.${index}.url`, message: 'url must be an https URL' }
+    if (typeof candidate.title !== 'string' || Array.from(candidate.title).length > LINK_TITLE_MAX) return { path: `links.${index}.title`, message: `title must be at most ${LINK_TITLE_MAX} characters` }
+  }
+  return undefined
+}
+
+const textProblem = (input: Record<string, unknown>, key: string, max: number): Problem | undefined =>
+  key in input && (typeof input[key] !== 'string' || Array.from(input[key] as string).length > max) ? { path: key, message: `${key} must be at most ${max} characters` } : undefined
+
+/** The agent protocol for an agent, generated from the routes it uses. */
+function agentGuide(): string {
+  const rows: [string, string][] = [
+    ['GET /inbox', 'Your queue: requests addressed to you, answers to your requests, mentions, then the issues assigned to you that you can act on (an `assignment` carries `activeRun` when you already hold a live run: resume it, do not start again).'],
+    ['POST /inbox/ack', '`{ answers?: requestIds, mentions?: commentIds }` once you have read them.'],
+    ['POST /issues/{id}/runs', '`{ session?, note? }` starts a run on an issue assigned to you. The lease is 10 minutes.'],
+    ['POST /runs/{id}/heartbeat', '`{ note? }` renews the lease; say what you are doing in the note. A 409 means the run ended or stalled: stop and start a fresh run.'],
+    ['POST /issues/{id}/requests', '`{ kind: "question" | "approval", title, body?, options?, to?, runId? }`. Omit `to` to ask your delegator; `to: null` asks any person. With `runId` the run waits until every request is answered.'],
+    ['POST /runs/{id}/finish', '`{ outcome: "succeeded" | "failed", summary, links? }`. Under the review policy a success opens a review for your delegator; only their approval completes the issue.'],
+    ['POST /runs/{id}/cancel', 'Give up a run (yours, or a stalled one).'],
+    ['GET /events?after=<seq>', 'Every change in commit order; keep the last `next` as your cursor.'],
+  ]
+  return [
+    '# Working in Tracker as an agent',
+    '',
+    `Exchange your Access Key for an assertion (\`apth access-keys exchange\`), then call \`${BASE}\` with \`Authorization: Bearer <assertion>\`. \`GET\` needs \`tracker:read\`; every other method \`tracker:write\`. Send an \`Idempotency-Key\` header on every \`POST\` so a retry never acts twice.`,
+    '',
+    `Completion policy of this workspace: \`${state.workspace.agentCompletion}\`.`,
+    '',
+    '| Route | What it does |',
+    '| --- | --- |',
+    ...rows.map(([route, text]) => `| \`${route}\` | ${text} |`),
+    '',
+  ].join('\n')
+}
+
+async function agentRoutes(request: Request, url: URL, route: string): Promise<Response | undefined> {
+  const caller = who()
+  let match: RegExpMatchArray | null
+
+  if (route === 'GET /agent-guide') return new Response(agentGuide(), { headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' } })
+
+  // Agents
+  if (route === 'GET /agents') {
+    const includeDisabled = url.searchParams.get('includeDisabled') === 'true'
+    return json({ items: state.agents.filter((agent) => includeDisabled || !agent.disabled).sort((a, b) => a.handle.localeCompare(b.handle)).map(agentView) })
+  }
+  if (route === 'POST /agents') {
+    if (!isAdmin()) return forbidden()
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    const problem = agentInputProblem(input, true)
+    if (problem) return invalid(problem.path, problem.message)
+    if (state.agents.some((agent) => agent.handle === input.handle)) return conflict('an agent with this handle exists')
+    const time = now()
+    const agent: StoredAgent = { id: nextId(), handle: input.handle as string, name: (input.name as string).trim(), description: (input.description as string | undefined) ?? '', owner: personFor(input.ownerSub as string), disabled: false, createdAt: time, updatedAt: time, lastSeenAt: null }
+    state.agents.push(agent)
+    return json(agentView(agent), 201)
+  }
+  if ((match = route.match(/^PATCH \/agents\/([^/]+)$/))) {
+    const agent = agentById(decodeURIComponent(match[1]!))
+    if (!agent) return notFound()
+    if (!isAdmin()) return forbidden()
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    const problem = agentInputProblem(input, false)
+    if (problem) return invalid(problem.path, problem.message)
+    const time = now()
+    if (typeof input.name === 'string') agent.name = input.name.trim()
+    if (typeof input.description === 'string') agent.description = input.description
+    if (typeof input.ownerSub === 'string') agent.owner = personFor(input.ownerSub)
+    if (input.disabled === true && !agent.disabled) {
+      for (const run of state.runs.filter((candidate) => candidate.agentId === agent.id && !isTerminalRun(candidate.state))) endRun(run, 'canceled', `canceled_by:${caller.actor.sub}`, time)
+    }
+    if (typeof input.disabled === 'boolean') agent.disabled = input.disabled
+    agent.updatedAt = time
+    return json(agentView(agent))
+  }
+
+  // Inbox and events
+  if (route === 'GET /inbox') return json({ items: inboxOf(caller) })
+  if (route === 'POST /inbox/ack') {
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    for (const key of ['answers', 'mentions'] as const) if (key in input && !isStringArray(input[key])) return invalid(key, `${key} must list ids`)
+    for (const id of (input.answers as string[] | undefined) ?? []) {
+      const stored = requestById(id)
+      if (stored && stored.fromSub === caller.actor.sub && stored.state === 'answered') stored.answerAcked = true
+    }
+    for (const id of (input.mentions as string[] | undefined) ?? []) {
+      for (const mention of state.mentions) if (mention.commentId === id && mention.targetSub === caller.actor.sub) mention.acked = true
+    }
+    return noContent()
+  }
+  if (route === 'GET /events') {
+    const afterParam = url.searchParams.get('after')
+    const limitParam = url.searchParams.get('limit')
+    const limit = limitParam === null ? EVENTS_LIMIT_DEFAULT : Number(limitParam)
+    if (!Number.isInteger(limit) || limit < 1 || limit > EVENTS_LIMIT_MAX) return invalid('limit', `limit must be between 1 and ${EVENTS_LIMIT_MAX}`)
+    if (afterParam === null) return json({ items: [], next: state.eventSeq })
+    const after = Number(afterParam)
+    if (!Number.isInteger(after) || after < 0) return invalid('after', 'after must be a sequence number')
+    const items = state.events.filter((event) => event.seq > after).slice(0, limit)
+    return json({ items, next: items.at(-1)?.seq ?? after })
+  }
+
+  // Runs
+  if ((match = route.match(/^(GET|POST) \/issues\/([^/]+)\/runs$/))) {
+    const [, method, rawId] = match
+    const issue = method === 'GET' ? findIssue(decodeURIComponent(rawId!)) : issueById(decodeURIComponent(rawId!))
+    if (!issue) return notFound()
+    if (method === 'GET') return json({ items: state.runs.filter((run) => run.issueId === issue.id).sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id)).map(runView) })
+    if (!caller.agent || issue.assignee?.sub !== caller.actor.sub) return forbidden()
+    const input = (await body(request)) ?? {}
+    const problem = textProblem(input, 'session', RUN_TEXT_MAX) ?? textProblem(input, 'note', RUN_TEXT_MAX)
+    if (problem) return invalid(problem.path, problem.message)
+    const time = now()
+    const current = activeRunOf(issue.id)
+    if (current && !isStalledRun(current)) return conflict('another run is live on this issue')
+    // A stalled run is never revived: the next start closes it.
+    if (current) endRun(current, 'failed', 'lease_expired', time)
+    const run: StoredRun = {
+      id: nextId(),
+      issueId: issue.id,
+      agentId: caller.agent.id,
+      state: 'running',
+      reason: null,
+      session: (input.session as string | undefined) ?? '',
+      note: (input.note as string | undefined) ?? '',
+      summary: '',
+      links: [],
+      startedAt: time,
+      heartbeatAt: time,
+      leaseExpiresAt: new Date(Date.parse(time) + LEASE_MS).toISOString(),
+      finishedAt: null,
+    }
+    state.runs.push(run)
+    emit('run.started', issue, run.id, time)
+    return json(runView(run), 201)
+  }
+  if ((match = route.match(/^GET \/runs\/([^/]+)$/))) {
+    const run = runById(decodeURIComponent(match[1]!))
+    return run && issueById(run.issueId) ? json(runView(run)) : notFound()
+  }
+  if ((match = route.match(/^POST \/runs\/([^/]+)\/(heartbeat|finish|cancel)$/))) {
+    const [, rawId, action] = match
+    const run = runById(decodeURIComponent(rawId!))
+    const issue = run ? issueById(run.issueId) : undefined
+    if (!run || !issue) return notFound()
+    const own = caller.agent?.id === run.agentId
+    if (action === 'cancel') {
+      if (!canCancelRun({ agent: { sub: agentSub(run.agentId) }, state: derived(run) }, caller.actor)) return isTerminalRun(run.state) ? conflict('the run has ended') : forbidden()
+      endRun(run, 'canceled', `canceled_by:${caller.actor.sub}`, now())
+      return json(runView(run))
+    }
+    if (!own) return forbidden()
+    if (isTerminalRun(run.state)) return conflict('the run has ended')
+    if (isStalledRun(run)) return conflict('the run stalled (its lease passed); start a fresh run')
+    const input = (await body(request)) ?? {}
+    if (action === 'heartbeat') {
+      const problem = textProblem(input, 'note', RUN_TEXT_MAX)
+      if (problem) return invalid(problem.path, problem.message)
+      const time = now()
+      Object.assign(run, { heartbeatAt: time, leaseExpiresAt: new Date(Date.parse(time) + LEASE_MS).toISOString() })
+      if (typeof input.note === 'string') run.note = input.note
+      return json(runView(run))
+    }
+    if (input.outcome !== 'succeeded' && input.outcome !== 'failed') return invalid('outcome', 'outcome must be succeeded or failed')
+    if (typeof input.summary !== 'string' || bytes(input.summary) > RUN_SUMMARY_MAX_BYTES) return invalid('summary', `summary must be Markdown of at most ${RUN_SUMMARY_MAX_BYTES} bytes`)
+    const links = linksProblem(input.links)
+    if (links) return invalid(links.path, links.message)
+    if (input.outcome === 'succeeded' && state.requests.some((stored) => stored.runId === run.id && stored.kind === 'approval' && stored.state === 'open')) return conflict('an approval of this run is still open; resolve or withdraw it first')
+    const time = now()
+    Object.assign(run, { state: input.outcome, summary: input.summary, links: ((input.links as Link[] | undefined) ?? []).map(({ kind, url: href, title }) => ({ kind, url: href, title })), finishedAt: time })
+    if (input.outcome === 'failed') withdrawRunRequests(run, time)
+    else withdrawRunRequests(run, time, ['question'])
+    emit('run.finished', issue, run.id, time)
+    if (input.outcome === 'succeeded' && state.workspace.agentCompletion === 'review') {
+      const review: StoredRequest = {
+        id: nextId(),
+        issueId: issue.id,
+        kind: 'review',
+        fromSub: caller.actor.sub,
+        toSub: issue.delegator?.sub ?? caller.agent!.owner.sub,
+        title: `Review: ${issue.title}`,
+        body: run.summary,
+        options: [...DECISION_OPTIONS],
+        runId: run.id,
+        state: 'open',
+        answer: null,
+        createdAt: time,
+        answerAcked: false,
+      }
+      state.requests.push(review)
+      emit('request.opened', issue, review.id, time)
+    }
+    return json(runView(run))
+  }
+
+  // Requests
+  if ((match = route.match(/^POST \/issues\/([^/]+)\/requests$/))) {
+    const issue = issueById(decodeURIComponent(match[1]!))
+    if (!issue) return notFound()
+    const input = await body(request)
+    if (!input) return invalid('', 'A JSON object is required')
+    const unknownKey = Object.keys(input).find((key) => !['kind', 'title', 'body', 'options', 'to', 'runId'].includes(key))
+    if (unknownKey) return invalid(unknownKey, `unknown field ${unknownKey}`)
+    if (input.kind !== 'question' && input.kind !== 'approval') return invalid('kind', 'kind must be question or approval')
+    if (typeof input.title !== 'string' || !input.title.trim() || Array.from(input.title.trim()).length > REQUEST_TITLE_MAX) return invalid('title', `title must be 1–${REQUEST_TITLE_MAX} characters`)
+    if (input.body !== undefined && (typeof input.body !== 'string' || bytes(input.body) > REQUEST_BODY_MAX_BYTES)) return invalid('body', `body must be Markdown of at most ${REQUEST_BODY_MAX_BYTES} bytes`)
+    let options: string[] = []
+    if (input.kind === 'approval') {
+      if (input.options !== undefined && JSON.stringify(input.options) !== JSON.stringify(DECISION_OPTIONS)) return invalid('options', 'an approval has the fixed options approve and reject')
+      options = [...DECISION_OPTIONS]
+    } else if (input.options !== undefined) {
+      if (!isStringArray(input.options) || input.options.length > REQUEST_OPTIONS_MAX || input.options.some((option) => !option.trim() || Array.from(option).length > REQUEST_OPTION_MAX) || new Set(input.options).size !== input.options.length)
+        return invalid('options', `options must be at most ${REQUEST_OPTIONS_MAX} distinct texts of 1–${REQUEST_OPTION_MAX} characters`)
+      options = input.options
+    }
+    // `to` omitted: an agent asks its delegator here (else its owner); a person asks any person.
+    let toSub: string | null
+    if (input.to === undefined) toSub = caller.agent ? (issue.delegator?.sub ?? caller.agent.owner.sub) : null
+    else if (input.to === null) toSub = null
+    else if (typeof input.to !== 'string' || !input.to) return invalid('to', 'to must be a subject or null')
+    else toSub = input.to
+    if (toSub !== null) {
+      const target = agentBySub(toSub)
+      if (agentIdOf(toSub) !== null && (!target || target.disabled)) return invalid('to', 'to names no active agent')
+      if (target && input.kind === 'approval') return invalid('to', 'an approval is answered by people only')
+      if (toSub === caller.actor.sub) return invalid('to', 'a request goes to someone else')
+    }
+    let run: StoredRun | undefined
+    if (input.runId !== undefined) {
+      run = typeof input.runId === 'string' ? runById(input.runId) : undefined
+      if (!run) return invalid('runId', 'unknown run')
+      // Only the run's own agent attaches a request, and only to a run of this issue.
+      if (caller.agent?.id !== run.agentId || run.issueId !== issue.id) return forbidden()
+      if (isTerminalRun(run.state) || isStalledRun(run)) return conflict('the run is not live')
+    }
+    const time = now()
+    const stored: StoredRequest = {
+      id: nextId(),
+      issueId: issue.id,
+      kind: input.kind,
+      fromSub: caller.actor.sub,
+      toSub,
+      title: input.title.trim(),
+      body: (input.body as string | undefined) ?? '',
+      options,
+      runId: run?.id ?? null,
+      state: 'open',
+      answer: null,
+      createdAt: time,
+      answerAcked: false,
+    }
+    state.requests.push(stored)
+    if (run) run.state = 'waiting'
+    emit('request.opened', issue, stored.id, time)
+    return json(requestView(stored), 201)
+  }
+  if (route === 'GET /requests') {
+    const wanted = url.searchParams.get('state')
+    if (wanted !== null && !['open', 'answered', 'withdrawn'].includes(wanted)) return invalid('state', 'state must be open, answered or withdrawn')
+    const to = url.searchParams.get('to')
+    const toSub = to === 'me' ? caller.actor.sub : to
+    const issueKey = url.searchParams.get('issue')
+    const issue = issueKey ? findIssue(issueKey) : undefined
+    if (issueKey && !issue) return json({ items: [] })
+    const items = state.requests
+      .filter((stored) => issueById(stored.issueId) && (wanted === null || stored.state === wanted) && (toSub === null || stored.toSub === toSub) && (!issue || stored.issueId === issue.id))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+      .map(requestView)
+    return json({ items })
+  }
+  if ((match = route.match(/^GET \/requests\/([^/]+)$/))) {
+    const stored = requestById(decodeURIComponent(match[1]!))
+    return stored && issueById(stored.issueId) ? json(requestView(stored)) : notFound()
+  }
+  if ((match = route.match(/^POST \/requests\/([^/]+)\/(answer|withdraw)$/))) {
+    const [, rawId, action] = match
+    const stored = requestById(decodeURIComponent(rawId!))
+    const issue = stored ? issueById(stored.issueId) : undefined
+    if (!stored || !issue) return notFound()
+    if (action === 'withdraw') {
+      if (stored.fromSub !== caller.actor.sub) return forbidden()
+      if (stored.state !== 'open') return conflict('the request is no longer open')
+      const time = now()
+      stored.state = 'withdrawn'
+      emit('request.withdrawn', issue, stored.id, time)
+      resumeIfClear(stored.runId)
+      return json(requestView(stored))
+    }
+    if (stored.state !== 'open') return conflict('the request is no longer open')
+    if (!canAnswer(requestShape(stored), { ...caller.actor, isAdmin: isAdmin() })) return forbidden()
+    const input = (await body(request)) ?? {}
+    if (input.option !== undefined && (typeof input.option !== 'string' || (stored.options.length > 0 ? !stored.options.includes(input.option) : true))) return invalid('option', stored.options.length > 0 ? `option must be one of ${stored.options.join(', ')}` : 'this request has no options')
+    if (input.body !== undefined && (typeof input.body !== 'string' || bytes(input.body) > REQUEST_BODY_MAX_BYTES)) return invalid('body', `body must be Markdown of at most ${REQUEST_BODY_MAX_BYTES} bytes`)
+    if (stored.kind !== 'question' && input.option === undefined) return invalid('option', 'choose approve or reject')
+    if (input.option === undefined && !(input.body as string | undefined)?.trim()) return invalid('body', 'an answer needs an option or a text')
+    const time = now()
+    stored.state = 'answered'
+    stored.answer = { option: (input.option as string | undefined) ?? null, body: (input.body as string | undefined) ?? '', bySub: caller.actor.sub, at: time }
+    emit('request.answered', issue, stored.id, time)
+    // Approving a review completes the issue as the person who approved, in the same write.
+    const done = orderStatuses(state.statuses).find((status) => status.category === 'completed')
+    if (stored.kind === 'review' && stored.answer.option === 'approve' && done && categoryOf(issue.statusId) !== 'completed') {
+      const before = standingOf(issue)
+      record(issue, 'status', issue.statusId, done.id, time)
+      Object.assign(issue, { statusId: done.id, completedAt: time, updatedAt: time })
+      writeLedger(issue.id, before, standingOf(issue), time)
+      emit('issue.updated', issue, { fields: ['status'] }, time)
+    }
+    resumeIfClear(stored.runId)
+    return json(requestView(stored))
+  }
+  return undefined
+}
+
+/** The request's caller: the signed-in person, or — with `X-Mock-Agent` — that agent's key (403 `key_subject` unless an active agent has the handle; 403 `insufficient_scope` without the method's scope). */
+function callerOf(request: Request): Caller | Response {
+  const handle = request.headers.get('X-Mock-Agent')
+  if (handle === null) return { actor: personActor(state.caller), role: state.role, agent: null, scopes: ACCESS_KEY_SCOPES }
+  const agent = state.agents.find((candidate) => candidate.handle === handle && !candidate.disabled)
+  if (!agent) return fail(403, 'key_subject', "the key's external subject is not an active agent")
+  const scopes = (request.headers.get('X-Mock-Scopes') ?? ACCESS_KEY_SCOPES.join(',')).split(',').map((scope) => scope.trim()).filter(Boolean)
+  const needed = request.method === 'GET' ? 'tracker:read' : 'tracker:write'
+  if (!scopes.includes(needed)) return fail(403, 'insufficient_scope', `the key lacks ${needed}`)
+  agent.lastSeenAt = new Date(wallClock()).toISOString()
+  return { actor: agentActor(agent), role: 'Viewer', agent, scopes }
+}
+
+/** `Idempotency-Key` on a POST (multipart attachment uploads excepted): the first response is kept 24 h per (actor, key) and replayed; the same key with another body → 409. */
+async function idempotent(request: Request, handle: () => Promise<Response | undefined>): Promise<Response | undefined> {
+  const multipart = (request.headers.get('Content-Type') ?? '').startsWith('multipart/form-data')
+  const key = request.method === 'POST' && !multipart ? request.headers.get('Idempotency-Key') : null
+  if (key === null) return handle()
+  if (!key || key.length > IDEMPOTENCY_KEY_MAX) return invalid('Idempotency-Key', `Idempotency-Key must be 1–${IDEMPOTENCY_KEY_MAX} characters`)
+  const sent = await request.clone().text()
+  const slot = `${who().actor.sub}\n${key}`
+  const at = wallClock()
+  const stored = state.idempotency.get(slot)
+  if (stored && at - stored.at < IDEMPOTENCY_TTL_MS) {
+    if (stored.body !== sent) return conflict('this Idempotency-Key was used with a different body')
+    return new Response(stored.status === 204 ? null : stored.response, { status: stored.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
+  }
+  const response = await handle()
+  if (!response) return response
+  // Expired rows go when a new one is written.
+  for (const [other, row] of state.idempotency) if (at - row.at >= IDEMPOTENCY_TTL_MS) state.idempotency.delete(other)
+  state.idempotency.set(slot, { body: sent, status: response.status, response: await response.clone().text(), at })
+  return response
+}
+
 /** Handles `/api/tracker/v1/*`; undefined for any other path. */
 export async function trackerRoutes(request: Request, url: URL): Promise<Response | undefined> {
   if (!url.pathname.startsWith(`${BASE}/`)) return undefined
   const route = `${request.method} ${url.pathname.slice(BASE.length)}`
-  let match: RegExpMatchArray | null
 
   if (route === 'POST /__mock/reset') {
     const input = await body(request)
-    state = seedTracker(input?.projects === 'none' ? { withProjects: false } : {})
+    state = seedAgents(seedTracker(input?.projects === 'none' ? { withProjects: false } : {}))
     return json({ reset: true })
   }
   if (route === 'POST /__mock/caller') {
@@ -1320,12 +2214,27 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     state.role = input?.role === 'Admin' || input?.role === 'Viewer' ? input.role : 'Editor'
     return json({ sub: person.sub, role: state.role })
   }
+  if (route === 'POST /__mock/clock') {
+    const input = await body(request)
+    if (typeof input?.advanceMs !== 'number' || input.advanceMs < 0) return invalid('advanceMs', 'advanceMs must be a non-negative number')
+    state.offset += input.advanceMs
+    return json({ now: new Date(wallClock()).toISOString() })
+  }
   if (route === 'GET /openapi.json') {
     const document = Bun.file(new URL('../../../cmd/server/internal/api/openapi.json', import.meta.url))
     return (await document.exists()) ? new Response(document, { headers: { 'Content-Type': 'application/json' } }) : json({ openapi: '3.1.0', info: { title: 'tracker', version: 'mock' }, paths: {} })
   }
+  const caller = callerOf(request)
+  if (caller instanceof Response) return caller
+  return callerContext.run(caller, () => idempotent(request, () => routes(request, url, route)))
+}
 
-  if (route === 'GET /me') return json({ ...state.caller, role: state.role, isAdmin: isAdmin() } satisfies Me)
+async function routes(request: Request, url: URL, route: string): Promise<Response | undefined> {
+  let match: RegExpMatchArray | null
+  if (route === 'GET /me') {
+    const caller = who()
+    return json({ ...caller.actor, role: caller.role, isAdmin: isAdmin(), ...(caller.agent ? { scopes: [...caller.scopes] } : {}) } satisfies Me)
+  }
 
   // Workspace
   if (route === 'GET /workspace') return json(workspace())
@@ -1337,6 +2246,8 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if ('name' in input && (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 100)) return invalid('name', 'name must be 1–100 characters')
     if ('sprintLengthWeeks' in input && !SPRINT_LENGTHS.includes(input.sprintLengthWeeks as SprintLength)) return invalid('sprintLengthWeeks', 'sprintLengthWeeks must be 1 or 2')
     if ('timezone' in input && !isTimeZone(input.timezone)) return invalid('timezone', 'timezone must be an IANA time zone name')
+    if ('agentCompletion' in input && !AGENT_COMPLETIONS.includes(input.agentCompletion as AgentCompletion)) return invalid('agentCompletion', 'agentCompletion must be review or direct')
+    if (typeof input.agentCompletion === 'string') state.workspace.agentCompletion = input.agentCompletion as AgentCompletion
     if (typeof input.key === 'string') state.workspace.key = input.key
     if (typeof input.name === 'string') state.workspace.name = input.name.trim()
     if (typeof input.sprintLengthWeeks === 'number') state.workspace.sprintLengthWeeks = input.sprintLengthWeeks as SprintLength
@@ -1488,6 +2399,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if (!isAdmin()) return forbidden()
     const time = now()
     record(issue, 'deleted', null, null, time)
+    emit('issue.deleted', issue, issue.id, time)
     const before = standingOf(issue)
     issue.deleted = true
     writeLedger(issue.id, before, standingOf(issue), time)
@@ -1503,11 +2415,14 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
       const input = await body(request)
       if (typeof input?.body !== 'string' || !input.body.trim()) return invalid('body', 'body is required')
       if (bytes(input.body) > COMMENT_MAX_BYTES) return invalid('body', 'body must be at most 20 KiB')
-      const comment: StoredComment = { id: nextId(), issueId: issue.id, author: state.caller, body: input.body, createdAt: now(), editedAt: null, deleted: false }
+      const comment: StoredComment = { id: nextId(), issueId: issue.id, author: who().actor, body: input.body, createdAt: now(), editedAt: null, deleted: false }
       state.comments.push(comment)
+      // Mentions: one row per (comment, active agent) its `@handle`s name.
+      const handles = parseMentions(input.body, state.agents.filter((agent) => !agent.disabled).map((agent) => agent.handle))
+      for (const handle of handles) state.mentions.push({ commentId: comment.id, issueId: issue.id, targetSub: agentSub(state.agents.find((agent) => agent.handle === handle)!.id), acked: false })
       issue.updatedAt = comment.createdAt
-      const { deleted: _deleted, ...out } = comment
-      return json(out satisfies Comment, 201)
+      emit('comment.created', issue, comment.id, comment.createdAt)
+      return json(commentView(comment), 201)
     }
     if (method === 'POST' && sub === 'attachments') return attach(issue, request)
     return notFound()
@@ -1518,7 +2433,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     const [, method, rawId] = match
     const comment = state.comments.find((candidate) => candidate.id === decodeURIComponent(rawId!) && !candidate.deleted)
     if (!comment || !issueById(comment.issueId)) return notFound()
-    const mine = comment.author.sub === state.caller.sub
+    const mine = comment.author.sub === who().actor.sub
     if (method === 'DELETE') {
       if (!mine && !isAdmin()) return forbidden()
       comment.deleted = true
@@ -1530,8 +2445,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     if (bytes(input.body) > COMMENT_MAX_BYTES) return invalid('body', 'body must be at most 20 KiB')
     comment.body = input.body
     comment.editedAt = now()
-    const { deleted: _deleted, ...out } = comment
-    return json(out satisfies Comment)
+    return json(commentView(comment))
   }
 
   // Attachments
@@ -1549,7 +2463,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
         },
       })
     }
-    if (attachment.uploader.sub !== state.caller.sub && !isAdmin()) return forbidden()
+    if (attachment.uploader.sub !== who().actor.sub && !isAdmin()) return forbidden()
     attachment.deleted = true
     const time = now()
     record(issue, 'attachment', attachmentView(attachment), null, time)
@@ -1570,8 +2484,8 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     const view = {
       id: nextId(),
       name: (input.name as string).trim(),
-      owner: state.caller,
-      ownerSub: state.caller.sub,
+      owner: who().actor,
+      ownerSub: who().actor.sub,
       shared: input.shared === true,
       layout: (input.layout as ViewLayout | undefined) ?? 'list',
       groupBy: (input.groupBy as GroupBy | undefined) ?? 'none',
@@ -1588,7 +2502,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     const [, method, rawId] = match
     const view = viewsVisible().find((candidate) => candidate.id === decodeURIComponent(rawId!))
     if (!view) return notFound()
-    if (view.shared ? !isAdmin() : view.ownerSub !== state.caller.sub) return forbidden()
+    if (view.shared ? !isAdmin() : view.ownerSub !== who().actor.sub) return forbidden()
     if (method === 'DELETE') {
       state.views = state.views.filter((candidate) => candidate !== view)
       return noContent()
@@ -1610,9 +2524,12 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
 
   const sprints = await sprintRoutes(request, url, route)
   if (sprints) return sprints
+  const agents = await agentRoutes(request, url, route)
+  if (agents) return agents
 
-  // People
+  // People: Directory accepts only user bearers, so an agent's key gets nothing from it.
   if ((match = route.match(/^GET \/people\/([^/]+)\/avatar$/))) {
+    if (who().agent) return fail(403, 'key_subject', "Directory's avatars need a person")
     if (match[1] !== 'person-alex' || process.env.MOCK_DIRECTORY === 'absent') return notFound()
     const version = url.searchParams.get('v') ?? ''
     const etag = `"${new Bun.CryptoHasher('sha256').update(version).update(new Uint8Array([0])).update(AVATAR_PNG).digest('hex')}"`
@@ -1621,7 +2538,7 @@ export async function trackerRoutes(request: Request, url: URL): Promise<Respons
     return new Response(AVATAR_PNG, { headers: { ...headers, 'Content-Type': 'image/png' } })
   }
   if (route === 'GET /people') {
-    if (process.env.MOCK_DIRECTORY === 'absent') return json({ items: [], source: 'unavailable' })
+    if (process.env.MOCK_DIRECTORY === 'absent' || who().agent) return json({ items: [], source: 'unavailable' })
     const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
     const items = Object.values(MOCK_PEOPLE).filter((person) => !q || person.name.toLowerCase().includes(q) || person.sub.includes(q))
     return json({ items: items.slice(0, PEOPLE_LIMIT), source: 'directory' })

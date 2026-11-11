@@ -1,0 +1,319 @@
+package store
+
+import (
+	"encoding/json"
+	"slices"
+	"strings"
+
+	"github.com/appthrust/appserver-go/appserver/httpx"
+	"github.com/appthrust/tracker/cmd/server/internal/domain"
+	"github.com/oklog/ulid/v2"
+)
+
+const requestJSON = `jsonb_build_object('id',q.id,'issue',jsonb_build_object('id',i.id,'identifier',w.key||'-'||i.number,'title',i.title,'statusId',i.status_id),
+ 'kind',q.kind,'from',jsonb_build_object('sub',q.from_sub,'name',q.from_name),
+ 'to',CASE WHEN q.to_sub IS NULL THEN NULL ELSE jsonb_build_object('sub',q.to_sub,'name',q.to_name) END,
+ 'title',q.title,'body',q.body,'options',q.options,'runId',q.run_id,'state',q.state,'createdAt',q.created_at,
+ 'answer',CASE WHEN q.answered_at IS NULL THEN NULL ELSE jsonb_build_object('option',q.answer_option,'body',q.answer_body,'by',jsonb_build_object('sub',q.answered_by_sub,'name',q.answered_by_name),'at',q.answered_at) END)`
+const requestFrom = ` FROM tracker_request q JOIN tracker_issue i ON i.id=q.issue_id JOIN tracker_workspace w ON w.id=i.workspace_id WHERE i.workspace_id=$1 AND i.deleted_at IS NULL `
+
+func scanRequest(row scanner) (domain.Request, error) {
+	var data []byte
+	var request domain.Request
+	if err := row.Scan(&data); err != nil {
+		return request, err
+	}
+	err := json.Unmarshal(data, &request)
+	return request, err
+}
+
+func (t *Tx) Request(id string) (domain.Request, error) {
+	return scanRequest(t.SQL.QueryRowContext(t.Context, `SELECT `+requestJSON+requestFrom+` AND q.id=$2`, t.WorkspaceID, id))
+}
+
+type RequestCreate struct {
+	Kind    string        `json:"kind"`
+	Title   string        `json:"title"`
+	Body    string        `json:"body"`
+	Options []string      `json:"options"`
+	To      Field[string] `json:"to"`
+	RunID   *string       `json:"runId"`
+}
+
+func (t *Tx) insertRequest(issue domain.Issue, input RequestCreate, from domain.Person, to *domain.Person) (domain.Request, error) {
+	id := ulid.Make().String()
+	var sub, name any
+	if to != nil {
+		sub, name = to.Sub, to.Name
+	}
+	options, err := jsonValue(input.Options)
+	if err != nil {
+		return domain.Request{}, err
+	}
+	if err := t.Exec(`INSERT INTO tracker_request(id,issue_id,kind,from_sub,from_name,to_sub,to_name,title,body,options,run_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, issue.ID, input.Kind, from.Sub, from.Name, sub, name, input.Title, input.Body, options, input.RunID, t.now()); err != nil {
+		return domain.Request{}, err
+	}
+	if err := t.event(issue.ID, from, "request.opened", id); err != nil {
+		return domain.Request{}, err
+	}
+	return t.Request(id)
+}
+
+func (t *Tx) CreateRequest(issueID string, input RequestCreate, actor domain.Actor, to *domain.Person) (domain.Request, error) {
+	issue, err := t.Issue(issueID)
+	if err != nil {
+		return domain.Request{}, err
+	}
+	if !slices.Contains([]string{"question", "approval"}, input.Kind) || !domain.Text(input.Title, 1, 200) || len(input.Body) > 20<<10 || !domain.Text(input.Body, 0, 20<<10) || len(input.Options) > 6 {
+		return domain.Request{}, invalid("Invalid request kind, title, body or options")
+	}
+	if input.Kind == "approval" {
+		input.Options = []string{"approve", "reject"}
+	}
+	if input.Options == nil {
+		input.Options = []string{}
+	}
+	for i, option := range input.Options {
+		if !domain.Text(option, 1, 200) || slices.Contains(input.Options[:i], option) {
+			return domain.Request{}, invalid("Options must be distinct nonempty strings of at most 200 characters")
+		}
+	}
+	if !input.To.Present && actor.Kind == "agent" {
+		to = issue.Delegator
+		if to == nil {
+			to = &actor.Agent.Owner
+		}
+	}
+	if input.RunID != nil {
+		run, err := t.ownedRun(*input.RunID, actor, domain.HeartbeatRun)
+		if err != nil {
+			return domain.Request{}, err
+		}
+		if run.Issue.ID != issue.ID {
+			return domain.Request{}, httpx.Forbidden()
+		}
+		if err := t.Exec(`UPDATE tracker_run SET state='waiting' WHERE id=$1`, run.ID); err != nil {
+			return domain.Request{}, err
+		}
+	}
+	return t.insertRequest(issue, input, actor.Person, to)
+}
+
+type RequestAnswer struct {
+	Option *string `json:"option"`
+	Body   string  `json:"body"`
+}
+
+func (t *Tx) AnswerRequest(id string, input RequestAnswer, actor domain.Actor) (domain.Request, error) {
+	request, err := t.Request(id)
+	if err != nil {
+		return request, err
+	}
+	to := ""
+	if request.To != nil {
+		to = request.To.Sub
+	}
+	if !domain.Can(actor, domain.AnswerRequest, domain.Target{OwnerSub: to, RequestKind: request.Kind}) {
+		return request, httpx.Forbidden()
+	}
+	if request.State != "open" {
+		return request, httpx.Conflict("The request is not open")
+	}
+	if len(input.Body) > 20<<10 || !domain.Text(input.Body, 0, 20<<10) {
+		return request, invalid("Answer body must be at most 20 KiB")
+	}
+	if len(request.Options) > 0 && (input.Option == nil || !slices.Contains(request.Options, *input.Option)) {
+		return request, invalid("Answer option must be one of the request options")
+	}
+	if len(request.Options) == 0 && input.Option != nil {
+		return request, invalid("This request has no answer options")
+	}
+	if request.Kind == "review" && input.Option != nil && *input.Option == "approve" {
+		statuses, err := t.Statuses()
+		if err != nil {
+			return request, err
+		}
+		completed := ""
+		for _, status := range statuses {
+			if status.Category == "completed" {
+				completed = status.ID
+				break
+			}
+		}
+		if completed == "" {
+			return request, httpx.Conflict("The workspace has no completed status")
+		}
+		if _, err := t.PatchIssue(request.Issue.ID, IssuePatch{StatusID: Field[string]{Present: true, Value: &completed}}, actor.Person, nil); err != nil {
+			return request, err
+		}
+	}
+	if err := t.Exec(`UPDATE tracker_request SET state='answered',answer_option=$2,answer_body=$3,answered_by_sub=$4,answered_by_name=$5,answered_at=$6 WHERE id=$1`, id, input.Option, input.Body, actor.Sub, actor.Name, t.now()); err != nil {
+		return request, err
+	}
+	if request.RunID != nil {
+		if err := t.Exec(`UPDATE tracker_run SET state='running' WHERE id=$1 AND state='waiting' AND NOT EXISTS(SELECT 1 FROM tracker_request WHERE run_id=$1 AND state='open')`, *request.RunID); err != nil {
+			return request, err
+		}
+	}
+	if err := t.event(request.Issue.ID, actor.Person, "request.answered", id); err != nil {
+		return request, err
+	}
+	return t.Request(id)
+}
+
+func (t *Tx) Inbox(actor domain.Actor) ([]domain.InboxItem, error) {
+	list := []domain.InboxItem{}
+	predicate := ` AND ((q.state='open' AND (q.to_sub=$2 OR (q.to_sub IS NULL AND $3))) OR (q.state='answered' AND q.from_sub=$2 AND q.answer_acknowledged_at IS NULL))`
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+requestJSON+requestFrom+predicate+` ORDER BY CASE WHEN q.state='open' THEN 0 ELSE 1 END,q.created_at,q.id`, t.WorkspaceID, actor.Sub, actor.Kind != "agent")
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		request, err := scanRequest(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		kind := "request"
+		if request.State == "answered" {
+			kind = "answer"
+		}
+		list = append(list, domain.InboxItem{Kind: kind, Request: &request})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	mentions, err := t.inboxMentions(actor.Sub)
+	if err != nil {
+		return nil, err
+	}
+	list = append(list, mentions...)
+	if actor.Kind != "agent" {
+		return list, err
+	}
+	rows, err = t.SQL.QueryContext(t.Context, `SELECT i.id,s.category,
+ EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting') AND r.lease_expires_at >= $4 AND r.agent_id<>$3),
+ EXISTS(SELECT 1 FROM tracker_request q WHERE q.issue_id=i.id AND q.state='open' AND q.from_sub=$2
+   AND NOT EXISTS(SELECT 1 FROM tracker_run expired WHERE expired.id=q.run_id AND expired.state IN ('running','waiting') AND expired.lease_expires_at < $4)),
+ EXISTS(SELECT 1 FROM tracker_issue_block b JOIN tracker_issue blocker ON blocker.id=b.blocker_id JOIN tracker_status bs ON bs.id=blocker.status_id WHERE b.blocked_id=i.id AND blocker.deleted_at IS NULL AND bs.category NOT IN ('completed','canceled'))
+ FROM tracker_issue i JOIN tracker_status s ON s.id=i.status_id LEFT JOIN tracker_sprint sp ON sp.id=i.sprint_id
+ WHERE i.workspace_id=$1 AND i.assignee_sub=$2 AND i.deleted_at IS NULL
+ ORDER BY `+prioritySQL+`,CASE WHEN sp.started_at IS NOT NULL AND sp.closed_at IS NULL THEN 0 ELSE 1 END,i.number`, t.WorkspaceID, actor.Sub, actor.AgentID, t.now())
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		var facts domain.ActionableInput
+		if err := rows.Scan(&id, &facts.Category, &facts.OtherActiveRun, &facts.OwnOpenRequest, &facts.UnfinishedBlock); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if domain.Actionable(facts) {
+			ids = append(ids, id)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	issues, err := t.issueSummaries(ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		list = append(list, domain.InboxItem{Kind: "assignment", Issue: &issues[i]})
+	}
+	return list, nil
+}
+
+type RequestFilter struct {
+	State string
+	To    string
+	Issue string
+}
+
+func (t *Tx) Requests(filter RequestFilter) ([]domain.Request, error) {
+	if filter.State != "" && !slices.Contains([]string{"open", "answered", "withdrawn"}, filter.State) {
+		return nil, invalid("State must be open, answered, or withdrawn")
+	}
+	if filter.Issue != "" {
+		issue, err := t.Issue(filter.Issue)
+		if err != nil {
+			return nil, err
+		}
+		filter.Issue = issue.ID
+	}
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+requestJSON+requestFrom+` AND ($2='' OR q.state=$2) AND ($3='' OR q.to_sub=$3 OR ($3='none' AND q.to_sub IS NULL)) AND ($4='' OR q.issue_id=$4) ORDER BY q.created_at DESC,q.id DESC`, t.WorkspaceID, filter.State, filter.To, filter.Issue)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []domain.Request{}
+	for rows.Next() {
+		item, err := scanRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, item)
+	}
+	return list, rows.Err()
+}
+
+func (t *Tx) withdrawRequests(predicate, value string, actor domain.Person) error {
+	rows, err := t.SQL.QueryContext(t.Context, `UPDATE tracker_request q SET state='withdrawn' FROM tracker_issue i WHERE i.id=q.issue_id AND i.workspace_id=$1 AND q.state='open' AND (`+predicate+`) RETURNING q.id,q.issue_id,q.run_id`, t.WorkspaceID, value)
+	if err != nil {
+		return err
+	}
+	type withdrawn struct {
+		id, issue string
+		run       *string
+	}
+	list := []withdrawn{}
+	for rows.Next() {
+		var item withdrawn
+		if err := rows.Scan(&item.id, &item.issue, &item.run); err != nil {
+			rows.Close()
+			return err
+		}
+		list = append(list, item)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(list, func(a, b withdrawn) int { return strings.Compare(a.id, b.id) })
+	for _, item := range list {
+		if err := t.event(item.issue, actor, "request.withdrawn", item.id); err != nil {
+			return err
+		}
+		if item.run != nil {
+			if err := t.Exec(`UPDATE tracker_run SET state='running' WHERE id=$1 AND state='waiting' AND NOT EXISTS(SELECT 1 FROM tracker_request WHERE run_id=$1 AND state='open')`, *item.run); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (t *Tx) WithdrawRequest(id string, actor domain.Actor) (domain.Request, error) {
+	item, err := t.Request(id)
+	if err != nil {
+		return item, err
+	}
+	if !domain.Can(actor, domain.WithdrawRequest, domain.Target{OwnerSub: item.From.Sub}) {
+		return item, httpx.Forbidden()
+	}
+	if item.State != "open" {
+		return item, httpx.Conflict("The request is not open")
+	}
+	if err := t.withdrawRequests(`q.id=$2`, id, actor.Person); err != nil {
+		return item, err
+	}
+	return t.Request(id)
+}

@@ -7,7 +7,9 @@
 // issue its parent (the "No epic/story" lane takes it out only when that
 // grouping issue is its direct parent); in another sprint lane it moves the
 // card to that sprint (or the backlog). Drops the rules forbid are refused
-// with a toast. A member story's card lists the work under it.
+// with a toast. A member story's card lists the work under it. A card with a
+// live or stalled agent run shows the agent, its state and latest report; a
+// card with open requests shows how many.
 import { Plus } from 'lucide-react'
 import { useState, type DragEvent, type ReactNode } from 'react'
 import type { IssueSummary, UpdateIssueInput } from '../../api/tracker'
@@ -16,6 +18,7 @@ import { isSummary, levelOf, NO_GROUP, type IssueSection } from '../../model/iss
 import { isSprintSection } from '../../model/sprints'
 import { paths } from '../../routes/paths'
 import { cn, HrefLink, showToast } from '../../ui'
+import { OpenRequestMarker, RunLine } from '../agents/run-status'
 import { SprintHeading, useSprintMove } from '../sprints/sprint-sections'
 import { setUi, useUi } from '../ui-state'
 import { GroupHeading, hierarchyProblem } from './hierarchy'
@@ -200,6 +203,7 @@ function BoardCard({ issue, onOpen, rows }: { issue: IssueSummary; onOpen: (issu
         <div className="flex items-center gap-1.5 text-xs text-stone-500">
           <TypeIcon type={issue.type} />
           <span className="font-mono tabular-nums">{issue.identifier}</span>
+          <OpenRequestMarker count={issue.openRequestCount} />
           <span className="ml-auto">
             <AssigneePicker issue={issue} />
           </span>
@@ -218,6 +222,7 @@ function BoardCard({ issue, onOpen, rows }: { issue: IssueSummary; onOpen: (issu
           {issue.title}
         </HrefLink>
         {levelOf(issue.type) > 0 && issue.progress ? <ProgressBar progress={issue.progress} className="mt-1.5" /> : null}
+        {issue.activeRun ? <RunLine run={issue.activeRun} variant="card" /> : null}
         <div className="mt-2 flex flex-wrap items-center gap-1">
           <PriorityPicker issue={issue} />
           <EstimatePicker issue={issue} />

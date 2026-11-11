@@ -80,12 +80,12 @@ PY
 )
 auth="Authorization: Bearer $token"
 request() { curl -fsS -H "$auth" -H 'Content-Type: application/json' "$@"; }
-request "$base/workspace" | jq -e '.key == "APT" and .issueCount == 40' >/dev/null
+request "$base/workspace" | jq -e '.key == "APT" and .issueCount == 42' >/dev/null
 project=$(request -X POST "$base/projects" --data '{"name":"Smoke project","color":"blue"}')
 project_id=$(jq -er '.id' <<<"$project")
 issue=$(request -X POST "$base/issues" --data "{\"title\":\"Smoke bug\",\"type\":\"bug\",\"projectId\":\"$project_id\",\"report\":{\"environment\":\"local\",\"surface\":\"apth\",\"steps\":\"Run smoke\",\"expected\":\"Success\",\"actual\":\"Under investigation\"}}")
 id=$(jq -er '.id' <<<"$issue")
-jq -e '.identifier == "APT-41" and .report.environment == "local" and .reporter.sub == "smoke-reporter"' <<<"$issue" >/dev/null
+jq -e '.identifier == "APT-43" and .report.environment == "local" and .reporter.sub == "smoke-reporter"' <<<"$issue" >/dev/null
 jq -e --arg project "$project_id" '.projectId == $project' <<<"$issue" >/dev/null
 request --get "$base/issues" --data-urlencode "filter={\"project\":[\"$project_id\"]}" | jq -e --arg id "$id" --arg project "$project_id" '.items | length == 1 and .[0].id == $id and .[0].projectId == $project' >/dev/null
 request --get "$base/issues" --data-urlencode 'filter={"reporter":["me"]}' | jq -e --arg id "$id" '.items | length == 1 and .[0].id == $id and .[0].reporter.sub == "smoke-reporter"' >/dev/null
@@ -134,3 +134,4 @@ request "$base/sprints/$sprint_id/burndown?unit=points" | jq -e '. as $chart | [
 request -X POST "$base/sprints/$sprint_id/close" --data '{"moveIncompleteTo":null}' | jq -e '.state == "closed" and .current.donePoints == 3' >/dev/null
 request "$base/velocity?unit=points&limit=1" | jq -e --arg id "$sprint_id" '.items | length == 1 and .[0].sprint.id == $id and .[0].committed == 8 and .[0].completed == 3' >/dev/null
 printf 'Tracker smoke passed: project → issue → reporter filter → invalid reporter → epic → story → parent patch → ancestry → progress → referenced delete conflict → comment → attachment → status → timeline → project filter → no project → project delete → sprint → estimates → start → burndown drop → close → velocity\n'
+bash "$root/hack/agents-smoke.sh"

@@ -1,18 +1,32 @@
 package api
 
 import (
+	"encoding/json"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 	"github.com/appthrust/tracker/cmd/server/internal/store"
 )
 
 type meResponse struct {
 	domain.Person
-	Role    string `json:"role"`
-	IsAdmin bool   `json:"isAdmin"`
+	Role    string   `json:"role"`
+	IsAdmin bool     `json:"isAdmin"`
+	Scopes  []string `json:"scopes,omitempty"`
+}
+
+// Person marshals its derived kind; explicitly retain Me's additional fields.
+func (m meResponse) MarshalJSON() ([]byte, error) {
+	type person domain.Person
+	return json.Marshal(struct {
+		person
+		Kind    string   `json:"kind"`
+		Role    string   `json:"role"`
+		IsAdmin bool     `json:"isAdmin"`
+		Scopes  []string `json:"scopes,omitempty"`
+	}{person(m.Person), domain.ActorKind(m.Sub), m.Role, m.IsAdmin, m.Scopes})
 }
 
 func (a *API) me(s *request) (any, int, error) {
-	return &meResponse{Person: s.actor.Person, Role: s.actor.Role, IsAdmin: s.actor.Role == "Admin"}, 200, nil
+	return &meResponse{Person: s.actor.Person, Role: s.actor.Role, IsAdmin: domain.Can(s.actor, domain.ManageWorkspace, domain.Target{}), Scopes: s.actor.Scopes}, 200, nil
 }
 func (a *API) workspaceGet(s *request) (any, int, error) {
 	item, err := s.tx.Workspace()
@@ -27,11 +41,12 @@ func (a *API) workspacePatch(s *request) (any, int, error) {
 		Name              *string `json:"name"`
 		SprintLengthWeeks *int    `json:"sprintLengthWeeks"`
 		Timezone          *string `json:"timezone"`
+		AgentCompletion   *string `json:"agentCompletion"`
 	}
 	if err := decode(s, &input); err != nil {
 		return nil, 0, err
 	}
-	item, err := s.tx.PatchWorkspace(input.Key, input.Name, input.SprintLengthWeeks, input.Timezone)
+	item, err := s.tx.PatchWorkspace(input.Key, input.Name, input.SprintLengthWeeks, input.Timezone, input.AgentCompletion)
 	return item, 200, err
 }
 func (a *API) statusList(s *request) (any, int, error) {

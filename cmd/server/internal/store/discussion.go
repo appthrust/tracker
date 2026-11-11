@@ -24,14 +24,7 @@ func (t *Tx) touchIssue(id string) error {
 	return t.Exec(`UPDATE tracker_issue SET updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, id)
 }
 func (t *Tx) Comment(id string) (domain.Comment, error) {
-	var c domain.Comment
-	err := t.SQL.QueryRowContext(t.Context, `SELECT c.id,c.issue_id,c.author_sub,c.author_name,c.body,c.created_at,c.edited_at FROM tracker_comment c JOIN tracker_issue i ON i.id=c.issue_id WHERE i.workspace_id=$1 AND c.id=$2 AND i.deleted_at IS NULL AND c.deleted_at IS NULL`, t.WorkspaceID, id).Scan(&c.ID, &c.IssueID, &c.Author.Sub, &c.Author.Name, &c.Body, &c.CreatedAt, &c.EditedAt)
-	c.CreatedAt = c.CreatedAt.UTC()
-	if c.EditedAt != nil {
-		at := c.EditedAt.UTC()
-		c.EditedAt = &at
-	}
-	return c, err
+	return scanComment(t.SQL.QueryRowContext(t.Context, `SELECT `+commentJSON+` FROM tracker_comment c JOIN tracker_issue i ON i.id=c.issue_id WHERE i.workspace_id=$1 AND c.id=$2 AND i.deleted_at IS NULL AND c.deleted_at IS NULL`, t.WorkspaceID, id))
 }
 func (t *Tx) CreateComment(issueID, body string, actor domain.Person) (domain.Comment, error) {
 	if err := validComment(body); err != nil {
@@ -46,6 +39,12 @@ func (t *Tx) CreateComment(issueID, body string, actor domain.Person) (domain.Co
 		return domain.Comment{}, err
 	}
 	if err := t.touchIssue(issue.ID); err != nil {
+		return domain.Comment{}, err
+	}
+	if err := t.syncMentions(id, body); err != nil {
+		return domain.Comment{}, err
+	}
+	if err := t.event(issue.ID, actor, "comment.created", id); err != nil {
 		return domain.Comment{}, err
 	}
 	return t.Comment(id)
@@ -63,6 +62,9 @@ func (t *Tx) PatchComment(id, body string, actor domain.Actor) (domain.Comment, 
 	}
 	if body != c.Body {
 		if err := t.Exec(`UPDATE tracker_comment SET body=$2,edited_at=now() WHERE id=$1`, c.ID, body); err != nil {
+			return c, err
+		}
+		if err := t.syncMentions(c.ID, body); err != nil {
 			return c, err
 		}
 		if err := t.touchIssue(c.IssueID); err != nil {
@@ -174,29 +176,45 @@ func (t *Tx) Timeline(issueID string) ([]domain.TimelineItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err = t.SQL.QueryContext(t.Context, `SELECT id,author_sub,author_name,body,created_at,edited_at FROM tracker_comment WHERE issue_id=$1 AND deleted_at IS NULL ORDER BY created_at,id`, issue.ID)
+	rows, err = t.SQL.QueryContext(t.Context, `SELECT `+commentJSON+` FROM tracker_comment c WHERE c.issue_id=$1 AND c.deleted_at IS NULL ORDER BY c.created_at,c.id`, issue.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		c := domain.Comment{IssueID: issue.ID}
-		if err := rows.Scan(&c.ID, &c.Author.Sub, &c.Author.Name, &c.Body, &c.CreatedAt, &c.EditedAt); err != nil {
+		c, err := scanComment(rows)
+		if err != nil {
 			return nil, err
-		}
-		c.CreatedAt = c.CreatedAt.UTC()
-		if c.EditedAt != nil {
-			at := c.EditedAt.UTC()
-			c.EditedAt = &at
 		}
 		items = append(items, domain.TimelineItem{Kind: "comment", Comment: &c})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	runs, err := t.Runs(issue.ID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range runs {
+		items = append(items, domain.TimelineItem{Kind: "run", Run: &runs[i]})
+	}
+	requests, err := t.Requests(RequestFilter{Issue: issue.ID})
+	if err != nil {
+		return nil, err
+	}
+	for i := range requests {
+		items = append(items, domain.TimelineItem{Kind: "request", Request: &requests[i]})
+	}
 	key := func(item domain.TimelineItem) (time.Time, string) {
 		if item.Activity != nil {
 			return item.Activity.CreatedAt, item.Activity.ID
+		}
+		if item.Run != nil {
+			return item.Run.StartedAt, item.Run.ID
+		}
+		if item.Request != nil {
+			return item.Request.CreatedAt, item.Request.ID
 		}
 		return item.Comment.CreatedAt, item.Comment.ID
 	}

@@ -243,7 +243,7 @@ func TestHierarchySeed(t *testing.T) {
 	require.NoError(t, database.InWorkspace(t.Context(), "seed", false, func(tx *Tx) error {
 		page, err := tx.ListIssues(ListOptions{Sort: domain.SortNumber})
 		require.NoError(t, err)
-		require.Len(t, page.Items, 40)
+		require.Len(t, page.Items, 42)
 		epics, stories := page.Items[30:32], page.Items[32:36]
 		require.Equal(t, "Reliable bug intake", epics[0].Title)
 		require.Equal(t, "Faster triage", epics[1].Title)

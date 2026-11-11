@@ -4,15 +4,20 @@ package domain
 import "time"
 
 type Person struct {
-	Sub        string `json:"sub"`
-	Name       string `json:"name"`
-	AvatarURL  string `json:"avatarUrl,omitempty"`
-	Email      string `json:"email,omitempty"`
-	ProfileURL string `json:"profileUrl,omitempty"`
+	Sub        string         `json:"sub"`
+	Name       string         `json:"name"`
+	AvatarURL  string         `json:"avatarUrl,omitempty"`
+	Email      string         `json:"email,omitempty"`
+	ProfileURL string         `json:"profileUrl,omitempty"`
+	Agent      *AgentIdentity `json:"agent,omitempty"`
 }
 type Actor struct {
 	Person
-	Role string
+	Role    string
+	Kind    string
+	AgentID string
+	Key     bool
+	Scopes  []string
 }
 type Workspace struct {
 	ID                string    `json:"id"`
@@ -21,6 +26,7 @@ type Workspace struct {
 	IssueCount        int       `json:"issueCount"`
 	SprintLengthWeeks int       `json:"sprintLengthWeeks"`
 	Timezone          string    `json:"timezone"`
+	AgentCompletion   string    `json:"agentCompletion"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
@@ -71,30 +77,33 @@ type ProgressPoints struct {
 	Completed int `json:"completed"`
 }
 type IssueSummary struct {
-	ID              string     `json:"id"`
-	Identifier      string     `json:"identifier"`
-	Number          int64      `json:"number"`
-	Title           string     `json:"title"`
-	Type            string     `json:"type"`
-	Priority        string     `json:"priority"`
-	StatusID        string     `json:"statusId"`
-	Assignee        *Person    `json:"assignee"`
-	Reporter        Person     `json:"reporter"`
-	LabelIDs        []string   `json:"labelIds"`
-	ProjectID       *string    `json:"projectId"`
-	Estimate        *string    `json:"estimate"`
-	Sprint          *SprintRef `json:"sprint"`
-	Parent          *IssueRef  `json:"parent"`
-	Epic            *IssueRef  `json:"epic"`
-	Story           *IssueRef  `json:"story"`
-	Progress        *Progress  `json:"progress"`
-	DueOn           *string    `json:"dueOn"`
-	Report          *Report    `json:"report"`
-	CommentCount    int        `json:"commentCount"`
-	AttachmentCount int        `json:"attachmentCount"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
-	CompletedAt     *time.Time `json:"completedAt"`
+	ID               string     `json:"id"`
+	Identifier       string     `json:"identifier"`
+	Number           int64      `json:"number"`
+	Title            string     `json:"title"`
+	Type             string     `json:"type"`
+	Priority         string     `json:"priority"`
+	StatusID         string     `json:"statusId"`
+	Assignee         *Person    `json:"assignee"`
+	Reporter         Person     `json:"reporter"`
+	Delegator        *Person    `json:"delegator"`
+	ActiveRun        *Run       `json:"activeRun"`
+	OpenRequestCount int        `json:"openRequestCount"`
+	LabelIDs         []string   `json:"labelIds"`
+	ProjectID        *string    `json:"projectId"`
+	Estimate         *string    `json:"estimate"`
+	Sprint           *SprintRef `json:"sprint"`
+	Parent           *IssueRef  `json:"parent"`
+	Epic             *IssueRef  `json:"epic"`
+	Story            *IssueRef  `json:"story"`
+	Progress         *Progress  `json:"progress"`
+	DueOn            *string    `json:"dueOn"`
+	Report           *Report    `json:"report"`
+	CommentCount     int        `json:"commentCount"`
+	AttachmentCount  int        `json:"attachmentCount"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+	CompletedAt      *time.Time `json:"completedAt"`
 }
 type Issue struct {
 	IssueSummary
@@ -108,6 +117,7 @@ type Comment struct {
 	IssueID   string     `json:"issueId"`
 	Author    Person     `json:"author"`
 	Body      string     `json:"body"`
+	Mentions  []Person   `json:"mentions"`
 	CreatedAt time.Time  `json:"createdAt"`
 	EditedAt  *time.Time `json:"editedAt"`
 }
@@ -134,12 +144,18 @@ type TimelineItem struct {
 	Kind     string    `json:"kind"`
 	Activity *Activity `json:"activity,omitempty"`
 	Comment  *Comment  `json:"comment,omitempty"`
+	Run      *Run      `json:"run,omitempty"`
+	Request  *Request  `json:"request,omitempty"`
 }
 type Filter struct {
 	Status       []string `json:"status,omitempty"`
 	Category     []string `json:"category,omitempty"`
 	Assignee     []string `json:"assignee,omitempty"`
 	Reporter     []string `json:"reporter,omitempty"`
+	AssigneeKind []string `json:"assigneeKind,omitempty"`
+	Agent        []string `json:"agent,omitempty"`
+	Run          []string `json:"run,omitempty"`
+	Request      []string `json:"request,omitempty"`
 	Label        []string `json:"label,omitempty"`
 	Project      []string `json:"project,omitempty"`
 	Sprint       []string `json:"sprint,omitempty"`

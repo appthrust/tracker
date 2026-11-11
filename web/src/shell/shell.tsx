@@ -1,19 +1,20 @@
-// App frame: a Linear-style sidebar (workspace, issues, board, epics,
-// sprints and the built-in "Current sprint" view, report, the built-in
+// App frame: a Linear-style sidebar (workspace, inbox with its count, issues,
+// board, epics, sprints and the built-in "Current sprint" view, the built-in
+// agent views "Agents at work" and "Waiting for people", report, the built-in
 // "Reported by me" view with its open count, projects, saved views,
 // settings, keyboard hint, language, app switcher, the signed-in person)
 // beside the page, plus the overlays every page shares (new issue, command
 // palette, toasts) and the global keys: C, Shift+R, ⌘/Ctrl+K, `/`, G then S
-// (the active sprint, else the sprints overview) and E (estimate the
-// selected or focused issues).
+// (the active sprint, else the sprints overview), G then I (the inbox) and E
+// (estimate the selected or focused issues).
 // The issues, board, epics and reported links keep the current project
 // scope; a project in the sidebar scopes the list, board or epics overview to it.
 import { AppSwitcher } from '@appthrust/app-launcher'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { Bookmark, Bug, Columns3, Command, Languages, List, Menu, Plus, Search, Settings, SquareKanban, UserRoundPen, X, Zap } from 'lucide-react'
+import { Bookmark, Bot, Bug, Columns3, Command, Hand, Inbox, Languages, List, Menu, Plus, Search, Settings, SquareKanban, UserRoundPen, X, Zap } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { REPORTED_OPEN_CAP, reportedOpenQuery, sprintsQuery } from '../api/queries'
+import { inboxQuery, REPORTED_OPEN_CAP, reportedOpenQuery, sprintsQuery } from '../api/queries'
 import { FILTER_INPUT_ID } from '../features/issues/filter-bar'
 import { NewIssueDialog } from '../features/issues/new-issue-dialog'
 import { CreateProjectDialog, ProjectSwatch } from '../features/issues/projects'
@@ -52,6 +53,12 @@ function useGlobalKeys() {
       if (!isPlainShortcut(event)) return
       // Letters are plain keys only; `/` may need Shift on some layouts.
       const key = event.shiftKey ? '' : event.key.toLowerCase()
+      if (key === 'i' && Date.now() - pendingG < SEQUENCE_MS) {
+        event.preventDefault()
+        pendingG = 0
+        void navigate({ to: paths.inbox } as never)
+        return
+      }
       if (key === 's' && Date.now() - pendingG < SEQUENCE_MS) {
         event.preventDefault()
         pendingG = 0
@@ -95,6 +102,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const reportedOpen = useQuery(reportedOpenQuery).data
   const reportedOpenCount = reportedOpen ? (reportedOpen.nextCursor ? `${REPORTED_OPEN_CAP}+` : String(reportedOpen.items.length)) : undefined
   const activeSprint = useQuery(sprintsQuery).data?.find((sprint) => sprint.state === 'active')
+  const inboxCount = useQuery(inboxQuery).data?.length
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   // A project in the sidebar scopes the board, the epics overview or "Reported by me" while it is open, else the list.
   const listPath = pathname === paths.board || pathname === paths.reported || pathname === paths.epics ? pathname : paths.home
@@ -134,6 +142,18 @@ export function Shell({ children }: { children: ReactNode }) {
       </div>
       <nav aria-label={t('tracker.nav.label')} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
         <div className="space-y-0.5">
+          <HrefLink href={paths.inbox} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <Inbox aria-hidden />
+            <span className="truncate">{t('tracker.nav.inbox')}</span>
+            {inboxCount ? (
+              <span className="ml-auto min-w-5 rounded-full bg-accent px-1.5 text-center text-[11px] leading-5 font-medium text-white tabular-nums" title={t('tracker.inbox.count', { count: inboxCount })}>
+                <span className="sr-only">{t('tracker.inbox.count', { count: inboxCount })}</span>
+                <span aria-hidden>{inboxCount}</span>
+              </span>
+            ) : (
+              <Kbd className="ml-auto">G I</Kbd>
+            )}
+          </HrefLink>
           <HrefLink href={listHref(paths.home, { project: scope })} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <List aria-hidden />
             {t('tracker.nav.issues')}
@@ -155,6 +175,14 @@ export function Shell({ children }: { children: ReactNode }) {
             <SquareKanban aria-hidden />
             <span className="truncate">{t('tracker.nav.currentSprint')}</span>
             {activeSprint ? <span className="ml-auto max-w-20 truncate text-[11px] text-stone-400">{activeSprint.name}</span> : null}
+          </HrefLink>
+          <HrefLink href={paths.atWork} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <Bot aria-hidden />
+            <span className="truncate">{t('tracker.nav.atWork')}</span>
+          </HrefLink>
+          <HrefLink href={paths.waiting} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
+            <Hand aria-hidden />
+            <span className="truncate">{t('tracker.nav.waiting')}</span>
           </HrefLink>
           <HrefLink href={paths.report} className={NAV_LINK} activeProps={NAV_ACTIVE} activeOptions={{ includeSearch: false }} onClick={() => setMenuOpen(false)}>
             <Bug aria-hidden />

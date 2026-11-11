@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Tracker API",
-    "version": "0.1.12",
-    "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID. The bearer is the signed-in user's token or an Access Key assertion (audience tracker; scope tracker:read for GET, tracker:write otherwise)."
+    "version": "0.1.13",
+    "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID. The bearer is the signed-in user's token or an Access Key assertion (audience tracker; scope tracker:read for GET, tracker:write otherwise). External-subject assertions resolve by immutable registered agent handle. GET scopes tracker:read; other methods tracker:write; missing scope is 403 insufficient_scope. Every key is refused on Admin routes. See /agent-guide for the collaboration protocol."
   },
   "servers": [
     {
@@ -277,6 +277,14 @@
                     "type": "string",
                     "default": "Asia/Tokyo",
                     "description": "IANA timezone name"
+                  },
+                  "agentCompletion": {
+                    "type": "string",
+                    "enum": [
+                      "review",
+                      "direct"
+                    ],
+                    "default": "review"
                   }
                 },
                 "required": [],
@@ -480,7 +488,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
       }
     },
     "/statuses/{id}": {
@@ -866,7 +886,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
       }
     },
     "/labels/{id}": {
@@ -1247,7 +1279,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
       }
     },
     "/projects/{id}": {
@@ -1861,7 +1905,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
       }
     },
     "/issues/{id}": {
@@ -1956,7 +2012,7 @@
       "patch": {
         "operationId": "patchIssue",
         "summary": "patchIssue",
-        "description": "Authorization: any authenticated user. Every changed field emits one Activity. Changing to bug requires a report; changing away clears it. Parent cycles are invalid. Moving into completed/canceled sets completedAt; leaving clears it.",
+        "description": "Authorization: any authenticated user. Every changed field emits one Activity. Changing to bug requires a report; changing away clears it. Parent cycles are invalid. Moving into completed/canceled sets completedAt; leaving clears it. Agents may edit only as assignee or reporter. expectedUpdatedAt mismatch returns 409 conflict. Under review an agent cannot set a completed status.",
         "responses": {
           "200": {
             "description": "Success",
@@ -2321,6 +2377,16 @@
               "type": "string"
             },
             "description": "Resource ULID; issue GET also accepts a case-insensitive KEY-number identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
           }
         ],
         "requestBody": {
@@ -2540,7 +2606,7 @@
       "post": {
         "operationId": "createAttachment",
         "summary": "createAttachment",
-        "description": "Authorization: any authenticated user. One multipart file, at most 2 MiB and 10 attachments per issue. Allowed: image/png, image/jpeg, image/webp, text/plain, application/json.",
+        "description": "Authorization: any authenticated user. One multipart file, at most 2 MiB and 10 attachments per issue. Allowed: image/png, image/jpeg, image/webp, text/plain, application/json. Multipart upload is excluded from Idempotency-Key replay.",
         "responses": {
           "201": {
             "description": "Success",
@@ -3034,7 +3100,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
       }
     },
     "/views/{id}": {
@@ -3234,7 +3312,7 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/Person"
+                        "$ref": "#/components/schemas/Actor"
                       }
                     },
                     "source": {
@@ -3725,7 +3803,19 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
       }
     },
     "/sprints/{id}": {
@@ -3920,7 +4010,7 @@
       "delete": {
         "operationId": "deleteSprint",
         "summary": "deleteSprint",
-        "description": "Authorization: Admin. Only planned sprints; otherwise 409. Members return to backlog.",
+        "description": "Authorization: Admin. Only planned sprints; otherwise 409. Members return to backlog. Agent actors are refused.",
         "responses": {
           "204": {
             "description": "Success"
@@ -4004,7 +4094,7 @@
       "post": {
         "operationId": "startSprint",
         "summary": "startSprint",
-        "description": "Authorization: any authenticated user. 409 unless planned with no other active sprint. Future startsOn becomes today, keeping length; overlap returns 409.",
+        "description": "Authorization: any authenticated user. 409 unless planned with no other active sprint. Future startsOn becomes today, keeping length; overlap returns 409. Agent actors are refused.",
         "responses": {
           "200": {
             "description": "Success",
@@ -4087,6 +4177,16 @@
               "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
             },
             "description": "Sprint ULID."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
           }
         ]
       }
@@ -4095,7 +4195,7 @@
       "post": {
         "operationId": "closeSprint",
         "summary": "closeSprint",
-        "description": "Authorization: any authenticated user. 409 unless active. Invalid destination returns 400 at moveIncompleteTo. Freeze ledger, then move unfinished scope to planned destination or backlog. Lineage conflicts go to backlog; done members stay.",
+        "description": "Authorization: any authenticated user. 409 unless active. Invalid destination returns 400 at moveIncompleteTo. Freeze ledger, then move unfinished scope to planned destination or backlog. Lineage conflicts go to backlog; done members stay. Agent actors are refused.",
         "responses": {
           "200": {
             "description": "Success",
@@ -4188,6 +4288,16 @@
               "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
             },
             "description": "Sprint ULID."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
           }
         ]
       }
@@ -4417,6 +4527,1820 @@
           }
         ]
       }
+    },
+    "/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "summary": "listAgents",
+        "description": "Any authenticated actor. Ordered by handle; disabled agents excluded by default.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "includeDisabled",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": ""
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createAgent",
+        "summary": "createAgent",
+        "description": "Signed-in Admin only; all keys refused. Duplicate handle returns 409.",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCreate"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/agents/{id}": {
+      "patch": {
+        "operationId": "patchAgent",
+        "summary": "patchAgent",
+        "description": "Signed-in Admin only. Handle is immutable. Disabling cancels all non-terminal runs and withdraws open requests raised by the agent.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentPatch"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          }
+        ]
+      }
+    },
+    "/inbox": {
+      "get": {
+        "operationId": "getInbox",
+        "summary": "getInbox",
+        "description": "Caller inbox, open requests first. Answers and mentions remain until acknowledged. Agents also receive actionable assignments, including Backlog and their own live runs.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InboxItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/inbox/ack": {
+      "post": {
+        "operationId": "ackInbox",
+        "summary": "ackInbox",
+        "description": "Acknowledge only caller-owned answers/mentions; unknown or other actors' IDs have no effect.",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxAck"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "listEvents",
+        "description": "Ascending, commit-ordered, gap-free workspace cursor. Omit after to start now: no items, next=current sequence.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": ""
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            },
+            "description": ""
+          }
+        ]
+      }
+    },
+    "/issues/{id}/runs": {
+      "post": {
+        "operationId": "startRun",
+        "summary": "startRun",
+        "description": "Agent assignee only (403 otherwise). Live run returns 409. A stalled run closes failed/lease_expired and its open requests are withdrawn before the fresh start.",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunStart"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      },
+      "get": {
+        "operationId": "listRuns",
+        "summary": "listRuns",
+        "description": "Any authenticated actor. Newest first.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Run"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          }
+        ]
+      }
+    },
+    "/runs/{id}": {
+      "get": {
+        "operationId": "getRun",
+        "summary": "getRun",
+        "description": "Any authenticated actor. Stalled state is derived at microsecond precision.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          }
+        ]
+      }
+    },
+    "/runs/{id}/heartbeat": {
+      "post": {
+        "operationId": "heartbeatRun",
+        "summary": "heartbeatRun",
+        "description": "The run's agent only. Renews the ten-minute lease. Terminal/stalled returns 409; never revives a lease.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunHeartbeat"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/runs/{id}/finish": {
+      "post": {
+        "operationId": "finishRun",
+        "summary": "finishRun",
+        "description": "The run's agent only. Terminal/stalled or success with open approval returns 409. Success under review opens a review to delegator/owner and withdraws open questions. Failed withdraws all open requests. Does not directly change issue status.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunFinish"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/runs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelRun",
+        "summary": "cancelRun",
+        "description": "Any person or the run's agent. Accepts stalled; terminal returns 409. Withdraws open requests.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/issues/{id}/requests": {
+      "post": {
+        "operationId": "createRequest",
+        "summary": "createRequest",
+        "description": "Any actor on any issue. review is server-generated only. Attaching a run requires that run's agent and same issue (403); terminal/stalled returns 409; sets waiting.",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestCreate"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/requests": {
+      "get": {
+        "operationId": "listRequests",
+        "summary": "listRequests",
+        "description": "Any authenticated actor. Newest first.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Request"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/RequestState"
+            },
+            "description": ""
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Subject, me, or none (unaddressed)."
+          },
+          {
+            "name": "issue",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Issue ULID or identifier."
+          }
+        ]
+      }
+    },
+    "/requests/{id}": {
+      "get": {
+        "operationId": "getRequest",
+        "summary": "getRequest",
+        "description": "Any authenticated actor.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          }
+        ]
+      }
+    },
+    "/requests/{id}/answer": {
+      "post": {
+        "operationId": "answerRequest",
+        "summary": "answerRequest",
+        "description": "Addressee, any person when unaddressed, or signed-in Admin. Agents answer questions only. Options must match. Review approval completes as the person in the same transaction, updating the sprint ledger; rejection leaves status unchanged. Last answer resumes a waiting run.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestAnswerInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/requests/{id}/withdraw": {
+      "post": {
+        "operationId": "withdrawRequest",
+        "summary": "withdrawRequest",
+        "description": "Requester only. Non-open returns 409. Last withdrawal resumes a waiting run.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ULID; issue routes also accept the issue identifier."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "First handler response (status/body) is replayed for 24h per actor and key. Retry identical method, URI, content type and body bytes. Different request returns 409."
+          }
+        ]
+      }
+    },
+    "/agent-guide": {
+      "get": {
+        "operationId": "getAgentGuide",
+        "summary": "getAgentGuide",
+        "description": "Agent protocol generated from the handler route table.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4446,6 +6370,9 @@
           },
           "profileUrl": {
             "type": "string"
+          },
+          "kind": {
+            "const": "person"
           }
         },
         "required": [
@@ -4483,13 +6410,26 @@
           },
           "isAdmin": {
             "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ActorKind"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentIdentity"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
           "sub",
           "name",
           "role",
-          "isAdmin"
+          "isAdmin",
+          "kind"
         ],
         "additionalProperties": false
       },
@@ -4531,6 +6471,14 @@
             "type": "string",
             "default": "Asia/Tokyo",
             "description": "IANA timezone name"
+          },
+          "agentCompletion": {
+            "type": "string",
+            "enum": [
+              "review",
+              "direct"
+            ],
+            "default": "review"
           }
         },
         "required": [
@@ -4541,7 +6489,8 @@
           "createdAt",
           "updatedAt",
           "sprintLengthWeeks",
-          "timezone"
+          "timezone",
+          "agentCompletion"
         ],
         "additionalProperties": false
       },
@@ -4908,7 +6857,7 @@
           "assignee": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Person"
+                "$ref": "#/components/schemas/Actor"
               },
               {
                 "type": "null"
@@ -4916,7 +6865,7 @@
             ]
           },
           "reporter": {
-            "$ref": "#/components/schemas/Person"
+            "$ref": "#/components/schemas/Actor"
           },
           "labelIds": {
             "type": "array",
@@ -5044,6 +6993,30 @@
                 "type": "null"
               }
             ]
+          },
+          "delegator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activeRun": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Run"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "openRequestCount": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -5070,7 +7043,10 @@
           "updatedAt",
           "completedAt",
           "estimate",
-          "sprint"
+          "sprint",
+          "delegator",
+          "activeRun",
+          "openRequestCount"
         ],
         "additionalProperties": false
       },
@@ -5106,7 +7082,7 @@
           "assignee": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Person"
+                "$ref": "#/components/schemas/Actor"
               },
               {
                 "type": "null"
@@ -5114,7 +7090,7 @@
             ]
           },
           "reporter": {
-            "$ref": "#/components/schemas/Person"
+            "$ref": "#/components/schemas/Actor"
           },
           "labelIds": {
             "type": "array",
@@ -5264,6 +7240,30 @@
                 "type": "null"
               }
             ]
+          },
+          "delegator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activeRun": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Run"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "openRequestCount": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -5294,7 +7294,10 @@
           "blocks",
           "blockedBy",
           "estimate",
-          "sprint"
+          "sprint",
+          "delegator",
+          "activeRun",
+          "openRequestCount"
         ],
         "additionalProperties": false
       },
@@ -5310,7 +7313,7 @@
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
           },
           "author": {
-            "$ref": "#/components/schemas/Person"
+            "$ref": "#/components/schemas/Actor"
           },
           "body": {
             "type": "string",
@@ -5330,6 +7333,12 @@
                 "type": "null"
               }
             ]
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Actor"
+            }
           }
         },
         "required": [
@@ -5338,7 +7347,8 @@
           "author",
           "body",
           "createdAt",
-          "editedAt"
+          "editedAt",
+          "mentions"
         ],
         "additionalProperties": false
       },
@@ -5377,7 +7387,7 @@
             "type": "string"
           },
           "uploader": {
-            "$ref": "#/components/schemas/Person"
+            "$ref": "#/components/schemas/Actor"
           },
           "createdAt": {
             "type": "string",
@@ -5408,7 +7418,7 @@
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
           },
           "actor": {
-            "$ref": "#/components/schemas/Person"
+            "$ref": "#/components/schemas/Actor"
           },
           "field": {
             "type": "string",
@@ -5429,7 +7439,8 @@
               "attachment",
               "deleted",
               "estimate",
-              "sprint"
+              "sprint",
+              "delegator"
             ]
           },
           "from": {},
@@ -5481,6 +7492,38 @@
             "required": [
               "kind",
               "comment"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "run"
+              },
+              "run": {
+                "$ref": "#/components/schemas/Run"
+              }
+            },
+            "required": [
+              "kind",
+              "run"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "request"
+              },
+              "request": {
+                "$ref": "#/components/schemas/Request"
+              }
+            },
+            "required": [
+              "kind",
+              "request"
             ],
             "additionalProperties": false
           }
@@ -5625,6 +7668,42 @@
                 }
               ]
             }
+          },
+          "assigneeKind": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActorKind"
+            }
+          },
+          "agent": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "description": "Assignee agent IDs."
+          },
+          "run": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "active",
+                "stalled",
+                "none"
+              ]
+            }
+          },
+          "request": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "open",
+                "mine"
+              ]
+            },
+            "description": "Open requests; mine means open requests raised by the caller. Values within a filter are ORed."
           }
         },
         "required": [],
@@ -5643,7 +7722,7 @@
             "minLength": 1
           },
           "owner": {
-            "$ref": "#/components/schemas/Person"
+            "$ref": "#/components/schemas/Actor"
           },
           "shared": {
             "type": "boolean"
@@ -5770,7 +7849,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Person subject or agent:<id>; disabled agents return 400 invalid at assigneeSub. Agents may self-assign only issues they reported."
           },
           "labelIds": {
             "type": "array",
@@ -5882,7 +7962,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Person subject or agent:<id>; disabled agents return 400 invalid at assigneeSub. Agents may self-assign only issues they reported."
           },
           "labelIds": {
             "type": "array",
@@ -5961,6 +8042,10 @@
                 "type": "null"
               }
             ]
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [],
@@ -6405,6 +8490,814 @@
         ],
         "additionalProperties": false,
         "description": "Most recent limit closed sprints, oldest first. Average of completed/lengthWeeks over the last three closed sprints, rounded to two decimals, or null."
+      },
+      "ActorKind": {
+        "type": "string",
+        "enum": [
+          "person",
+          "agent"
+        ]
+      },
+      "Actor": {
+        "type": "object",
+        "properties": {
+          "sub": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "description": "Same-origin /api/tracker/v1/people/{id}/avatar?v=<Directory avatarVersion>; omitted without an avatar."
+          },
+          "email": {
+            "type": "string"
+          },
+          "profileUrl": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "agent"
+            ]
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentIdentity"
+          }
+        },
+        "required": [
+          "sub",
+          "name",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "AgentIdentity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "handle": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,30}$"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Person"
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "handle",
+          "owner",
+          "disabled"
+        ],
+        "additionalProperties": false
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "handle": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,30}$",
+            "description": "Immutable; also the external subject of every Access Key for this agent."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "description": "At most 4096 UTF-8 bytes"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Person"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "activeRuns": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Live running/waiting runs, excluding stalled leases."
+          },
+          "openRequests": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Open requests raised by this agent."
+          },
+          "lastSeenAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "handle",
+          "name",
+          "description",
+          "owner",
+          "disabled",
+          "activeRuns",
+          "openRequests",
+          "lastSeenAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "AgentCreate": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,30}$",
+            "description": "Immutable; also the external subject of every Access Key for this agent."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "description": "At most 4096 UTF-8 bytes"
+          },
+          "ownerSub": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "handle",
+          "name",
+          "ownerSub"
+        ],
+        "additionalProperties": false
+      },
+      "AgentPatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "description": "At most 4096 UTF-8 bytes"
+          },
+          "ownerSub": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "RunState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "waiting",
+          "stalled",
+          "succeeded",
+          "failed",
+          "canceled"
+        ]
+      },
+      "Link": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pr",
+              "commit",
+              "url"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "kind",
+          "url",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "Run": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/IssueRef"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/Actor"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "lease_expired, reassigned, or canceled_by:<sub>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "summary": {
+            "type": "string",
+            "description": "Markdown, at most 20 KiB UTF-8"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            },
+            "maxItems": 10
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "heartbeatAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "issue",
+          "agent",
+          "state",
+          "reason",
+          "session",
+          "note",
+          "summary",
+          "links",
+          "startedAt",
+          "heartbeatAt",
+          "leaseExpiresAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false
+      },
+      "RunStart": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "RunHeartbeat": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "RunFinish": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "Markdown, at most 20 KiB UTF-8"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            },
+            "maxItems": 10
+          }
+        },
+        "required": [
+          "outcome",
+          "summary"
+        ],
+        "additionalProperties": false
+      },
+      "RequestKind": {
+        "type": "string",
+        "enum": [
+          "question",
+          "approval",
+          "review"
+        ]
+      },
+      "RequestState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "answered",
+          "withdrawn"
+        ]
+      },
+      "RequestAnswer": {
+        "type": "object",
+        "properties": {
+          "option": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown, at most 20 KiB UTF-8"
+          },
+          "by": {
+            "$ref": "#/components/schemas/Actor"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "option",
+          "body",
+          "by",
+          "at"
+        ],
+        "additionalProperties": false
+      },
+      "Request": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/IssueRef"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RequestKind"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Actor"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Actor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown, at most 20 KiB UTF-8"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 6
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/RequestState"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "issue",
+          "kind",
+          "from",
+          "to",
+          "title",
+          "body",
+          "options",
+          "runId",
+          "state",
+          "answer",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "RequestCreate": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "question",
+              "approval"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown, at most 20 KiB UTF-8"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 6,
+            "uniqueItems": true
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Actor subject. Omitted for agents: delegator, else owner. Explicit null: any person."
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "RequestAnswerInput": {
+        "type": "object",
+        "properties": {
+          "option": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown, at most 20 KiB UTF-8"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "InboxAck": {
+        "type": "object",
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "maxItems": 500,
+            "description": "Answered request IDs belonging to the caller."
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "maxItems": 500,
+            "description": "Mentioned comment IDs; a caller has at most one mention per comment."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "InboxItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "request"
+              },
+              "request": {
+                "$ref": "#/components/schemas/Request"
+              }
+            },
+            "required": [
+              "kind",
+              "request"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "answer"
+              },
+              "request": {
+                "$ref": "#/components/schemas/Request"
+              }
+            },
+            "required": [
+              "kind",
+              "request"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "mention"
+              },
+              "comment": {
+                "$ref": "#/components/schemas/Comment"
+              },
+              "issue": {
+                "$ref": "#/components/schemas/IssueRef"
+              }
+            },
+            "required": [
+              "kind",
+              "comment",
+              "issue"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "assignment"
+              },
+              "issue": {
+                "$ref": "#/components/schemas/IssueSummary"
+              }
+            },
+            "required": [
+              "kind",
+              "issue"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Actor"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "issue.created",
+              "issue.updated",
+              "issue.deleted",
+              "comment.created",
+              "run.started",
+              "run.finished",
+              "run.canceled",
+              "request.opened",
+              "request.answered",
+              "request.withdrawn"
+            ]
+          },
+          "data": {
+            "description": "issue.updated: {fields: Activity field[]}; other types: entity ID.",
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "created",
+                        "title",
+                        "description",
+                        "type",
+                        "priority",
+                        "status",
+                        "assignee",
+                        "labels",
+                        "project",
+                        "parent",
+                        "blocks",
+                        "due",
+                        "report",
+                        "attachment",
+                        "deleted",
+                        "estimate",
+                        "sprint",
+                        "delegator"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "fields"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "issue",
+          "actor",
+          "type",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "EventPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "next"
+        ],
+        "additionalProperties": false
       }
     }
   }

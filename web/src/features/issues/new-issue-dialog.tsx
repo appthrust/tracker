@@ -171,11 +171,24 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
           </Field>
           <Field id="new-issue-assignee" label={t('tracker.property.assignee')}>
             <SelectInput id="new-issue-assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}>
-              {people.options.map((option) => (
-                <option key={option.value} value={option.value === '__none' ? '' : option.value}>
-                  {option.label}
-                </option>
-              ))}
+              {people.options
+                .filter((option) => !option.value.startsWith('agent:'))
+                .map((option) => (
+                  <option key={option.value} value={option.value === '__none' ? '' : option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              {people.options.some((option) => option.value.startsWith('agent:')) ? (
+                <optgroup label={t('tracker.agent.delegate')}>
+                  {people.options
+                    .filter((option) => option.value.startsWith('agent:'))
+                    .map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {`${option.label} (${option.detail})`}
+                      </option>
+                    ))}
+                </optgroup>
+              ) : null}
             </SelectInput>
           </Field>
           <Field id="new-issue-estimate" label={t('tracker.property.estimate')} hint={type === 'epic' ? t('tracker.estimate.epic') : undefined}>

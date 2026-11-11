@@ -20,7 +20,10 @@ const issueColumns = `i.id,w.key,i.number,i.title,i.type,i.priority,i.status_id,
 	(SELECT count(*) FROM tracker_comment c WHERE c.issue_id=i.id AND c.deleted_at IS NULL),
 	(SELECT count(*) FROM tracker_attachment a WHERE a.issue_id=i.id),i.created_at,i.updated_at,i.completed_at,i.project_id,
 	lineage.epic,lineage.story,rollup.progress,i.estimate,
-	(SELECT jsonb_build_object('id',sp.id,'number',sp.number,'name',sp.name,'state',CASE WHEN sp.closed_at IS NOT NULL THEN 'closed' WHEN sp.started_at IS NOT NULL THEN 'active' ELSE 'planned' END) FROM tracker_sprint sp WHERE sp.id=i.sprint_id)`
+	(SELECT jsonb_build_object('id',sp.id,'number',sp.number,'name',sp.name,'state',CASE WHEN sp.closed_at IS NOT NULL THEN 'closed' WHEN sp.started_at IS NOT NULL THEN 'active' ELSE 'planned' END) FROM tracker_sprint sp WHERE sp.id=i.sprint_id),
+	CASE WHEN i.delegator_sub IS NULL THEN NULL ELSE jsonb_build_object('sub',i.delegator_sub,'name',i.delegator_name) END,
+	(SELECT ` + runJSON + ` FROM tracker_run r JOIN tracker_agent a ON a.id=r.agent_id WHERE r.issue_id=i.id AND r.state IN ('running','waiting')),
+	(SELECT count(*) FROM tracker_request q WHERE q.issue_id=i.id AND q.state='open')`
 const issueFrom = ` FROM tracker_issue i JOIN tracker_workspace w ON w.id=i.workspace_id JOIN tracker_status s ON s.id=i.status_id `
 
 // Lateral recursive queries keep detail and list projections identical without
@@ -65,16 +68,16 @@ const estimateSQL = `(CASE i.estimate WHEN 'XL' THEN 0 WHEN 'L' THEN 1 WHEN 'M' 
 
 type scanner interface{ Scan(...any) error }
 
-func scanIssue(row scanner) (domain.Issue, error) {
+func scanIssue(row scanner, now time.Time) (domain.Issue, error) {
 	var item domain.Issue
 	var key string
 	var sub, name, due sql.NullString
-	var parent, report, epic, story, progress, sprint []byte
+	var parent, report, epic, story, progress, sprint, delegator, activeRun []byte
 	item.LabelIDs = []string{}
 	item.Children = []domain.IssueRef{}
 	item.Blocks = []domain.IssueRef{}
 	item.BlockedBy = []domain.IssueRef{}
-	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &epic, &story, &progress, &item.Estimate, &sprint, &item.Description)
+	err := row.Scan(&item.ID, &key, &item.Number, &item.Title, &item.Type, &item.Priority, &item.StatusID, &sub, &name, &item.Reporter.Sub, &item.Reporter.Name, pq.Array(&item.LabelIDs), &parent, &due, &report, &item.CommentCount, &item.AttachmentCount, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt, &item.ProjectID, &epic, &story, &progress, &item.Estimate, &sprint, &delegator, &activeRun, &item.OpenRequestCount, &item.Description)
 	if err != nil {
 		return item, err
 	}
@@ -88,12 +91,15 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	for _, field := range []struct {
 		data   []byte
 		target any
-	}{{parent, &item.Parent}, {report, &item.Report}, {epic, &item.Epic}, {story, &item.Story}, {progress, &item.Progress}, {sprint, &item.Sprint}} {
+	}{{parent, &item.Parent}, {report, &item.Report}, {epic, &item.Epic}, {story, &item.Story}, {progress, &item.Progress}, {sprint, &item.Sprint}, {delegator, &item.Delegator}, {activeRun, &item.ActiveRun}} {
 		if len(field.data) > 0 {
 			if err := json.Unmarshal(field.data, field.target); err != nil {
 				return item, err
 			}
 		}
+	}
+	if item.ActiveRun != nil {
+		item.ActiveRun.State = domain.RunState(item.ActiveRun.State, item.ActiveRun.LeaseExpiresAt, now)
 	}
 	item.CreatedAt = item.CreatedAt.UTC()
 	item.UpdatedAt = item.UpdatedAt.UTC()
@@ -121,7 +127,7 @@ func (t *Tx) Issue(id string) (domain.Issue, error) {
 		predicate = "i.number=$2"
 		value = number
 	}
-	item, err := scanIssue(t.SQL.QueryRowContext(t.Context, `SELECT `+issueColumns+`,i.description`+issueFrom+issueHierarchy+`WHERE i.workspace_id=$1 AND i.deleted_at IS NULL AND `+predicate, t.WorkspaceID, value))
+	item, err := scanIssue(t.SQL.QueryRowContext(t.Context, `SELECT `+issueColumns+`,i.description`+issueFrom+issueHierarchy+`WHERE i.workspace_id=$1 AND i.deleted_at IS NULL AND `+predicate, t.WorkspaceID, value), t.now())
 	if err != nil {
 		return item, err
 	}
@@ -213,6 +219,32 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 	anyOf("i.priority", f.Priority)
 	anyOf("i.report->>'environment'", f.Environment)
 	anyOf("i.report->>'surface'", f.Surface)
+	anyOf("CASE WHEN i.assignee_sub LIKE 'agent:%' THEN 'agent' WHEN i.assignee_sub IS NOT NULL THEN 'person' END", f.AssigneeKind)
+	if len(f.Agent) > 0 {
+		clauses = append(clauses, "i.assignee_sub IN (SELECT 'agent:'||a.id FROM tracker_agent a WHERE a.workspace_id=i.workspace_id AND a.id=ANY("+bind(pq.Array(f.Agent))+"))")
+	}
+	if len(f.Run) > 0 {
+		now := bind(t.now())
+		states := []string{}
+		for _, state := range f.Run {
+			switch state {
+			case "active":
+				states = append(states, "EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting') AND r.lease_expires_at>="+now+")")
+			case "stalled":
+				states = append(states, "EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting') AND r.lease_expires_at<"+now+")")
+			case "none":
+				states = append(states, "NOT EXISTS(SELECT 1 FROM tracker_run r WHERE r.issue_id=i.id AND r.state IN ('running','waiting'))")
+			}
+		}
+		clauses = append(clauses, "("+strings.Join(states, " OR ")+")")
+	}
+	if len(f.Request) > 0 {
+		predicate := ""
+		if !slices.Contains(f.Request, "open") {
+			predicate = " AND q.from_sub=" + bind(options.Subject)
+		}
+		clauses = append(clauses, "EXISTS(SELECT 1 FROM tracker_request q WHERE q.issue_id=i.id AND q.state='open'"+predicate+")")
+	}
 	if len(f.Label) > 0 {
 		clauses = append(clauses, "EXISTS(SELECT 1 FROM tracker_issue_label il WHERE il.issue_id=i.id AND il.label_id=ANY("+bind(pq.Array(f.Label))+"))")
 	}
@@ -325,8 +357,9 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		return page, err
 	}
 	defer rows.Close()
+	now := t.now()
 	for rows.Next() {
-		item, err := scanIssue(rows)
+		item, err := scanIssue(rows, now)
 		if err != nil {
 			return page, err
 		}
@@ -361,4 +394,26 @@ func (t *Tx) ListIssues(options ListOptions) (Page, error) {
 		page.NextCursor = &cursor
 	}
 	return page, nil
+}
+
+// Inbox assignments reuse the list projection in one query, preserving its order.
+func (t *Tx) issueSummaries(ids []string) ([]domain.IssueSummary, error) {
+	list := []domain.IssueSummary{}
+	if len(ids) == 0 {
+		return list, nil
+	}
+	rows, err := t.SQL.QueryContext(t.Context, `SELECT `+issueColumns+`,''`+issueFrom+issueHierarchy+` WHERE i.workspace_id=$1 AND i.deleted_at IS NULL AND i.id=ANY($2) ORDER BY array_position($2::text[],i.id)`, t.WorkspaceID, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := t.now()
+	for rows.Next() {
+		item, err := scanIssue(rows, now)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, item.IssueSummary)
+	}
+	return list, rows.Err()
 }

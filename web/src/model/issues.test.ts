@@ -18,7 +18,10 @@ const issue = (number: number, patch: Partial<IssueSummary> = {}): IssueSummary 
   priority: 'none',
   statusId: 'todo',
   assignee: null,
-  reporter: { sub: 'dev-alex', name: 'Alex Chen' },
+  reporter: { sub: 'dev-alex', name: 'Alex Chen', kind: 'person' },
+  delegator: null,
+  activeRun: null,
+  openRequestCount: 0,
   labelIds: [],
   projectId: null,
   parent: null,
@@ -55,7 +58,7 @@ describe('issue rules', () => {
 
   test('filters AND across facets and OR within one; me/none resolve against the caller', () => {
     const context = { me: 'dev-alex', statuses }
-    const mine = issue(1, { assignee: { sub: 'dev-alex', name: 'Alex Chen' }, labelIds: ['ux'], statusId: 'doing' })
+    const mine = issue(1, { assignee: { sub: 'dev-alex', name: 'Alex Chen', kind: 'person' }, labelIds: ['ux'], statusId: 'doing' })
     const bug = issue(2, { type: 'bug', report: { environment: 'craftsman', surface: 'dashboard' }, parent: { id: 'id-1', identifier: 'APT-1', title: 'x', statusId: 'doing' } })
     expect(matchesFilter(mine, { assignee: ['me'] }, context)).toBe(true)
     expect(matchesFilter(bug, { assignee: ['me'] }, context)).toBe(false)
@@ -63,7 +66,7 @@ describe('issue rules', () => {
     expect(matchesFilter(mine, { reporter: ['me'] }, context)).toBe(true)
     expect(matchesFilter(mine, { reporter: ['dev-sam'] }, context)).toBe(false)
     expect(matchesFilter(mine, { reporter: ['dev-sam', 'me'] }, context)).toBe(true)
-    expect(matchesFilter(issue(4, { reporter: { sub: 'dev-sam', name: 'Sam Rivera' } }), { reporter: ['me'], assignee: ['none'] }, context)).toBe(false)
+    expect(matchesFilter(issue(4, { reporter: { sub: 'dev-sam', name: 'Sam Rivera', kind: 'person' } }), { reporter: ['me'], assignee: ['none'] }, context)).toBe(false)
     expect(matchesFilter(mine, { category: ['started'], label: ['ux', 'docs'] }, context)).toBe(true)
     expect(matchesFilter(mine, { category: ['started'], type: ['bug'] }, context)).toBe(false)
     expect(matchesFilter(bug, { environment: ['craftsman'], surface: ['dashboard'] }, context)).toBe(true)
@@ -166,8 +169,8 @@ describe('issue rules', () => {
   })
 
   test('attachments come from the timeline: added in `to`, removed in `from`', () => {
-    const file = (id: string): Attachment => ({ id, issueId: 'i', filename: `${id}.png`, mediaType: 'image/png', size: 10, url: `/api/tracker/v1/attachments/${id}`, uploader: { sub: 'a', name: 'A' }, createdAt: '2026-10-01T00:00:00Z' })
-    const activity = (id: string, from: unknown, to: unknown): TimelineItem => ({ kind: 'activity', activity: { id, issueId: 'i', actor: { sub: 'a', name: 'A' }, field: 'attachment', from, to, createdAt: '2026-10-01T00:00:00Z' } })
+    const file = (id: string): Attachment => ({ id, issueId: 'i', filename: `${id}.png`, mediaType: 'image/png', size: 10, url: `/api/tracker/v1/attachments/${id}`, uploader: { sub: 'a', name: 'A', kind: 'person' }, createdAt: '2026-10-01T00:00:00Z' })
+    const activity = (id: string, from: unknown, to: unknown): TimelineItem => ({ kind: 'activity', activity: { id, issueId: 'i', actor: { sub: 'a', name: 'A', kind: 'person' }, field: 'attachment', from, to, createdAt: '2026-10-01T00:00:00Z' } })
     expect(attachmentsOf([activity('1', null, file('a')), activity('2', null, file('b')), activity('3', file('a'), null)]).map((item) => item.id)).toEqual(['b'])
   })
 

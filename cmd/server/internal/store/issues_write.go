@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
@@ -41,20 +42,21 @@ type IssueCreate struct {
 	Report      *domain.Report `json:"report"`
 }
 type IssuePatch struct {
-	Title       Field[string]        `json:"title"`
-	Description Field[string]        `json:"description"`
-	Type        Field[string]        `json:"type"`
-	Priority    Field[string]        `json:"priority"`
-	StatusID    Field[string]        `json:"statusId"`
-	AssigneeSub Field[string]        `json:"assigneeSub"`
-	LabelIDs    Field[[]string]      `json:"labelIds"`
-	ProjectID   Field[string]        `json:"projectId"`
-	Estimate    Field[string]        `json:"estimate"`
-	SprintID    Field[string]        `json:"sprintId"`
-	ParentID    Field[string]        `json:"parentId"`
-	Blocks      Field[[]string]      `json:"blocks"`
-	DueOn       Field[string]        `json:"dueOn"`
-	Report      Field[domain.Report] `json:"report"`
+	ExpectedUpdatedAt *time.Time           `json:"expectedUpdatedAt"`
+	Title             Field[string]        `json:"title"`
+	Description       Field[string]        `json:"description"`
+	Type              Field[string]        `json:"type"`
+	Priority          Field[string]        `json:"priority"`
+	StatusID          Field[string]        `json:"statusId"`
+	AssigneeSub       Field[string]        `json:"assigneeSub"`
+	LabelIDs          Field[[]string]      `json:"labelIds"`
+	ProjectID         Field[string]        `json:"projectId"`
+	Estimate          Field[string]        `json:"estimate"`
+	SprintID          Field[string]        `json:"sprintId"`
+	ParentID          Field[string]        `json:"parentId"`
+	Blocks            Field[[]string]      `json:"blocks"`
+	DueOn             Field[string]        `json:"dueOn"`
+	Report            Field[domain.Report] `json:"report"`
 }
 
 func jsonValue(value any) (any, error) {
@@ -208,6 +210,13 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	if err != nil {
 		return item, invalid("Status must belong to this workspace")
 	}
+	if err := t.completionAllowed(actor, status.Category); err != nil {
+		return item, err
+	}
+	item.Delegator, err = t.delegation(actor, assignee, actor.Sub)
+	if err != nil {
+		return item, err
+	}
 	item.CompletedAt = domain.TransitionCompletedAt(status.Category, t.now())
 	if input.ParentID != nil {
 		item.Parent, err = t.parent(item.ID, *input.ParentID, item.Type, "parentId")
@@ -239,6 +248,9 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	if err := t.Exec(`INSERT INTO tracker_issue (id,workspace_id,number,title,description,type,priority,status_id,assignee_sub,assignee_name,reporter_sub,reporter_name,parent_id,due_on,report,completed_at,project_id,estimate,sprint_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, item.ID, t.WorkspaceID, item.Number, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, actor.Sub, actor.Name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID, item.Estimate, sprintID(item.Sprint)); err != nil {
 		return item, err
 	}
+	if err := t.saveDelegator(item.ID, item.Delegator); err != nil {
+		return item, err
+	}
 	if _, err := t.replaceLabels(item.ID, input.LabelIDs); err != nil {
 		return item, err
 	}
@@ -252,12 +264,25 @@ func (t *Tx) CreateIssue(input IssueCreate, actor domain.Person, assignee *domai
 	if err := t.sprintEvents(item.ID, domain.SprintStanding{}, after); err != nil {
 		return item, err
 	}
+	if err := t.event(item.ID, actor, "issue.created", item.ID); err != nil {
+		return item, err
+	}
 	return t.Issue(item.ID)
 }
 func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assignee *domain.Person) (domain.Issue, error) {
 	old, err := t.Issue(id)
 	if err != nil {
 		return old, err
+	}
+	owner := ""
+	if old.Assignee != nil {
+		owner = old.Assignee.Sub
+	}
+	if !domain.Can(domain.Actor{Person: actor, Kind: domain.ActorKind(actor.Sub)}, domain.EditIssue, domain.Target{OwnerSub: owner, ReporterSub: old.Reporter.Sub}) {
+		return old, httpx.Forbidden()
+	}
+	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(old.UpdatedAt) {
+		return old, httpx.Conflict("The issue has changed; read it again before editing")
 	}
 	item := old
 	for _, field := range []struct {
@@ -276,6 +301,10 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		item.Assignee = nil
 		if assignee != nil {
 			item.Assignee = &domain.Person{Sub: assignee.Sub, Name: assignee.Name}
+		}
+		item.Delegator, err = t.delegation(actor, assignee, item.Reporter.Sub)
+		if err != nil {
+			return item, err
 		}
 	}
 	if input.ProjectID.Present {
@@ -343,12 +372,17 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 			return item, err
 		}
 	}
-	if item.StatusID != old.StatusID {
+	if input.StatusID.Present {
 		after, err := t.Status(item.StatusID)
 		if err != nil {
 			return item, invalid("Status must belong to this workspace")
 		}
-		item.CompletedAt = domain.TransitionCompletedAt(after.Category, t.now())
+		if err := t.completionAllowed(actor, after.Category); err != nil {
+			return item, err
+		}
+		if item.StatusID != old.StatusID {
+			item.CompletedAt = domain.TransitionCompletedAt(after.Category, t.now())
+		}
 	}
 	if input.LabelIDs.Present {
 		if input.LabelIDs.Value == nil {
@@ -369,7 +403,7 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		}
 		slices.SortFunc(old.Blocks, func(a, b domain.IssueRef) int { return strings.Compare(a.ID, b.ID) })
 	}
-	changed := false
+	fields := []string{}
 	for _, field := range []struct {
 		name     string
 		from, to any
@@ -377,15 +411,16 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		{"title", old.Title, item.Title}, {"description", old.Description, item.Description}, {"type", old.Type, item.Type}, {"priority", old.Priority, item.Priority}, {"status", old.StatusID, item.StatusID}, {"assignee", old.Assignee, item.Assignee}, {"labels", old.LabelIDs, item.LabelIDs}, {"parent", old.Parent, item.Parent}, {"blocks", old.Blocks, item.Blocks}, {"due", old.DueOn, item.DueOn}, {"report", old.Report, item.Report},
 		{"project", old.ProjectID, item.ProjectID},
 		{"estimate", old.Estimate, item.Estimate}, {"sprint", old.Sprint, item.Sprint},
+		{"delegator", old.Delegator, item.Delegator},
 	} {
 		if !reflect.DeepEqual(field.from, field.to) {
-			changed = true
+			fields = append(fields, field.name)
 			if err := t.activity(item.ID, actor, field.name, field.from, field.to); err != nil {
 				return item, err
 			}
 		}
 	}
-	if !changed {
+	if len(fields) == 0 {
 		return old, nil
 	}
 	var sub, name, parent any
@@ -402,6 +437,16 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	if err := t.Exec(`UPDATE tracker_issue SET title=$3,description=$4,type=$5,priority=$6,status_id=$7,assignee_sub=$8,assignee_name=$9,parent_id=$10,due_on=$11,report=$12,completed_at=$13,project_id=$14,estimate=$15,sprint_id=$16,updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID, item.Title, item.Description, item.Type, item.Priority, item.StatusID, sub, name, parent, item.DueOn, report, item.CompletedAt, item.ProjectID, item.Estimate, sprintID(item.Sprint)); err != nil {
 		return item, err
 	}
+	if err := t.saveDelegator(item.ID, item.Delegator); err != nil {
+		return item, err
+	}
+	if input.AssigneeSub.Present && old.Assignee != nil && domain.ActorKind(old.Assignee.Sub) == "agent" &&
+		(item.Assignee == nil || item.Assignee.Sub != old.Assignee.Sub) &&
+		old.ActiveRun != nil && old.ActiveRun.Agent.Sub == old.Assignee.Sub {
+		if err := t.closeRun(old.ActiveRun.ID, "canceled", "reassigned", actor); err != nil {
+			return item, err
+		}
+	}
 	before, err := t.standing(old)
 	if err != nil {
 		return item, err
@@ -413,6 +458,9 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	if err := t.sprintEvents(item.ID, before, after); err != nil {
 		return item, err
 	}
+	if err := t.event(item.ID, actor, "issue.updated", map[string]any{"fields": fields}); err != nil {
+		return item, err
+	}
 	return t.Issue(item.ID)
 }
 func (t *Tx) DeleteIssue(id string, actor domain.Actor) error {
@@ -421,6 +469,14 @@ func (t *Tx) DeleteIssue(id string, actor domain.Actor) error {
 	}
 	item, err := t.Issue(id)
 	if err != nil {
+		return err
+	}
+	if item.ActiveRun != nil {
+		if err := t.closeRun(item.ActiveRun.ID, "canceled", "canceled_by:"+actor.Sub, actor.Person); err != nil {
+			return err
+		}
+	}
+	if err := t.withdrawRequests(`q.issue_id=$2`, item.ID, actor.Person); err != nil {
 		return err
 	}
 	if err := t.Exec(`UPDATE tracker_issue SET deleted_at=now(),updated_at=now() WHERE workspace_id=$1 AND id=$2`, t.WorkspaceID, item.ID); err != nil {
@@ -435,5 +491,8 @@ func (t *Tx) DeleteIssue(id string, actor domain.Actor) error {
 	if err := t.sprintEvents(item.ID, before, after); err != nil {
 		return err
 	}
-	return t.activity(item.ID, actor.Person, "deleted", nil, nil)
+	if err := t.activity(item.ID, actor.Person, "deleted", nil, nil); err != nil {
+		return err
+	}
+	return t.event(item.ID, actor.Person, "issue.deleted", item.ID)
 }

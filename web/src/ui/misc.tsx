@@ -1,8 +1,10 @@
+import { Bot } from 'lucide-react'
 import { useState } from 'react'
-import type { Person } from '../api/tracker'
+import type { ActorKind, Person } from '../api/tracker'
 import { cn } from './cn'
 
 const AVATAR_SIZE = { xs: 'size-5 text-[9px]', sm: 'size-6 text-[10px]', md: 'size-8 text-xs', lg: 'size-16 text-xl' } as const
+const AGENT_GLYPH = { xs: 'size-3', sm: 'size-3.5', md: 'size-4.5', lg: 'size-9' } as const
 
 /**
  * Up to two initials: the first letters of the first two words of a Latin name
@@ -16,17 +18,38 @@ export function initialsOf(name: string): string {
   return /^[A-Za-z]$/.test(first) && second && /^[A-Za-z]$/.test(second) ? `${first}${second}`.toUpperCase() : first.toUpperCase()
 }
 
-/** Directory image with the existing initials badge as its error/absence fallback. */
-export function Avatar({ person, size = 'md' }: { person: Pick<Person, 'name' | 'avatarUrl'>; size?: keyof typeof AVATAR_SIZE }) {
+/**
+ * Directory image with the existing initials badge as its error/absence
+ * fallback. An agent (`kind: 'agent'`) is never a photo: a dark rounded
+ * square with a robot glyph, so it reads as "not a person" at any size.
+ * `label` names the badge for tooltips and screen readers where no name sits beside it.
+ */
+export function Avatar({ person, size = 'md', label }: { person: Pick<Person, 'name' | 'avatarUrl'> & { kind?: ActorKind }; size?: keyof typeof AVATAR_SIZE; label?: string }) {
   const [failedUrl, setFailedUrl] = useState<string>()
+  if (person.kind === 'agent') {
+    return (
+      <span
+        role={label ? 'img' : undefined}
+        aria-label={label}
+        aria-hidden={label ? undefined : true}
+        title={label}
+        className={cn('inline-flex shrink-0 items-center justify-center rounded-[28%] bg-stone-800 text-white ring-1 ring-stone-900/10 ring-inset', AVATAR_SIZE[size])}
+      >
+        <Bot aria-hidden className={AGENT_GLYPH[size]} strokeWidth={2.25} />
+      </span>
+    )
+  }
   const showImage = person.avatarUrl && person.avatarUrl !== failedUrl
   return (
     <span
-      aria-hidden={showImage ? undefined : true}
+      aria-hidden={showImage || label ? undefined : true}
+      role={label && !showImage ? 'img' : undefined}
+      aria-label={label && !showImage ? label : undefined}
+      title={label}
       className={cn('inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-soft font-semibold text-accent-strong ring-1 ring-accent-line ring-inset', AVATAR_SIZE[size])}
     >
       {showImage ? (
-        <img src={person.avatarUrl} alt={person.name} loading="lazy" className="size-full rounded-full object-cover" onError={() => setFailedUrl(person.avatarUrl)} />
+        <img src={person.avatarUrl} alt={label ?? person.name} loading="lazy" className="size-full rounded-full object-cover" onError={() => setFailedUrl(person.avatarUrl)} />
       ) : initialsOf(person.name)}
     </span>
   )
@@ -86,4 +109,11 @@ export function formatRelative(iso: string, locale: string, now = Date.now()): s
     if (Math.abs(seconds) >= size) return format.format(Math.trunc(seconds / size), unit)
   }
   return format.format(0, 'second')
+}
+
+/** "12 分" / "12 minutes", "3 時間" / "3 hours", "2 日" / "2 days" for a span of milliseconds (largest whole unit, at least a minute). */
+export function formatDuration(ms: number, locale: string): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  const [unit, value] = minutes >= 2 * 1440 ? (['day', Math.round(minutes / 1440)] as const) : minutes >= 120 ? (['hour', Math.round(minutes / 60)] as const) : (['minute', minutes] as const)
+  return new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'long' }).format(value)
 }

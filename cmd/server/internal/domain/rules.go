@@ -78,29 +78,66 @@ const (
 	EditProject      Action = "edit_project"
 	ArchiveProject   Action = "archive_project"
 	DeleteProject    Action = "delete_project"
+	SetStatus        Action = "set_status"
+	AssignAgent      Action = "assign_agent"
+	StartRun         Action = "start_run"
+	HeartbeatRun     Action = "heartbeat_run"
+	FinishRun        Action = "finish_run"
+	CancelRun        Action = "cancel_run"
+	AnswerRequest    Action = "answer_request"
+	ManageSprint     Action = "manage_sprint"
+	WithdrawRequest  Action = "withdraw_request"
+	DeleteView       Action = "delete_view"
 )
 
 type Target struct {
-	OwnerSub string
-	Shared   bool
+	OwnerSub        string
+	Shared          bool
+	Category        string
+	AgentCompletion string
+	ReporterSub     string
+	RequestKind     string
 }
 
 func Can(actor Actor, action Action, target Target) bool {
 	if actor.Sub == "" {
 		return false
 	}
-	admin := actor.Role == "Admin"
+	agent := actor.Kind == "agent"
+	admin := actor.Role == "Admin" && !actor.Key && !agent
 	switch action {
-	case Read, Create, EditIssue, CreateProject, EditProject:
+	case SetStatus:
+		return !agent || target.Category != "completed" || target.AgentCompletion == "direct"
+	case AssignAgent:
+		return !agent || (target.OwnerSub == actor.Sub && target.ReporterSub == actor.Sub)
+	case StartRun, HeartbeatRun, FinishRun:
+		return agent && actor.Sub == target.OwnerSub
+	case CancelRun:
+		return !agent || actor.Sub == target.OwnerSub
+	case AnswerRequest:
+		// Approval/review may never be answered by an agent.
+		if agent && target.RequestKind != "question" {
+			return false
+		}
+		return actor.Sub == target.OwnerSub || (!agent && (target.OwnerSub == "" || admin))
+	case WithdrawRequest:
+		return actor.Sub == target.OwnerSub
+	case EditIssue:
+		return !agent || actor.Sub == target.OwnerSub || actor.Sub == target.ReporterSub
+	case ManageSprint:
+		return !agent
+	case Read, Create, CreateProject, EditProject:
 		return true
 	case ManageWorkspace, DeleteIssue, ArchiveProject, DeleteProject:
 		return admin
 	case EditComment:
 		return actor.Sub == target.OwnerSub
 	case DeleteComment, DeleteAttachment:
-		return admin || actor.Sub == target.OwnerSub
+		return !agent && (admin || actor.Sub == target.OwnerSub)
 	case CreateView:
 		return !target.Shared || admin
+	case DeleteView:
+		return !agent && Can(actor, ManageView, target)
 	case ManageView:
 		if target.Shared {
 			return admin
@@ -210,6 +247,9 @@ func ValidateFilter(filter Filter) error {
 		values, allowed []string
 	}{
 		{"category", filter.Category, Categories}, {"type", filter.Type, Types}, {"priority", filter.Priority, Priorities}, {"surface", filter.Surface, Surfaces},
+		{"assigneeKind", filter.AssigneeKind, []string{"person", "agent"}},
+		{"run", filter.Run, []string{"active", "stalled", "none"}},
+		{"request", filter.Request, []string{"open", "mine"}},
 	} {
 		for _, value := range field.values {
 			if !slices.Contains(field.allowed, value) {
@@ -217,7 +257,7 @@ func ValidateFilter(filter Filter) error {
 			}
 		}
 	}
-	for _, ids := range [][]string{filter.Status, filter.Label} {
+	for _, ids := range [][]string{filter.Status, filter.Label, filter.Agent} {
 		for _, id := range ids {
 			if !ValidID(id) {
 				return errors.New("Filter contains an invalid resource ID")

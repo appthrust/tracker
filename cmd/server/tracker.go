@@ -28,6 +28,13 @@ func trackerHandler(upstreamURL, projectID string) (*pending.Handler, func(), er
 	if err != nil {
 		return nil, nil, err
 	}
+	runLease := 10 * time.Minute
+	if raw := os.Getenv("TRACKER_RUN_LEASE"); raw != "" {
+		runLease, err = time.ParseDuration(raw)
+		if err != nil || runLease <= 0 {
+			return nil, nil, errors.New("TRACKER_RUN_LEASE must be a positive duration")
+		}
+	}
 	publicURL := os.Getenv("TRACKER_PUBLIC_URL")
 	if publicURL != "" {
 		origin, err := parseOrigin(publicURL)
@@ -68,6 +75,7 @@ func trackerHandler(upstreamURL, projectID string) (*pending.Handler, func(), er
 				return nil, err
 			}
 		}
+		database.RunLease = runLease
 		tracker.Swap(api.New(database, auth, platform, directory.New(links, directoryPublicURL), projectID))
 		return database, nil
 	})
