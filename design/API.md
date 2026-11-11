@@ -279,3 +279,151 @@ the existing issues so earlier numbers do not move. Existing seeded issues
 `stories[n % 4]`; the rest keep `parent: null`. One shared view
 `By epic` (`layout: 'board'`, `groupBy: 'epic'`, empty filter) is added after
 `Bugs` and `My issues`.
+
+## Sprints, estimates, burndown and velocity (v0.1.10)
+
+Work is cut into one- or two-week sprints; issues carry a T-shirt-size
+estimate; a ledger of signed deltas yields burndown and velocity.
+
+| Entity | Owner (sole writer) | Lifecycle | Invariants |
+| --- | --- | --- | --- |
+| **Estimate** (field on Issue) | any signed-in user | set, changed, cleared | T-shirt size `XS`, `S`, `M`, `L`, `XL`, or `null` (not estimated); not allowed on `epic`. Each size has a fixed Fibonacci point weight used only for sums: `XS=1`, `S=2`, `M=3`, `L=5`, `XL=8` (`domain.SizePoints`). People pick and read sizes; numbers appear only in sprint totals and charts. |
+| **Sprint** | any signed-in user; delete Admin | `planned → active → closed`, explicit `start` and `close`; never reopened | `lengthWeeks ∈ {1, 2}`; `endsOn = startsOn + 7·lengthWeeks − 1`; date ranges of non-closed sprints do not overlap; at most one `active`; `number` from a per-workspace sequence; only a `planned` sprint is deleted or re-dated. |
+| **Sprint membership** (`issue.sprintId`) | any signed-in user | set, moved, cleared; frozen once the sprint is closed | target sprint is `planned` or `active`; `epic` cannot be a member; **lineage-exclusive**: an issue cannot join a sprint that already contains one of its strict ancestors or descendants. |
+| **Sprint event** (ledger) | server, in the transaction of the issue write that caused it | append-only; no rows after `closedAt` | one row per (write, sprint) with four signed deltas; the sum of a sprint's rows equals its current totals. |
+| **Sprint settings** (on Workspace) | Admin | defaults | `sprintLengthWeeks ∈ {1, 2}` (default `1`), `timezone` IANA name (default `Asia/Tokyo`). |
+
+Vocabulary: **scope** = member issues that are not deleted and not in a
+`canceled` status; **done** = scope issues in a `completed` status;
+**remaining** = scope − done; **commitment** = scope at `startedAt`;
+**velocity** = done at `closedAt`. Every quantity exists in two units,
+`points` (sum of the members' size weights, `null` counts 0) and `issues`
+(count).
+
+
+### The ledger rule (pure)
+
+```go
+// domain/sprint.go — no context, clock, or I/O.
+type SprintStanding struct { SprintID string; Size string /* "" = not estimated */; Category string; Deleted bool }
+type SprintTally    struct { ScopePoints, ScopeIssues, DonePoints, DoneIssues int }
+
+func Contribution(s SprintStanding) SprintTally           // zero when SprintID=="" or Deleted or Category==canceled
+func SprintDeltas(before, after SprintStanding) map[string]SprintTally // per sprint id; zero tallies omitted
+func Burndown(baseline SprintTally, events []SprintEvent, days []Day) []BurndownPoint
+func ValidateSprintDates(startsOn Date, lengthWeeks int, others []SprintSpan) error
+func ValidateMembership(issueType string, sprintState string, lineageMembers int) error
+```
+
+`SprintDeltas` is `Contribution(after) − Contribution(before)`, attributed to
+each standing's sprint. Moving between sprints, estimating, completing,
+reopening, canceling and soft-deleting are all the same subtraction, so a new
+field that affects scope extends `SprintStanding` and nothing else. The store
+calls it in `CreateIssue`, `PatchIssue` and `DeleteIssue` after loading the
+row and writes one `tracker_sprint_event` per returned sprint that is not
+closed.
+
+
+```ts
+type SprintState = 'planned' | 'active' | 'closed'
+type Tally  = { scopePoints: number; scopeIssues: number; donePoints: number; doneIssues: number }
+type Sprint = {
+  id: string; number: number; name: string /* 1–60, default "Sprint <number>" */; goal: string /* ≤ 4096 bytes */
+  state: SprintState; lengthWeeks: 1 | 2
+  startsOn: string; endsOn: string /* YYYY-MM-DD, workspace timezone, inclusive */
+  startedAt: string | null; closedAt: string | null
+  current: Tally               // sum of the ledger
+  commitment: Tally | null     // ledger at startedAt; null while planned
+  createdAt: string; updatedAt: string
+}
+type SprintRef = { id: string; number: number; name: string; state: SprintState }
+type Unit = 'points' | 'issues'
+type BurndownPoint = { day: string; scope: number; done: number; remaining: number; ideal: number }
+type Burndown = { sprint: SprintRef; unit: Unit; today: string; points: BurndownPoint[] /* one per day startsOn..endsOn; days after today omit scope/done/remaining */ }
+type VelocityEntry = { sprint: SprintRef; lengthWeeks: 1 | 2; committed: number; completed: number }
+type Velocity = { unit: Unit; items: VelocityEntry[] /* closed sprints, oldest first */; averagePerWeek: number | null /* over the last 3 closed sprints */ }
+```
+
+Changes to existing shapes:
+
+- `type Size = 'XS' | 'S' | 'M' | 'L' | 'XL'`. `Issue` and `IssueSummary` gain
+  `estimate: Size | null` and
+  `sprint: SprintRef | null`.
+- `POST /issues` accepts `estimate?`, `sprintId?`; `PATCH /issues/{id}`
+  accepts `estimate` and `sprintId` (`null` clears). Violations → 400
+  `invalid` with path `estimate` or `sprintId` (unknown or closed sprint,
+  epic, lineage member already in the sprint). A `PATCH` that changes `type`
+  or `parentId` re-checks membership, as the hierarchy check does.
+- `Filter` gains `sprint?: (string | 'active' | 'none')[]`.
+- `Sort` gains `'estimate'` (`XL` → `XS`, `null` last, then `updated` desc).
+- `View.groupBy` gains `'sprint'`.
+- `Activity.field` gains `'estimate'` (raw value) and `'sprint'`
+  (`SprintRef | null`).
+- `Workspace` gains `sprintLengthWeeks: 1 | 2` and `timezone: string`;
+  `PATCH /workspace` accepts both (Admin).
+- `Progress` (epic/story) gains `points: { total: number; completed: number }`
+  (sum of size weights).
+
+| Method & path | Body → Response | Authz |
+| --- | --- | --- |
+| `GET /sprints?state=` | → `{ items: Sprint[] }` active, then planned by `startsOn`, then closed newest first | any |
+| `POST /sprints` | `{ name?, goal?, startsOn?, lengthWeeks? }` → `Sprint` 201. Defaults: `lengthWeeks` = workspace setting; `startsOn` = day after the latest non-closed sprint's `endsOn`, else the coming Monday. Overlap → 409 | any |
+| `GET /sprints/{id}` | → `Sprint` | any |
+| `PATCH /sprints/{id}` | `{ name?, goal?, startsOn?, lengthWeeks? }` → `Sprint`; dates only while `planned` (409 otherwise) | any |
+| `POST /sprints/{id}/start` | → `Sprint`; 409 when another sprint is active or this one is not `planned`. Sets `startedAt`; `startsOn` becomes today when it was in the future, keeping `lengthWeeks` | any |
+| `POST /sprints/{id}/close` | `{ moveIncompleteTo: string \| null }` → `Sprint`; target is a `planned` sprint id or `null` (backlog). Sets `closedAt`, then moves scope issues that are not done; the move is recorded only on the target's ledger | any |
+| `DELETE /sprints/{id}` | 204; only `planned`; members return to the backlog | Admin |
+| `GET /sprints/{id}/burndown?unit=&project=` | → `Burndown` | any |
+| `GET /velocity?unit=&project=&limit=` | → `Velocity`; `limit` default 8, max 26 | any |
+
+Chart semantics:
+
+- Day boundaries are midnights in `Workspace.timezone`. A point is the ledger
+  summed up to the end of that day (up to now for `today`, up to `closedAt`
+  for the last day of a closed sprint).
+- `ideal` descends linearly from the commitment's remaining at `startsOn` to 0
+  at `endsOn`, flat across Saturdays and Sundays.
+- `project` (an id or `none`) restricts the sum to events of issues currently
+  in that project.
+- `Velocity.completed` is done at `closedAt`; `committed` is scope at
+  `startedAt`. `averagePerWeek` divides by `lengthWeeks`, so one- and two-week
+  sprints are comparable; the SPA shows `averagePerWeek × lengthWeeks` as the
+  suggested commitment while planning.
+
+Storage (migration `011_sprints.sql`):
+
+```sql
+ALTER TABLE tracker_workspace ADD sprint_length_weeks int NOT NULL DEFAULT 1 CHECK (sprint_length_weeks IN (1,2)),
+                              ADD timezone text NOT NULL DEFAULT 'Asia/Tokyo';
+CREATE TABLE tracker_sprint (
+  id text PRIMARY KEY, workspace_id text NOT NULL REFERENCES tracker_workspace(id),
+  number bigint NOT NULL, name text NOT NULL, goal text NOT NULL DEFAULT '',
+  length_weeks int NOT NULL CHECK (length_weeks IN (1,2)), starts_on date NOT NULL, ends_on date NOT NULL,
+  started_at timestamptz, closed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, number),
+  CHECK (ends_on = starts_on + 7 * length_weeks - 1),
+  CHECK (closed_at IS NULL OR started_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX tracker_sprint_one_active ON tracker_sprint (workspace_id) WHERE started_at IS NOT NULL AND closed_at IS NULL;
+ALTER TABLE tracker_issue ADD estimate text CHECK (estimate IN ('XS','S','M','L','XL')),
+                          ADD sprint_id text REFERENCES tracker_sprint(id),
+                          ADD CHECK (type <> 'epic' OR (estimate IS NULL AND sprint_id IS NULL));
+CREATE INDEX tracker_issue_sprint ON tracker_issue (sprint_id) WHERE sprint_id IS NOT NULL;
+CREATE TABLE tracker_sprint_event (
+  id text PRIMARY KEY, sprint_id text NOT NULL REFERENCES tracker_sprint(id) ON DELETE CASCADE,
+  issue_id text NOT NULL REFERENCES tracker_issue(id) ON DELETE CASCADE, at timestamptz NOT NULL DEFAULT now(),
+  scope_points int NOT NULL, scope_issues int NOT NULL, done_points int NOT NULL, done_issues int NOT NULL
+);
+CREATE INDEX tracker_sprint_event_sprint ON tracker_sprint_event (sprint_id, at);
+```
+
+`state` is derived from `started_at`/`closed_at`, not stored. The overlap
+invariant is checked in the transaction that takes the existing workspace row
+lock; the partial unique index backs "one active".
+
+Fixture (dev seed and SPA mock, identical): three closed one-week sprints
+with ledgers that yield velocities 18, 21, 24 points, one active two-week
+sprint on its fourth day with a scope increase and one cancellation, one
+planned sprint; about half of the seeded work items carry a size, spread
+over all five.
