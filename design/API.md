@@ -599,7 +599,7 @@ Changes to existing shapes:
 | `POST /agents` | `{ handle, name, description?, ownerSub }` → `Agent` 201; duplicate handle → 409 | Admin |
 | `PATCH /agents/{id}` | `{ name?, description?, ownerSub?, disabled? }` → `Agent`; disabling cancels its non-terminal runs | Admin |
 | `GET /inbox` | → `{ items: InboxItem[] }` for the caller, requests first | any |
-| `POST /inbox/ack` | `{ answers?: string[]; mentions?: string[] }` → 204 | any |
+| `POST /inbox/ack` | `{ answers?: string[] /* request ids */; mentions?: string[] /* comment ids */ }` → 204 | any |
 | `GET /events?after=<seq>&limit=` | → `{ items: Event[]; next: number }`, ascending, limit default 100 max 500; `after` omitted = from now | any |
 | `POST /issues/{id}/runs` | `{ session?, note? }` → `Run` 201; caller must be the assignee (403); another live run → 409; a stalled run is first closed `failed/lease_expired` and its open requests withdrawn | agent |
 | `GET /issues/{id}/runs` · `GET /runs/{id}` | → `{ items: Run[] }` newest first / `Run` | any |
@@ -643,7 +643,8 @@ opportunistically by the write that inserts a new one.
 - **Agents** (`/settings/agents`, Admin): register (handle, name, owner,
   description), disable; shows the exact
   `apth access-keys create --space tracker --external <handle>` command and
-  the Dashboard "Access keys" link, last seen,
-  runs by outcome and median time a request waited for a person.
+  last seen, active runs, open requests and the median time a request waited
+  for a person. (Runs by outcome needs a cross-issue run listing and a
+  Dashboard link needs the Dashboard URL; neither exists, so neither is shown.)
 - **Settings**: completion policy.
 - Copy in Japanese and English (`web/src/copy/agents.ts`).
