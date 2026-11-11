@@ -41,7 +41,7 @@ func (t *Tx) EnsureWorkspace() error {
 }
 func (t *Tx) Workspace() (domain.Workspace, error) {
 	var w domain.Workspace
-	err := t.SQL.QueryRowContext(t.Context, `SELECT id,key,name,(SELECT count(*) FROM tracker_issue WHERE workspace_id=$1 AND deleted_at IS NULL),created_at,updated_at,sprint_length_weeks,timezone FROM tracker_workspace WHERE id=$1`, t.WorkspaceID).Scan(&w.ID, &w.Key, &w.Name, &w.IssueCount, &w.CreatedAt, &w.UpdatedAt, &w.SprintLengthWeeks, &w.Timezone)
+	err := t.SQL.QueryRowContext(t.Context, `SELECT id,key,name,(SELECT count(*) FROM tracker_issue WHERE workspace_id=$1 AND deleted_at IS NULL),created_at,updated_at,sprint_length_weeks,timezone,agent_completion FROM tracker_workspace WHERE id=$1`, t.WorkspaceID).Scan(&w.ID, &w.Key, &w.Name, &w.IssueCount, &w.CreatedAt, &w.UpdatedAt, &w.SprintLengthWeeks, &w.Timezone, &w.AgentCompletion)
 	return w, err
 }
 func (t *Tx) PatchWorkspace(key, name *string, lengthWeeks *int, timezone *string) (domain.Workspace, error) {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/appthrust/appserver-go/appserver/httpx"
 	"strconv"
 
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
@@ -35,10 +36,16 @@ func (a *API) sprintPatch(s *request) (any, int, error) {
 	return item, 200, err
 }
 func (a *API) sprintStart(s *request) (any, int, error) {
+	if !domain.Can(s.actor, domain.ManageSprint, domain.Target{}) {
+		return nil, 0, httpx.Forbidden()
+	}
 	item, err := s.tx.StartSprint(s.r.PathValue("id"))
 	return item, 200, err
 }
 func (a *API) sprintClose(s *request) (any, int, error) {
+	if !domain.Can(s.actor, domain.ManageSprint, domain.Target{}) {
+		return nil, 0, httpx.Forbidden()
+	}
 	var input struct {
 		MoveIncompleteTo store.Field[string] `json:"moveIncompleteTo"`
 	}

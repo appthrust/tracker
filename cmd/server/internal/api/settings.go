@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 	"github.com/appthrust/tracker/cmd/server/internal/store"
 )
@@ -9,6 +10,17 @@ type meResponse struct {
 	domain.Person
 	Role    string `json:"role"`
 	IsAdmin bool   `json:"isAdmin"`
+}
+
+// Person marshals its derived kind; explicitly retain Me's additional fields.
+func (m meResponse) MarshalJSON() ([]byte, error) {
+	type person domain.Person
+	return json.Marshal(struct {
+		person
+		Kind    string `json:"kind"`
+		Role    string `json:"role"`
+		IsAdmin bool   `json:"isAdmin"`
+	}{person(m.Person), domain.ActorKind(m.Sub), m.Role, m.IsAdmin})
 }
 
 func (a *API) me(s *request) (any, int, error) {

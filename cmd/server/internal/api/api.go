@@ -83,6 +83,16 @@ func New(database *store.Store, auth *identity.Authenticator, upstream *platform
 	a.route("PATCH /views/{id}", true, true, a.viewPatch)
 	a.route("DELETE /views/{id}", true, true, a.viewDelete)
 	a.route("GET /people", false, false, a.people)
+	a.route("GET /agents", false, false, a.agentList)
+	a.route("POST /agents", true, true, a.agentCreate)
+	a.route("GET /inbox", false, false, a.inbox)
+	a.route("POST /issues/{id}/runs", true, false, a.runStart)
+	a.route("GET /issues/{id}/runs", false, false, a.runList)
+	a.route("POST /runs/{id}/heartbeat", true, false, a.runHeartbeat)
+	a.route("POST /runs/{id}/finish", true, false, a.runFinish)
+	a.route("POST /runs/{id}/cancel", true, false, a.runCancel)
+	a.route("POST /issues/{id}/requests", true, false, a.requestCreate)
+	a.route("POST /requests/{id}/answer", true, true, a.requestAnswer)
 	a.mux.HandleFunc("GET /api/tracker/v1/people/{id}/avatar", a.avatar)
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { httpx.WriteError(w, httpx.NotFound(), "tracker") })
 	return a
@@ -126,7 +136,7 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			}
 		} else {
 			s.bearer = r.Header.Get("Authorization")
-			s.actor = domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer"}
+			s.actor = domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer", Kind: "person"}
 			if s.actor.Name == "" {
 				s.actor.Name = s.actor.Sub
 			}
@@ -152,7 +162,13 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 		var status int
 		err := a.store.InWorkspace(ctx, a.workspace, mutation, func(tx *store.Tx) error {
 			s.tx = tx
-			if key {
+			if key && s.actor.Kind == "agent" {
+				actor, err := tx.AgentBySubject(s.actor.Sub)
+				if err != nil {
+					return err
+				}
+				s.actor = actor
+			} else if key {
 				name, err := tx.KnownName(s.actor.Sub)
 				if err != nil {
 					return err

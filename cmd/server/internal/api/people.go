@@ -31,7 +31,7 @@ func (a *API) enrich(s *request, body any) {
 	}
 	resolved := map[string]resolution{}
 	person := func(p *domain.Person) {
-		if p == nil {
+		if p == nil || domain.ActorKind(p.Sub) == "agent" {
 			return
 		}
 		if value, ok := resolved[p.Sub]; ok {
@@ -58,6 +58,7 @@ func (a *API) enrich(s *request, body any) {
 		p := domain.Person{Sub: sub, Name: name}
 		person(&p)
 		m["name"] = p.Name
+		m["kind"] = domain.ActorKind(p.Sub)
 		if p.Email != "" {
 			m["email"] = p.Email
 		}
