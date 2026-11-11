@@ -20,7 +20,13 @@ func (a *API) avatar(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
-	if _, _, ok := a.authenticate(w, r); !ok {
+	claims, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if claims.Principal.Kind == "key" {
+		// Directory owns avatars and does not accept Tracker's assertion.
+		httpx.WriteError(w, httpx.Fail(403, "key_subject", "Access keys cannot read Directory avatars"), "tracker")
 		return
 	}
 	id := r.PathValue("id")

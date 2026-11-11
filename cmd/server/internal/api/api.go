@@ -110,22 +110,38 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 		if !ok {
 			return
 		}
-		s := &request{r: r, w: w, bearer: r.Header.Get("Authorization"), actor: domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer"}}
-		if s.actor.Name == "" {
-			s.actor.Name = s.actor.Sub
-		}
-		if roles {
-			access, err := a.platform.Access(ctx, s.actor.Sub, s.bearer)
+		s := &request{r: r, w: w}
+		if claims.Principal.Kind == "key" {
+			actor, err := keyActor(claims.Principal, a.workspace, mutation)
 			if err != nil {
-				httpx.WriteError(w, httpx.Fail(503, "identity_unavailable", "The platform role is temporarily unavailable"), "tracker")
+				httpx.WriteError(w, err, "tracker")
 				return
 			}
-			if !access.NotMember {
-				s.actor.Role = access.Role
+			// The assertion is addressed to Tracker only: it is never forwarded
+			// to Directory, so people stay the stored snapshots.
+			s.actor = actor
+			if mutation {
+				log.Printf("tracker access key mutation: %s %s key=%q subject=%q request_id=%q", r.Method, r.URL.Path, claims.Principal.KeyName, actor.Sub, r.Header.Get("X-Request-Id"))
 			}
-		}
-		if mutation {
-			s.actor.Person = a.directory.Enrich(ctx, s.bearer, s.actor.Person)
+		} else {
+			s.bearer = r.Header.Get("Authorization")
+			s.actor = domain.Actor{Person: domain.Person{Sub: claims.Principal.Subject, Name: claims.Name, Email: claims.Email}, Role: "Viewer"}
+			if s.actor.Name == "" {
+				s.actor.Name = s.actor.Sub
+			}
+			if roles {
+				access, err := a.platform.Access(ctx, s.actor.Sub, s.bearer)
+				if err != nil {
+					httpx.WriteError(w, httpx.Fail(503, "identity_unavailable", "The platform role is temporarily unavailable"), "tracker")
+					return
+				}
+				if !access.NotMember {
+					s.actor.Role = access.Role
+				}
+			}
+			if mutation {
+				s.actor.Person = a.directory.Enrich(ctx, s.bearer, s.actor.Person)
+			}
 		}
 		if err := a.store.EnsureWorkspace(ctx, a.workspace); err != nil {
 			writeStoreError(w, err)
@@ -176,10 +192,14 @@ func (a *API) authenticate(w http.ResponseWriter, r *http.Request) (identity.Ide
 		if errors.Is(err, identity.ErrUnavailable) {
 			httpx.WriteError(w, httpx.Fail(503, "identity_unavailable", "The identity provider is temporarily unavailable"), "tracker")
 		} else {
-			// The edge has already accepted this session, so a 401 here is the app
+			// The edge has already accepted this request, so a 401 here is the app
 			// disagreeing with the edge about the token; record why.
 			log.Printf("tracker auth rejected: %s %s request_id=%q %s edge_cookies_expired=%d", r.Method, r.URL.Path, r.Header.Get("X-Request-Id"), describeRejection(r.Header.Get("Authorization"), err), expireEdgeSession(w, r))
-			httpx.WriteError(w, httpx.Fail(401, "unauthenticated", "A valid bearer token is required"), "tracker")
+			failure := httpx.Fail(401, "unauthenticated", "A valid bearer token is required")
+			if errors.Is(err, identity.ErrRawKeyNotAccepted) {
+				failure = httpx.Fail(401, "raw_key_not_accepted", "Exchange the access key for an assertion before calling this API")
+			}
+			httpx.WriteError(w, failure, "tracker")
 		}
 		return identity.Identity{}, "", false
 	}
