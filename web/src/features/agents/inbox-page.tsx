@@ -2,8 +2,9 @@
 // first, each answerable in place), then updates — answers to the caller's
 // own questions and mentions — to acknowledge. Keyboard: J/K (or ↓/↑) move,
 // 1–6 choose an option and Enter sends it (Enter on an update or with nothing
-// chosen opens the issue in the side panel), O opens the issue, E marks an
-// update as read, Esc closes the panel. After an answer the next item takes
+// chosen opens the issue as a side panel tab), O opens the issue, E marks an
+// update as read, Esc closes the active panel tab; with the panel open J/K
+// browse within the active tab. After an answer the next item takes
 // focus, so a run of decisions needs no mouse.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
@@ -15,6 +16,7 @@ import { useText } from '../../i18n'
 import { paths } from '../../routes/paths'
 import { Button, cn, EmptyState, formatDateTime, formatRelative, HrefLink, Loading, LoadFailed, Markdown, useDocumentTitle } from '../../ui'
 import { IssuePanel } from '../issues/issue-detail'
+import { usePanelTabs } from '../issues/use-panel-tabs'
 import { isPlainShortcut } from '../ui-state'
 import { ActorAvatar, ActorName } from './actor'
 import { optionText, RequestCard } from './request-card'
@@ -39,8 +41,12 @@ export function InboxPage({ search }: { search: { issue?: string } }) {
   const [focusedKey, setFocusedKey] = useState<string | null>(null)
   const lastIndex = useRef(0)
 
-  const open = useCallback((identifier: string) => void navigate({ to: paths.inbox, search: { issue: identifier } } as never), [navigate])
-  const close = useCallback(() => void navigate({ to: paths.inbox, search: {} } as never), [navigate])
+  const setIssue = useCallback(
+    (issue: string | undefined, replace: boolean) => void navigate({ to: paths.inbox, search: issue ? { issue } : {}, replace, resetScroll: false } as never),
+    [navigate]
+  )
+  const panel = usePanelTabs(search.issue, setIssue)
+  const { open, browse, close } = panel
   const acknowledge = useCallback((item: InboxItem) => {
     if (item.kind === 'answer') ack.mutate({ answers: [item.request.id] })
     else if (item.kind === 'mention') ack.mutate({ mentions: [item.comment.id] })
@@ -79,22 +85,22 @@ export function InboxPage({ search }: { search: { issue?: string } }) {
         const step = key === 'j' || key === 'ArrowDown' ? 1 : -1
         const next = ordered[index === -1 ? (step > 0 ? 0 : ordered.length - 1) : Math.min(Math.max(index + step, 0), ordered.length - 1)]!
         focusKey(itemKey(next))
-        if (search.issue) open(itemIssue(next).identifier)
+        if (search.issue) browse(itemIssue(next))
       } else if ((key === 'o' || key === 'O') && index !== -1) {
         event.preventDefault()
-        open(itemIssue(ordered[index]!).identifier)
+        open(itemIssue(ordered[index]!))
       } else if ((key === 'e' || key === 'E') && index !== -1) {
         event.preventDefault()
         acknowledge(ordered[index]!)
       } else if (key === 'Escape' && search.issue) {
         event.preventDefault()
-        close()
+        close(search.issue)
         if (focusedKey) focusKey(focusedKey)
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [ordered, focusedKey, focusKey, open, close, acknowledge, search.issue])
+  }, [ordered, focusedKey, focusKey, open, browse, close, acknowledge, search.issue])
 
   const section = (title: string, list: InboxItem[], action?: ReactNode) =>
     list.length === 0 ? null : (
@@ -111,9 +117,9 @@ export function InboxPage({ search }: { search: { issue?: string } }) {
             return (
               <li key={key} data-inbox-key={key} onFocusCapture={() => setFocusedKey(key)}>
                 {item.kind === 'request' ? (
-                  <RequestCard request={item.request} variant="inbox" focused={focusedKey === key} onOpen={() => open(item.request.issue.identifier)} />
+                  <RequestCard request={item.request} variant="inbox" focused={focusedKey === key} onOpen={() => open(item.request.issue)} />
                 ) : (
-                  <UpdateCard item={item} focused={focusedKey === key} onOpen={() => open(itemIssue(item).identifier)} onAck={() => acknowledge(item)} />
+                  <UpdateCard item={item} focused={focusedKey === key} onOpen={() => open(itemIssue(item))} onAck={() => acknowledge(item)} />
                 )}
               </li>
             )
@@ -166,7 +172,7 @@ export function InboxPage({ search }: { search: { issue?: string } }) {
           )}
         </div>
       </div>
-      {search.issue ? <IssuePanel identifier={search.issue} onClose={close} /> : null}
+      {panel.active ? <IssuePanel identifier={panel.active} panel={panel} /> : null}
     </div>
   )
 }

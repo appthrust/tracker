@@ -5,9 +5,12 @@
 // `/board`, `/reported` and `/epics` publish their project scope
 // (`?project=`), which stays while the person moves elsewhere: new issues
 // default to it and the sidebar's list links keep it. Sprint charts share
-// one unit (points or issues) while the person moves between them.
+// one unit (points or issues) while the person moves between them. The issue
+// panel's open tabs (model/panel-tabs.ts) belong to the browser tab: kept in
+// `sessionStorage`, so they survive a reload; the active one is the URL's.
 import { Store, useSelector } from '@tanstack/react-store'
 import type { IssueSummary, IssueType, Unit } from '../api/tracker'
+import { NO_PANEL_TABS, parsePanelTabs, serializePanelTabs, type PanelTabs } from '../model/panel-tabs'
 
 /** Defaults of the "new issue" dialog. `projectId` undefined = the project scope; null = no project. `parent` prefills the parent (an epic's "New story", a group's "+"); `sprintId` the sprint (a sprint section's "+", the sprint page). */
 export type NewIssueDefaults = { statusId?: string; projectId?: string | null; type?: IssueType; parent?: IssueSummary; sprintId?: string }
@@ -29,9 +32,22 @@ type UiState = {
   chartUnit: Unit
   /** The open sprint a sprint screen shows (its page, the current sprint): new issues (C) join it. */
   sprintScope: string | null
+  /** The issue panel's tabs; persisted under PANEL_TABS_KEY by `setPanelTabs`. */
+  panelTabs: PanelTabs
 }
 
-export const uiStore = new Store<UiState>({ palette: false, paletteStart: 'root', newIssue: null, context: [], focusedId: null, selectedIds: [], scope: null, chartUnit: 'points', sprintScope: null })
+const PANEL_TABS_KEY = 'tracker.panelTabs'
+
+/** Missing, corrupt or unavailable storage (private mode, blocked) starts with no tabs. */
+function loadPanelTabs(): PanelTabs {
+  try {
+    return parsePanelTabs(sessionStorage.getItem(PANEL_TABS_KEY))
+  } catch {
+    return NO_PANEL_TABS
+  }
+}
+
+export const uiStore = new Store<UiState>({ palette: false, paletteStart: 'root', newIssue: null, context: [], focusedId: null, selectedIds: [], scope: null, chartUnit: 'points', sprintScope: null, panelTabs: loadPanelTabs() })
 
 export function useUi<T>(select: (state: UiState) => T): T {
   return useSelector(uiStore, select)
@@ -39,6 +55,19 @@ export function useUi<T>(select: (state: UiState) => T): T {
 
 export function setUi(patch: Partial<UiState> | ((state: UiState) => Partial<UiState>)) {
   uiStore.setState((state) => ({ ...state, ...(typeof patch === 'function' ? patch(state) : patch) }))
+}
+
+/** Updates the panel's tabs and writes them to this browser tab's storage; a failed write keeps them in memory only. */
+export function setPanelTabs(update: (tabs: PanelTabs) => PanelTabs) {
+  const current = uiStore.state.panelTabs
+  const next = update(current)
+  if (next === current) return
+  setUi({ panelTabs: next })
+  try {
+    sessionStorage.setItem(PANEL_TABS_KEY, serializePanelTabs(next))
+  } catch {
+    // Storage full or blocked: the tabs still work until the page reloads.
+  }
 }
 
 /** The issues a command applies to: the X-selection when there is one, else the focused issue. */

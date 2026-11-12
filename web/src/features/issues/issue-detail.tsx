@@ -7,11 +7,12 @@
 // `updatedAt` they were made against: if someone else wrote in between, the
 // draft stays and a notice offers to load the latest version instead of
 // overwriting it. Rendered as the full page (`/issues/APT-12`) or as the side
-// panel over a list.
+// panel over a list, where the issues opened there are tabs (model/panel-tabs.ts,
+// use-panel-tabs.ts): only the active one is loaded and rendered.
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bug, Copy, Maximize2, Pencil, RotateCw, Trash2, X } from 'lucide-react'
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { issueQuery, timelineQuery, useDeleteIssue, useUpdateIssue } from '../../api/queries'
 import { isTrackerError, type Issue, type Report, type TrackerRequest, type UpdateIssueInput } from '../../api/tracker'
 import { useText } from '../../i18n'
@@ -28,6 +29,7 @@ import { HierarchySection, IssueBreadcrumb, IssueParentPicker, parentLabel } fro
 import { AssigneePicker, EstimatePicker, IssueProjectPicker, LabelsPicker, PriorityPicker, SprintPicker, StatusPicker, TypePicker, useIssueEditor } from './properties'
 import { Relations } from './relations'
 import { CommentComposer, insertAtCaret, Timeline } from './timeline'
+import type { PanelTabsController } from './use-panel-tabs'
 import { useReference } from './use-reference'
 
 type Variant = 'page' | 'panel'
@@ -53,37 +55,154 @@ export function IssuePage({ identifier }: { identifier: string }) {
   )
 }
 
-export function IssuePanel({ identifier, onClose }: { identifier: string; onClose: () => void }) {
+export function IssuePanel({ identifier, panel }: { identifier: string; panel: PanelTabsController }) {
   const { t } = useText()
+  const tabsId = useId()
+  const active = identifier.toUpperCase()
+  // Same query as the detail below (no second request): the tab learns the title once the issue loads, and again after a rename.
+  const loaded = useQuery(issueQuery(identifier)).data
+  const { retitle } = panel
+  useEffect(() => {
+    if (loaded) retitle(loaded.identifier, loaded.title)
+  }, [loaded, retitle])
   return (
     <aside
-      aria-label={t('tracker.issue.panel', { identifier: identifier.toUpperCase() })}
+      aria-label={t('tracker.issue.panel', { identifier: active })}
       className="absolute inset-y-0 right-0 z-10 flex w-full flex-col border-l border-line bg-white shadow-[-8px_0_24px_-12px_rgb(0_0_0/0.15)] animate-fade-in sm:w-[min(640px,85%)]"
     >
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-3">
-        <span className="font-mono text-xs text-stone-500">{identifier.toUpperCase()}</span>
-        <HrefLink
-          href={paths.issue(identifier.toUpperCase())}
-          title={t('tracker.issue.openFull')}
-          aria-label={t('tracker.issue.openFull')}
-          className="ml-auto flex size-7 items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-stone-900"
-        >
-          <Maximize2 aria-hidden className="size-3.5" />
-        </HrefLink>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={t('tracker.issue.closePanel')}
-          title={`${t('tracker.issue.closePanel')} (Esc)`}
-          className="flex size-7 items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-stone-900"
-        >
-          <X aria-hidden className="size-4" />
-        </button>
+      <div className="flex h-10 shrink-0 items-stretch border-b border-line">
+        <PanelTabStrip panel={panel} active={active} idPrefix={tabsId} />
+        <div className="flex shrink-0 items-center gap-1 border-l border-line px-2">
+          <HrefLink
+            href={paths.issue(active)}
+            title={t('tracker.issue.openFull')}
+            aria-label={t('tracker.issue.openFull')}
+            className="flex size-8 items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-stone-900 sm:size-7"
+          >
+            <Maximize2 aria-hidden className="size-3.5" />
+          </HrefLink>
+          <button
+            type="button"
+            onClick={panel.closeAll}
+            aria-label={t('tracker.issue.closeAllTabs')}
+            title={t('tracker.issue.closeAllTabs')}
+            className="flex size-8 items-center justify-center rounded text-stone-500 hover:bg-stone-100 hover:text-stone-900 sm:size-7"
+          >
+            <X aria-hidden className="size-4" />
+          </button>
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* Keyed by issue: a tab starts at its top, and its scroll is remembered per history entry under its own id, never carried to another tab. */}
+      <div
+        key={active}
+        role="tabpanel"
+        id={`${tabsId}-panel`}
+        aria-labelledby={panel.tabs.some((tab) => tab.identifier === active) ? `${tabsId}-tab-${active}` : undefined}
+        aria-label={t('tracker.issue.panel', { identifier: active })}
+        data-scroll-restoration-id={`issue-panel-${active}`}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         <IssueDetail identifier={identifier} variant="panel" />
       </div>
     </aside>
+  )
+}
+
+/**
+ * One tab per open issue, in a strip that scrolls sideways and keeps the
+ * active tab in view. Roving focus with manual activation (activating loads
+ * an issue and adds a history entry): ←/→ (wrapping), Home and End move
+ * focus, Enter or Space activates, Delete or Backspace closes the focused
+ * tab. A tab also closes with its × (out of the tab order; Delete covers the
+ * keyboard) or a middle click.
+ */
+function PanelTabStrip({ panel, active, idPrefix }: { panel: PanelTabsController; active: string; idPrefix: string }) {
+  const { t } = useText()
+  const listRef = useRef<HTMLDivElement>(null)
+  const { tabs } = panel
+  const tabStop = tabs.some((tab) => tab.identifier === active) ? active : tabs[0]?.identifier
+  const tabElement = (identifier: string) => listRef.current?.querySelector<HTMLElement>(`[data-panel-tab="${CSS.escape(identifier)}"]`) ?? null
+
+  // Bring the active tab into view by scrolling the strip only: scrollIntoView could also move the page behind the panel.
+  useEffect(() => {
+    const list = listRef.current
+    const tab = tabElement(active)
+    if (!list || !tab) return
+    if (tab.offsetLeft < list.scrollLeft) list.scrollLeft = tab.offsetLeft
+    else if (tab.offsetLeft + tab.offsetWidth > list.scrollLeft + list.clientWidth) list.scrollLeft = tab.offsetLeft + tab.offsetWidth - list.clientWidth
+  }, [active, tabs.length])
+
+  const focusTab = (identifier: string | undefined) => {
+    if (identifier) tabElement(identifier)?.querySelector<HTMLElement>('[role="tab"]')?.focus()
+  }
+
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const last = tabs.length - 1
+    const moves: Partial<Record<string, number>> = { ArrowRight: index === last ? 0 : index + 1, ArrowLeft: index === 0 ? last : index - 1, Home: 0, End: last }
+    const move = moves[event.key]
+    if (move !== undefined) {
+      event.preventDefault()
+      focusTab(tabs[move]?.identifier)
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault()
+      focusTab(panel.close(tabs[index]!.identifier))
+    }
+  }
+
+  return (
+    <div ref={listRef} role="tablist" aria-label={t('tracker.issue.tabs')} className="relative flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:thin]">
+      {tabs.map((tab, index) => {
+        const selected = tab.identifier === active
+        const closeLabel = t('tracker.issue.closeTab', { identifier: tab.identifier })
+        return (
+          <div
+            key={tab.identifier}
+            role="presentation"
+            data-panel-tab={tab.identifier}
+            onMouseDown={(event) => {
+              // Middle click closes; without this the browser starts autoscroll.
+              if (event.button === 1) event.preventDefault()
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1) return
+              event.preventDefault()
+              panel.close(tab.identifier)
+            }}
+            className={cn(
+              'relative flex shrink-0 items-center border-r border-line',
+              selected ? 'bg-white text-stone-900 after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent' : 'bg-stone-50 text-stone-500 hover:bg-stone-100 hover:text-stone-800'
+            )}
+          >
+            <button
+              type="button"
+              role="tab"
+              id={`${idPrefix}-tab-${tab.identifier}`}
+              aria-selected={selected}
+              aria-controls={selected ? `${idPrefix}-panel` : undefined}
+              tabIndex={tab.identifier === tabStop ? 0 : -1}
+              title={tab.title ? `${tab.identifier} ${tab.title}` : tab.identifier}
+              onClick={() => panel.activate(tab.identifier)}
+              onKeyDown={(event) => onKeyDown(event, index)}
+              className="flex h-full min-w-24 items-center gap-1.5 pr-1 pl-3 text-left text-xs focus-visible:-outline-offset-2"
+            >
+              <span className={cn('shrink-0 font-mono', selected ? 'text-stone-600' : 'text-stone-400')}>{tab.identifier}</span>
+              {tab.title ? <span className={cn('max-w-36 truncate', selected && 'font-medium')}>{tab.title}</span> : null}
+            </button>
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label={closeLabel}
+              title={selected ? `${closeLabel} (Esc)` : closeLabel}
+              onClick={() => focusTab(panel.close(tab.identifier))}
+              className="mr-1 flex size-8 shrink-0 items-center justify-center rounded text-stone-400 hover:bg-stone-200/70 hover:text-stone-900 sm:size-6"
+            >
+              <X aria-hidden className="size-3.5" />
+            </button>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
