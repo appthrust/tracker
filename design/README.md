@@ -212,6 +212,39 @@ not a prerequisite.
 - Freshness: TanStack Query with optimistic updates and 15 s refetch on
   focus/interval. No websockets in v1.
 
+### Issue panel tabs (v0.1.17)
+
+The side panel showed one issue; opening another replaced it. It now keeps the
+issues a person opened as tabs, so several can be compared and returned to.
+
+| Concept | Owner | Lifetime | Invariants |
+| --- | --- | --- | --- |
+| **Active issue** | the URL (`?issue=<identifier>`, unchanged) | the history entry | the panel is open iff `issue` is set; links, reload and back/forward keep working as before |
+| **Open tabs** | the browser tab (`sessionStorage`), not the URL and not the server | until closed or the browser tab ends | ordered, no duplicates (identifiers compared upper-cased), at most 20; the active issue is always one of them |
+
+Open tabs are a person's working set, not part of what a link means: a shared
+link opens one issue, never someone else's tab strip.
+
+Rules (pure, `web/src/model/panel-tabs.ts`):
+
+- **Open** (click or `Enter` on a row/card, a link, the palette): the issue
+  becomes active; if it has no tab, one is appended to the right of the
+  previously active tab. A 21st tab evicts the least recently active one.
+- **Browse** (`J`/`K`, arrows while the panel is open): the active tab's issue
+  is replaced in place. Walking a list does not leave a trail of tabs.
+- **Close a tab** (its ×, middle click, `Esc`): the tab to its right becomes
+  active, else the one to its left; closing the only tab closes the panel.
+- **Close the panel** (the panel's ×): every tab closes.
+- A URL whose `issue` has no tab (deep link, back/forward to a closed issue)
+  opens it as a tab. Tabs survive moving between list pages, the board, a
+  sprint and the inbox; a page opened without `issue` shows no panel, and the
+  next open brings the strip back.
+- A tab whose issue was deleted or is unknown shows the not-found state and
+  can be closed.
+
+Only the active tab's issue is fetched and rendered; a tab is its identifier
+plus the title last seen, so twenty tabs cost nothing until selected.
+
 ## Lifecycle
 
 1. Tag `v0.1.0` in `appthrust/tracker` → `publish.yml` builds the image,
