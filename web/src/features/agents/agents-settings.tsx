@@ -6,14 +6,19 @@
 // says the agent's work in progress is stopped — and copy the exact `apth`
 // command that mints a key. The key is shown once by the platform, never by
 // Tracker. Runs by outcome are not shown: no route lists runs across issues.
+// An agent that registered itself (API.md "Self-registration") carries a mark
+// naming its key and says its owner is claimed, not confirmed, so an Admin
+// checks it. "Let an agent register itself", open to everyone, shows the key
+// command for a typed handle and the request the agent sends with the
+// viewer's own subject as `ownerSub`: a person has no other place to read it.
 import { useQuery } from '@tanstack/react-query'
-import { Bot, Check, Copy, KeyRound, Pencil, Plus, Power, PowerOff } from 'lucide-react'
+import { Bot, Check, CircleHelp, Copy, KeyRound, Pencil, Plus, Power, PowerOff } from 'lucide-react'
 import { useId, useMemo, useState, type FormEvent } from 'react'
 import { peopleQuery, requestsQuery, useAgentMutations, useUpdateWorkspace } from '../../api/queries'
 import { isTrackerError, type Agent, type AgentCompletion, type Person } from '../../api/tracker'
 import { useText } from '../../i18n'
-import { accessKeyCommand, AGENT_COMPLETIONS, AGENT_DESCRIPTION_MAX_BYTES, AGENT_HANDLE_PATTERN, AGENT_NAME_MAX, medianWaitMs } from '../../model/agents'
-import { ActionError, Avatar, Button, cn, ConfirmDialog, Dialog, Field, formatDateTime, formatDuration, formatRelative, Notice, Section, SelectInput, showToast, TextArea, TextInput } from '../../ui'
+import { accessKeyCommand, accessKeyCommandFor, AGENT_COMPLETIONS, AGENT_DESCRIPTION_MAX_BYTES, AGENT_HANDLE_PATTERN, AGENT_NAME_MAX, medianWaitMs, selfRegisterRequest } from '../../model/agents'
+import { ActionError, Avatar, Badge, Button, cn, ConfirmDialog, Dialog, Field, formatDateTime, formatDuration, formatRelative, Notice, Section, SelectInput, showToast, TextArea, TextInput } from '../../ui'
 import { useReference } from '../issues/use-reference'
 import { AgentTag } from './actor'
 
@@ -25,6 +30,8 @@ export function AgentSettings() {
   const [editing, setEditing] = useState<Agent | 'new' | null>(null)
   const [disabling, setDisabling] = useState<Agent | null>(null)
   const [keyFor, setKeyFor] = useState<string | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const helpId = useId()
   const waits = useMemo(() => {
     const byAgent = new Map<string, number | null>()
     for (const agent of agents) byAgent.set(agent.id, medianWaitMs((answered.data ?? []).filter((request) => request.from.sub === `agent:${agent.id}`)))
@@ -53,13 +60,19 @@ export function AgentSettings() {
         title={t('tracker.settings.agents')}
         className="mt-6"
         actions={
-          me.isAdmin ? (
-            <Button tone="primary" size="sm" icon={<Plus />} onClick={() => setEditing('new')}>
-              {t('tracker.agents.register')}
+          <>
+            <Button size="sm" tone="ghost" icon={<CircleHelp />} aria-expanded={helpOpen} aria-controls={helpId} onClick={() => setHelpOpen((open) => !open)}>
+              {t('tracker.agents.selfRegister.toggle')}
             </Button>
-          ) : undefined
+            {me.isAdmin ? (
+              <Button tone="primary" size="sm" icon={<Plus />} onClick={() => setEditing('new')}>
+                {t('tracker.agents.register')}
+              </Button>
+            ) : null}
+          </>
         }
       >
+        {helpOpen ? <SelfRegisterHelp id={helpId} /> : null}
         {active.length === 0 ? (
           <p className="rounded-lg border border-dashed border-stone-300 bg-white px-4 py-6 text-center text-sm text-stone-500">{t('tracker.agents.empty')}</p>
         ) : (
@@ -100,8 +113,13 @@ function AgentRow({ agent, wait, showKey, onToggleKey, onEdit, onDisable, onEnab
             <span className="text-sm font-semibold text-stone-900">{agent.name}</span>
             <span className="font-mono text-xs text-stone-500">@{agent.handle}</span>
             <AgentTag disabled={agent.disabled} />
+            {agent.registeredByKey !== null ? (
+              <span className="inline-flex" title={t('tracker.agents.selfRegisteredHint', { key: agent.registeredByKey })}>
+                <Badge>{t('tracker.agents.selfRegistered', { key: agent.registeredByKey })}</Badge>
+              </span>
+            ) : null}
           </p>
-          <p className="mt-0.5 text-xs text-stone-600">{t('tracker.agent.ownedBy', { name: agent.owner.name })}</p>
+          <p className="mt-0.5 text-xs text-stone-600">{agent.registeredByKey !== null ? t('tracker.agents.ownerClaimed', { name: agent.owner.name }) : t('tracker.agent.ownedBy', { name: agent.owner.name })}</p>
           {agent.description ? <p className="mt-1.5 max-w-prose text-[13px] leading-relaxed text-stone-700">{agent.description}</p> : null}
           <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-stone-500">
             {agent.lastSeenAt ? (
@@ -146,29 +164,76 @@ function AgentRow({ agent, wait, showKey, onToggleKey, onEdit, onDisable, onEnab
 /** The exact `apth` command and a copy button; the key itself never passes through Tracker. */
 function KeyCommand({ id, agent }: { id: string; agent: Agent }) {
   const { t } = useText()
-  const [copied, setCopied] = useState(false)
-  const command = accessKeyCommand(agent.handle)
   return (
     <div id={id} role="region" aria-label={t('tracker.agents.showKey', { name: agent.name })} className="mt-3 ml-11 rounded-lg border border-line bg-stone-50 px-3 py-2.5">
       <p className="text-xs text-stone-600">{t('tracker.agents.keyBody')}</p>
-      <div className="mt-2 flex items-start gap-2">
-        <code className="min-w-0 flex-1 rounded-md bg-stone-900 px-3 py-2 font-mono text-[12px] leading-relaxed break-all text-stone-100 select-all">{command}</code>
-        <Button
-          size="sm"
-          icon={copied ? <Check /> : <Copy />}
-          onClick={() =>
-            void navigator.clipboard
-              .writeText(command)
-              .then(() => {
-                setCopied(true)
-                showToast({ tone: 'success', title: t('tracker.agents.copied') })
-              })
-              .catch(() => showToast({ tone: 'error', title: t('tracker.common.actionFailed') }))
-          }
-        >
-          {t('tracker.agents.copy')}
-        </Button>
-      </div>
+      <CopySnippet text={accessKeyCommand(agent.handle)} copyLabel={t('tracker.agents.copy')} copiedLabel={t('tracker.agents.copied')} />
+    </div>
+  )
+}
+
+/**
+ * "Let an agent register itself": step 1 is the key command for the handle the
+ * viewer types (a Project admin runs it), step 2 the request the agent sends
+ * first, with the viewer's own subject as `ownerSub`. Tracker never sends it.
+ */
+function SelfRegisterHelp({ id }: { id: string }) {
+  const { t } = useText()
+  const { me } = useReference()
+  const [handle, setHandle] = useState('')
+  const command = accessKeyCommandFor(handle)
+  const request = selfRegisterRequest(command ? handle : t('tracker.agents.selfRegister.nameExample'), me.sub)
+  const handleId = `${id}-handle`
+  return (
+    <div id={id} role="region" aria-label={t('tracker.agents.selfRegister.toggle')} className="mb-3 rounded-lg border border-line bg-stone-50 px-4 py-3">
+      <p className="max-w-prose text-xs leading-relaxed text-stone-600">{t('tracker.agents.selfRegister.lead')}</p>
+      <Field id={handleId} label={t('tracker.agents.selfRegister.handle')} hint={t('tracker.agents.selfRegister.handleHint')} error={handle !== '' && command === null ? t('tracker.agents.handleInvalid') : undefined} className="mt-3 max-w-sm">
+        <div className="relative">
+          <span aria-hidden className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 font-mono text-sm text-stone-400">
+            @
+          </span>
+          <TextInput id={handleId} value={handle} invalid={handle !== '' && command === null} onChange={(event) => setHandle(event.target.value.toLowerCase())} maxLength={31} autoComplete="off" spellCheck={false} className="pl-7 font-mono" />
+        </div>
+      </Field>
+      <ol className="mt-4 list-decimal space-y-4 pl-5 marker:text-xs marker:font-medium marker:text-stone-500">
+        <li>
+          <p className="text-xs font-medium text-stone-800">{t('tracker.agents.selfRegister.keyStep')}</p>
+          <p className="mt-0.5 text-xs text-stone-600">{command ? t('tracker.agents.selfRegister.keyStepBody') : t('tracker.agents.selfRegister.keyStepEmpty')}</p>
+          {command ? <CopySnippet text={command} copyLabel={t('tracker.agents.copy')} copiedLabel={t('tracker.agents.copied')} /> : null}
+        </li>
+        <li>
+          <p className="text-xs font-medium text-stone-800">{t('tracker.agents.selfRegister.registerStep')}</p>
+          <p className="mt-0.5 text-xs text-stone-600">{t('tracker.agents.selfRegister.registerStepBody')}</p>
+          <CopySnippet text={request} copyLabel={t('tracker.agents.selfRegister.copy')} copiedLabel={t('tracker.agents.selfRegister.copied')} />
+          <p className="mt-2 max-w-prose text-xs leading-relaxed break-words text-stone-600">{t('tracker.agents.selfRegister.ownerNote', { sub: me.sub })}</p>
+        </li>
+      </ol>
+    </div>
+  )
+}
+
+/** Text to paste as is (a command, a request) beside its copy button; the check shows until the text changes. */
+function CopySnippet({ text, copyLabel, copiedLabel }: { text: string; copyLabel: string; copiedLabel: string }) {
+  const { t } = useText()
+  const [copied, setCopied] = useState<string | null>(null)
+  return (
+    <div className="mt-2 flex items-start gap-2">
+      <code className="min-w-0 flex-1 rounded-md bg-stone-900 px-3 py-2 font-mono text-[12px] leading-relaxed break-all whitespace-pre-wrap text-stone-100 select-all">{text}</code>
+      <Button
+        size="sm"
+        icon={copied === text ? <Check /> : <Copy />}
+        onClick={() =>
+          void navigator.clipboard
+            .writeText(text)
+            .then(() => {
+              setCopied(text)
+              showToast({ tone: 'success', title: copiedLabel })
+            })
+            .catch(() => showToast({ tone: 'error', title: t('tracker.common.actionFailed') }))
+        }
+      >
+        {copyLabel}
+      </Button>
     </div>
   )
 }

@@ -29,6 +29,8 @@ export type Agent = {
   description: string
   owner: Person
   disabled: boolean
+  /** The Access Key name (`ak-…`) the agent registered itself with; null when an Admin registered it. Never changes. */
+  registeredByKey: string | null
   /** Live (running or waiting, not stalled) runs. */
   activeRuns: number
   /** Open requests the agent raised. */

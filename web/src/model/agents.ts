@@ -2,8 +2,8 @@
 // and AI agents on the same board"): actor kinds and agent subjects, the run
 // lease (`stalled` is derived from `leaseExpiresAt`), who may answer,
 // withdraw or cancel, the completion policy, "Actionable" and its order,
-// `@handle` mentions, and the request wait statistics the agents settings
-// page shows.
+// `@handle` mentions, the request wait statistics the agents settings page
+// shows, and the snippets of its "Let an agent register itself" help.
 import type { Actor, AgentCompletion, AgentInfo, Priority, RequestKind, Run, RunState, StatusCategory, TrackerRequest } from '../api/tracker'
 
 /** `^[a-z][a-z0-9-]{1,30}$`: what people type (`@astra`) and the `external` subject of the agent's Access Keys. */
@@ -42,6 +42,24 @@ export function isAgent(actor: Pick<Actor, 'kind'> | null | undefined): actor is
 /** The platform command an Admin runs to mint a key for this agent; Tracker never sees or shows the key. */
 export function accessKeyCommand(handle: string): string {
   return `apth access-keys create --space tracker --external ${handle} ${ACCESS_KEY_SCOPES.map((scope) => `--scope ${scope}`).join(' ')}`
+}
+
+/** The key command for a handle someone is typing; null until it is a valid handle. */
+export function accessKeyCommandFor(handle: string): string | null {
+  return AGENT_HANDLE_PATTERN.test(handle) ? accessKeyCommand(handle) : null
+}
+
+/** Where an agent registers itself (API.md "Self-registration"): its first call with a new key. */
+export const SELF_REGISTER_PATH = '/api/tracker/v1/agents/register'
+
+/** The JSON body of `POST /agents/register`: the agent's name and the owner it claims. The handle is never in it; the key carries it. */
+export function selfRegisterBody(name: string, ownerSub: string): string {
+  return JSON.stringify({ name, ownerSub }, null, 2)
+}
+
+/** The request an agent sends to register itself, as shown for copying: request line, content type, body. */
+export function selfRegisterRequest(name: string, ownerSub: string): string {
+  return `POST ${SELF_REGISTER_PATH}\nContent-Type: application/json\n\n${selfRegisterBody(name, ownerSub)}`
 }
 
 // --- runs ------------------------------------------------------------------------

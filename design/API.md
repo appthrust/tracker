@@ -580,7 +580,8 @@ Changes to existing shapes:
 - `POST`/`PATCH /issues`: `assigneeSub` accepts `agent:<id>`; a disabled agent
   → 400 (path `assigneeSub`). `PATCH` accepts `expectedUpdatedAt?`; a mismatch
   → 409 `conflict`. An agent setting a `completed` status under `review` → 403.
-- All `POST` routes except the multipart attachment upload honour
+- All `POST` routes except the multipart attachment upload and
+  `POST /agents/register` honour
   `Idempotency-Key` (≤ 128 chars): the first handler status and body are kept
   24 h per (actor, key) and replayed for the identical request (method, URI,
   content type, body bytes); a different request under the same key → 409.
@@ -646,7 +647,7 @@ approval by the same class of person and nothing else.
 | `ownerSub` is a person with a signed-in write in this workspace (`store.KnownName` is non-empty); the stored `owner.name` is that name. A key cannot ask Directory, so this is the only source of a real name, and it keeps the owner someone who uses this workspace | 400 `invalid`, path `ownerSub` |
 | `name` 1–200 chars, `description` ≤ 4096 bytes, as for `POST /agents` | 400 `invalid` |
 | The handle belongs to a disabled agent: an Admin's decision is not undone by the agent | 403 `key_subject` |
-| The handle is already registered and active | 200 with the existing `Agent`; nothing is written, so an agent may call this on every start |
+| The handle is already registered and active | 200 with the existing `Agent`; the body is not applied and the agent is not changed (the call still counts as the agent being seen), so an agent may call this on every start |
 
 The owner is **claimed, not verified**: the agent names its owner and the
 owner did not consent in Tracker. `registeredByKey` records the Access Key name
@@ -657,10 +658,13 @@ never changes afterwards, including when an Admin edits the agent.
 An unregistered external key is refused everywhere else with 403
 `key_subject`, whose message names `POST /agents/register`. `GET /agent-guide`
 is the one read it may make, because the guide is where an agent learns to
-register. Registration is not an Event (the feed describes issues).
+register. Registration is not an Event (the feed describes issues). The route
+is idempotent by its own rule and ignores `Idempotency-Key`: a stored 201
+replayed after an Admin disabled the agent would contradict the row above.
 
 Storage (migration `014_agent_self_registration.sql`):
 `tracker_agent.registered_key`, null for Admin-registered agents.
+
 ### UI
 
 - **Actor rendering**: an agent shows its own glyph and a tooltip "owned by

@@ -98,13 +98,20 @@ keys act as their user with the Viewer role. External-subject keys act as an
 active registered agent whose immutable handle equals the subject.
 The rules are in [`design/API.md`](design/API.md#access-keys-v0111).
 
-### Agent protocol (0.1.13)
+### Agent protocol (0.1.14)
 
-An Admin registers agents through `POST /api/tracker/v1/agents`, with a handle,
-display name, description and accountable person owner. Keys are issued and
-revoked by the platform, never by Tracker. Disabling an agent rejects all its
-keys, cancels its non-terminal runs and withdraws its open requests. Names and
-owners may change; handles cannot. Existing issue attribution is not rewritten.
+An agent registers itself: the first call of a new external-subject key is
+`POST /api/tracker/v1/agents/register` with a display name, description and
+its accountable person owner; the handle is the key's subject. Minting that
+key needs a Project admin, which is the admission decision. The owner is
+claimed by the agent, so the Agents page marks self-registered agents with the
+key that registered them. An Admin can also register an agent directly through
+`POST /api/tracker/v1/agents`. Keys are issued and revoked by the platform,
+never by Tracker. Disabling an agent rejects all its keys (it cannot register
+again), cancels its non-terminal runs and withdraws its open requests. Names
+and owners may change; handles cannot. Existing issue attribution is not
+rewritten. The rules are in
+[`design/API.md`](design/API.md#self-registration-v0114).
 
 Agents poll `/inbox` and `/events`. Initialize the event cursor without `after`,
 then poll with `after=next`; sequence allocation and the represented write
