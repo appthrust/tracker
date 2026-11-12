@@ -115,7 +115,7 @@ export const issueMessages = defineDashboardMessages({
   'tracker.view.deleteBody': { defaultMessage: 'Issues are not affected.', translations: { ja: '課題には影響しません。' } },
 
   'tracker.newIssue.create': { defaultMessage: 'Create issue', translations: { ja: '作成' } },
-  'tracker.newIssue.fullReport': { defaultMessage: 'For steps, expected result and screenshots, use', translations: { ja: '再現手順やスクリーンショットも残すなら' } },
+  'tracker.newIssue.fullReport': { defaultMessage: 'For steps and the expected result, use', translations: { ja: '再現手順や期待結果も残すなら' } },
 
   'tracker.issue.title': { defaultMessage: 'Title', translations: { ja: 'タイトル' } },
   'tracker.issue.description': { defaultMessage: 'Description', translations: { ja: '説明' } },
@@ -155,6 +155,12 @@ export const issueMessages = defineDashboardMessages({
   'tracker.attachment.delete': { defaultMessage: 'Remove {name}', translations: { ja: '{name} を削除' } },
   'tracker.attachment.failed': { defaultMessage: "Couldn't attach the file", translations: { ja: 'ファイルを添付できませんでした' } },
   'tracker.attachment.uploading': { defaultMessage: 'Uploading…', translations: { ja: 'アップロード中…' } },
+  'tracker.attachment.uploadingProgress': { defaultMessage: 'Uploading {current} of {total}…', translations: { ja: 'アップロード中 {current}/{total}…' } },
+  'tracker.attachment.limits': {
+    defaultMessage: 'Paste or drop files here. {types}, up to {size} MiB each, {max} files at most.',
+    translations: { ja: '貼り付けやドロップもできます。{types}、1 ファイル {size} MiB まで、{max} 件まで。' },
+  },
+  'tracker.attachment.uploadFailedTitle': { defaultMessage: '{identifier} was created, but some files were not attached', translations: { ja: '{identifier} を作成しましたが、一部のファイルを添付できませんでした' } },
   'tracker.attachment.tooMany': { defaultMessage: 'An issue holds at most {max} files.', translations: { ja: '1 つの課題に添付できるのは {max} 件までです。' } },
   'tracker.attachment.badType': { defaultMessage: '{name}: only PNG, JPEG, WebP, text and JSON files.', translations: { ja: '{name}: PNG・JPEG・WebP・テキスト・JSON のみ添付できます。' } },
   'tracker.attachment.tooLarge': { defaultMessage: '{name}: files must be at most 10 MiB.', translations: { ja: '{name}: 10 MiB 以下のファイルにしてください。' } },
