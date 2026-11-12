@@ -98,13 +98,20 @@ keys act as their user with the Viewer role. External-subject keys act as an
 active registered agent whose immutable handle equals the subject.
 The rules are in [`design/API.md`](design/API.md#access-keys-v0111).
 
-### Agent protocol (0.1.13)
+### Agent protocol (0.1.14)
 
-An Admin registers agents through `POST /api/tracker/v1/agents`, with a handle,
-display name, description and accountable person owner. Keys are issued and
-revoked by the platform, never by Tracker. Disabling an agent rejects all its
-keys, cancels its non-terminal runs and withdraws its open requests. Names and
-owners may change; handles cannot. Existing issue attribution is not rewritten.
+An agent registers itself: the first call of a new external-subject key is
+`POST /api/tracker/v1/agents/register` with a display name, description and
+its accountable person owner; the handle is the key's subject. Minting that
+key needs a Project admin, which is the admission decision. The owner is
+claimed by the agent, so the Agents page marks self-registered agents with the
+key that registered them. An Admin can also register an agent directly through
+`POST /api/tracker/v1/agents`. Keys are issued and revoked by the platform,
+never by Tracker. Disabling an agent rejects all its keys (it cannot register
+again), cancels its non-terminal runs and withdraws its open requests. Names
+and owners may change; handles cannot. Existing issue attribution is not
+rewritten. The rules are in
+[`design/API.md`](design/API.md#self-registration-v0114).
 
 Agents poll `/inbox` and `/events`. Initialize the event cursor without `after`,
 then poll with `after=next`; sequence allocation and the represented write
@@ -169,14 +176,14 @@ a required BuildKit secret, never through build arguments or committed files.
 
 ## Catalog and release
 
-The next app release is **0.1.13**, also recorded in `web/package.json`.
+The next app release is **0.1.14**, also recorded in `web/package.json`.
 `catalog/entry.yaml` carries no committed version: the first tag (`v0.1.0`)
 created `versions[]` with `ghcr.io/appthrust/tracker@sha256:<index-digest>`,
 stream `0.1`; later tags append at publication time. Do not add a version with
 an unbuilt or placeholder image digest. OpenAPI's `info.version` describes the
 API schema, not the app release. This repository has no hand-maintained changelog.
 
-After the release prerequisites are available, push the SemVer tag `v0.1.13`.
+After the release prerequisites are available, push the SemVer tag `v0.1.14`.
 The tag workflow:
 
 1. Performs one multi-platform build on `ubuntu-24.04` for Linux amd64 and arm64,
@@ -196,8 +203,8 @@ The tag workflow:
 Publication commands used by the workflow:
 
 ```sh
-bun hack/publish-entry.ts submit --version 0.1.13 --digest sha256:<image-index-digest>
-bun hack/publish-entry.ts await --version 0.1.13 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts submit --version 0.1.14 --digest sha256:<image-index-digest>
+bun hack/publish-entry.ts await --version 0.1.14 --digest sha256:<image-index-digest>
 ```
 
 Writers are serialized by `tracker-catalog-publish`; the workflow is guarded to
@@ -218,7 +225,7 @@ After publication, each estate's `AppCatalogSource` syncs the signed catalog.
 Install Issues from the Project Marketplace (Directory is an automatic
 dependency). Existing `follow` installations on stream `0.1` roll to the new
 version; `pinned` installations show `UpdateAvailable` and require an explicit
-version update. Confirm the installation is Ready, `/releasez` reports `0.1.13`,
+version update. Confirm the installation is Ready, `/releasez` reports `0.1.14`,
 the Project lists the `tracker` Access Key space as Ready, and an exchanged key reads `/api/tracker/v1/me`. These are release steps,
 not actions performed by a source-only version bump.
 

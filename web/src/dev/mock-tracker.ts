@@ -14,7 +14,8 @@
 // one; 17 work items carry a size. The exact fixture (shared authority with
 // the server seed) is `SPRINT_FIXTURE` below.
 // Agents (API.md "Agents"): four registered agents (astra, opus-ui, claude,
-// legacy-bot disabled), delegations, runs (running, waiting, stalled,
+// legacy-bot disabled; opus-ui registered itself with the key `ak-md8mw`,
+// the others were registered by an Admin), delegations, runs (running, waiting, stalled,
 // succeeded), requests, a mention and two agent-reported issues (APT-41/42),
 // all relative to the moment of seeding — the shared fixture is
 // `.tmp/agents-ui/fixture.md`, mirrored by `seedAgents` below. Leases are
@@ -253,7 +254,7 @@ type StoredIssue = {
   sprintId: string | null
 }
 type StoredComment = Omit<Comment, 'mentions'> & { deleted: boolean }
-type StoredAgent = { id: string; handle: string; name: string; description: string; owner: Person; disabled: boolean; createdAt: string; updatedAt: string; lastSeenAt: string | null }
+type StoredAgent = { id: string; handle: string; name: string; description: string; owner: Person; disabled: boolean; registeredByKey: string | null; createdAt: string; updatedAt: string; lastSeenAt: string | null }
 /** `state` never holds `stalled`: it is derived from `leaseExpiresAt` on read, as on the server. */
 type StoredRun = Omit<Run, 'issue' | 'agent' | 'state'> & { issueId: string; agentId: string; state: StoredRunState }
 type StoredRequest = {
@@ -572,14 +573,14 @@ function seedTracker({ withProjects = process.env.MOCK_PROJECTS !== 'none' }: { 
 
 type MockState = ReturnType<typeof seedTracker>
 
-/** One agent of the fixture (`.tmp/agents-ui/fixture.md`, "Agents"); times are offsets from the moment of seeding. */
-type AgentFixture = { handle: string; name: string; owner: Person; disabled: boolean; description: string; created: number; updated: number; seen: number }
+/** One agent of the fixture (`.tmp/agents-ui/fixture.md`, "Agents"); times are offsets from the moment of seeding. `registeredByKey`: the key it registered itself with (absent: an Admin registered it). */
+type AgentFixture = { handle: string; name: string; owner: Person; disabled: boolean; description: string; created: number; updated: number; seen: number; registeredByKey?: string }
 const MINUTE = 60_000
 const DAY = 24 * HOUR
 export const AGENT_FIXTURE = {
   agents: [
     { handle: 'astra', name: 'Astra', owner: MOCK_PEOPLE.sam, disabled: false, description: 'Backend implementer. Go handlers, store queries, migrations and their tests. Delegate issues with a clear acceptance check.', created: -14 * DAY, updated: -14 * DAY, seen: -2 * MINUTE },
-    { handle: 'opus-ui', name: 'Opus UI', owner: MOCK_PEOPLE.alex, disabled: false, description: 'UI implementer. React screens, copy and accessibility in the SPA. Delegate issues that include the expected screen or a screenshot.', created: -7 * DAY, updated: -7 * DAY, seen: -1 * MINUTE },
+    { handle: 'opus-ui', name: 'Opus UI', owner: MOCK_PEOPLE.alex, disabled: false, description: 'UI implementer. React screens, copy and accessibility in the SPA. Delegate issues that include the expected screen or a screenshot.', created: -7 * DAY, updated: -7 * DAY, seen: -1 * MINUTE, registeredByKey: 'ak-md8mw' },
     { handle: 'claude', name: 'Claude', owner: MOCK_PEOPLE.jordan, disabled: false, description: 'Planner and triage. Reads new reports, finds duplicates, proposes priority and sprint. Does not change code.', created: -14 * DAY, updated: -14 * DAY, seen: -2 * HOUR },
     { handle: 'legacy-bot', name: 'Legacy bot', owner: MOCK_PEOPLE.alex, disabled: true, description: 'Old nightly triage script. Replaced by claude.', created: -60 * DAY, updated: -30 * DAY, seen: -32 * DAY },
   ] as AgentFixture[],
@@ -622,6 +623,7 @@ function seedAgents(seeded: MockState) {
     description: fixture.description,
     owner: fixture.owner,
     disabled: fixture.disabled,
+    registeredByKey: fixture.registeredByKey ?? null,
     createdAt: at(fixture.created),
     updatedAt: at(fixture.updated),
     lastSeenAt: at(fixture.seen),
@@ -1896,7 +1898,7 @@ async function agentRoutes(request: Request, url: URL, route: string): Promise<R
     if (problem) return invalid(problem.path, problem.message)
     if (state.agents.some((agent) => agent.handle === input.handle)) return conflict('an agent with this handle exists')
     const time = now()
-    const agent: StoredAgent = { id: nextId(), handle: input.handle as string, name: (input.name as string).trim(), description: (input.description as string | undefined) ?? '', owner: personFor(input.ownerSub as string), disabled: false, createdAt: time, updatedAt: time, lastSeenAt: null }
+    const agent: StoredAgent = { id: nextId(), handle: input.handle as string, name: (input.name as string).trim(), description: (input.description as string | undefined) ?? '', owner: personFor(input.ownerSub as string), disabled: false, registeredByKey: null, createdAt: time, updatedAt: time, lastSeenAt: null }
     state.agents.push(agent)
     return json(agentView(agent), 201)
   }

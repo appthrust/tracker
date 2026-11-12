@@ -26,7 +26,7 @@ func (a *API) execute(s *request, fn endpoint) (any, int, error) {
 		return body, status, nil
 	}
 	key := s.r.Header.Get("Idempotency-Key")
-	if s.r.Method != http.MethodPost || key == "" || strings.HasSuffix(s.r.URL.Path, "/attachments") {
+	if s.r.Method != http.MethodPost || key == "" || s.r.URL.Path == "/api/tracker/v1/agents/register" || strings.HasSuffix(s.r.URL.Path, "/attachments") {
 		return invoke()
 	}
 	if !domain.Text(key, 1, 128) {

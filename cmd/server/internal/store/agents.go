@@ -14,11 +14,11 @@ import (
 const agentColumns = `a.id,a.handle,a.name,a.description,a.owner_sub,a.owner_name,a.disabled,a.created_at,a.updated_at,
  (SELECT count(*) FROM tracker_run r JOIN tracker_issue i ON i.id=r.issue_id WHERE r.agent_id=a.id AND i.deleted_at IS NULL AND r.state IN ('running','waiting') AND r.lease_expires_at >= $2),
  (SELECT count(*) FROM tracker_request q JOIN tracker_issue i ON i.id=q.issue_id WHERE i.workspace_id=a.workspace_id AND i.deleted_at IS NULL AND q.from_sub='agent:'||a.id AND q.state='open'),
- a.last_seen_at`
+ a.last_seen_at,a.registered_key`
 
 func scanAgent(row scanner) (domain.Agent, error) {
 	var a domain.Agent
-	err := row.Scan(&a.ID, &a.Handle, &a.Name, &a.Description, &a.Owner.Sub, &a.Owner.Name, &a.Disabled, &a.CreatedAt, &a.UpdatedAt, &a.ActiveRuns, &a.OpenRequests, &a.LastSeenAt)
+	err := row.Scan(&a.ID, &a.Handle, &a.Name, &a.Description, &a.Owner.Sub, &a.Owner.Name, &a.Disabled, &a.CreatedAt, &a.UpdatedAt, &a.ActiveRuns, &a.OpenRequests, &a.LastSeenAt, &a.RegisteredByKey)
 	return a, err
 }
 
@@ -27,12 +27,15 @@ func (t *Tx) Agent(id string) (domain.Agent, error) {
 }
 
 func (t *Tx) AgentBySubject(subject string) (domain.Actor, error) {
-	a, err := scanAgent(t.SQL.QueryRowContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND a.handle=$3 AND NOT a.disabled`, t.WorkspaceID, t.now(), subject))
+	a, err := scanAgent(t.SQL.QueryRowContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND a.handle=$3`, t.WorkspaceID, t.now(), subject))
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Actor{}, httpx.Fail(403, "key_subject", "The access key subject is not an active registered agent")
+		return domain.Actor{}, httpx.Fail(403, "key_subject", "The access key subject is not registered; call POST /api/tracker/v1/agents/register")
 	}
 	if err != nil {
 		return domain.Actor{}, err
+	}
+	if a.Disabled {
+		return domain.Actor{}, httpx.Fail(403, "key_subject", "The access key subject is not an active registered agent")
 	}
 	return domain.Actor{Person: a.Person(), Kind: "agent", AgentID: a.ID, Role: "Viewer", Key: true}, nil
 }
@@ -78,6 +81,55 @@ func (t *Tx) CreateAgent(input AgentCreate, owner domain.Person, actor domain.Ac
 		return domain.Agent{}, err
 	}
 	return t.Agent(id)
+}
+
+type AgentRegister struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	OwnerSub    string `json:"ownerSub"`
+}
+
+func (t *Tx) RegisterAgent(input AgentRegister, actor domain.Actor, keyName string) (domain.Agent, bool, error) {
+	if !actor.Key || actor.Kind != "agent" {
+		return domain.Agent{}, false, httpx.Forbidden()
+	}
+	handle := actor.Sub
+	if actor.Agent != nil {
+		handle = actor.Agent.Handle
+	}
+	if !agentHandle.MatchString(handle) {
+		return domain.Agent{}, false, invalid("Invalid agent handle, name or description")
+	}
+	existing, err := scanAgent(t.SQL.QueryRowContext(t.Context, `SELECT `+agentColumns+` FROM tracker_agent a WHERE a.workspace_id=$1 AND a.handle=$3`, t.WorkspaceID, t.now(), handle))
+	if err == nil {
+		if existing.Disabled {
+			return domain.Agent{}, false, httpx.Fail(403, "key_subject", "The access key subject is not an active registered agent")
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.Agent{}, false, err
+	}
+	if !domain.Text(input.Name, 1, 200) || len(input.Description) > 4096 {
+		return domain.Agent{}, false, invalid("Invalid agent handle, name or description")
+	}
+	if !domain.Text(input.OwnerSub, 1, 4096) || domain.ActorKind(input.OwnerSub) != "person" {
+		return domain.Agent{}, false, &domain.FieldError{Path: "ownerSub", Message: "Owner must be a person with a signed-in write in this workspace"}
+	}
+	name, err := t.KnownName(input.OwnerSub)
+	if err != nil {
+		return domain.Agent{}, false, err
+	}
+	if name == "" {
+		return domain.Agent{}, false, &domain.FieldError{Path: "ownerSub", Message: "Owner must be a person with a signed-in write in this workspace"}
+	}
+	id := ulid.Make().String()
+	if err := t.Exec(`INSERT INTO tracker_agent(id,workspace_id,handle,name,description,owner_sub,owner_name,registered_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+		id, t.WorkspaceID, handle, strings.TrimSpace(input.Name), input.Description, input.OwnerSub, name, keyName); err != nil {
+		return domain.Agent{}, false, err
+	}
+	item, err := t.Agent(id)
+	return item, true, err
 }
 
 func (t *Tx) AgentAssignee(sub string) (*domain.Person, error) {

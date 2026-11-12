@@ -267,3 +267,100 @@ func TestAgentFixtureAndReadFilters(t *testing.T) {
 		return nil
 	}))
 }
+
+func TestRegisterAgentOwnershipAndProvenance(t *testing.T) {
+	db, _ := testutil.Database(t, Open)
+	require.NoError(t, db.EnsureWorkspace(t.Context(), "registration"))
+	require.NoError(t, db.EnsureWorkspace(t.Context(), "other"))
+	person := domain.Actor{Person: domain.Person{Sub: "owner", Name: "Olivia Owner"}, Kind: "person", Role: "Admin"}
+	external := domain.Actor{Person: domain.Person{Sub: "self-agent", Name: "self-agent"}, Kind: "agent", Key: true}
+	input := AgentRegister{Name: " Self Agent ", Description: "Self-registered", OwnerSub: person.Sub}
+	var registered domain.Agent
+	var resolved domain.Actor
+	require.NoError(t, db.InWorkspace(t.Context(), "registration", true, func(tx *Tx) error {
+		_, err := tx.CreateIssue(IssueCreate{Title: "Owner wrote while signed in", Type: "task"}, person.Person, nil)
+		require.NoError(t, err)
+		for _, actor := range []domain.Actor{
+			person,
+			{Person: person.Person, Kind: "person", Key: true},
+			{Person: external.Person, Kind: "agent"},
+		} {
+			_, created, err := tx.RegisterAgent(input, actor, "ak-registration")
+			var failure *httpx.Error
+			require.ErrorAs(t, err, &failure)
+			require.Equal(t, "forbidden", failure.Code)
+			require.False(t, created)
+		}
+		_, err = tx.CreateAgent(AgentCreate{Handle: "admin-only", Name: "Admin Only"}, person.Person, external)
+		var failure *httpx.Error
+		require.ErrorAs(t, err, &failure)
+		require.Equal(t, "forbidden", failure.Code, "self-registration must not weaken Admin creation")
+		var created bool
+		registered, created, err = tx.RegisterAgent(input, external, "ak-registration")
+		require.NoError(t, err)
+		require.True(t, created)
+		require.Equal(t, "self-agent", registered.Handle)
+		require.Equal(t, "Self Agent", registered.Name)
+		require.Equal(t, person.Person, registered.Owner)
+		require.NotNil(t, registered.RegisteredByKey)
+		require.Equal(t, "ak-registration", *registered.RegisteredByKey)
+		resolved, err = tx.AgentBySubject(external.Sub)
+		require.NoError(t, err)
+		require.Equal(t, registered.ID, resolved.AgentID)
+		require.Equal(t, "agent:"+registered.ID, resolved.Sub)
+		adminAgent, err := tx.CreateAgent(AgentCreate{Handle: "admin-agent", Name: "Admin Agent"}, person.Person, person)
+		require.NoError(t, err)
+		require.Nil(t, adminAgent.RegisteredByKey)
+		return nil
+	}))
+	// A repeat succeeds even in a read-only transaction: the body is not applied.
+	require.NoError(t, db.InWorkspace(t.Context(), "registration", false, func(tx *Tx) error {
+		for _, actor := range []domain.Actor{external, resolved} {
+			existing, created, err := tx.RegisterAgent(AgentRegister{OwnerSub: "agent:ignored"}, actor, "ak-other")
+			require.NoError(t, err)
+			require.False(t, created)
+			require.Equal(t, registered, existing)
+		}
+		return nil
+	}))
+	require.NoError(t, db.InWorkspace(t.Context(), "other", true, func(tx *Tx) error {
+		_, created, err := tx.RegisterAgent(input, external, "ak-other")
+		var field *domain.FieldError
+		require.ErrorAs(t, err, &field)
+		require.Equal(t, "ownerSub", field.Path, "another workspace's signed-in write cannot qualify the owner")
+		require.False(t, created)
+		list, err := tx.Agents(true)
+		require.NoError(t, err)
+		require.Empty(t, list)
+		return nil
+	}))
+	require.NoError(t, db.InWorkspace(t.Context(), "registration", true, func(tx *Tx) error {
+		name := "Admin renamed"
+		description := "Admin edited"
+		owner := domain.Person{Sub: "corrected-owner", Name: "Corrected Owner"}
+		disabled := true
+		patched, err := tx.PatchAgent(registered.ID, AgentPatch{Name: &name, Description: &description, Disabled: &disabled}, &owner, person)
+		require.NoError(t, err)
+		require.Equal(t, registered.RegisteredByKey, patched.RegisteredByKey)
+		for _, actor := range []domain.Actor{external, resolved} {
+			_, created, err := tx.RegisterAgent(input, actor, "ak-other")
+			var failure *httpx.Error
+			require.ErrorAs(t, err, &failure)
+			require.Equal(t, "key_subject", failure.Code)
+			require.Equal(t, 403, failure.Status)
+			require.False(t, created)
+		}
+		stored, err := tx.Agent(registered.ID)
+		require.NoError(t, err)
+		require.Equal(t, patched, stored)
+		_, err = tx.AgentBySubject("self-agent")
+		require.ErrorContains(t, err, "The access key subject is not an active registered agent")
+		_, err = tx.AgentBySubject("unknown-agent")
+		var failure *httpx.Error
+		require.ErrorAs(t, err, &failure)
+		require.Equal(t, "key_subject", failure.Code)
+		require.Equal(t, 403, failure.Status)
+		require.ErrorContains(t, err, "POST /api/tracker/v1/agents/register")
+		return nil
+	}))
+}

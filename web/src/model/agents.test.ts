@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Actor, IssueSummary, Run, Status, TrackerRequest } from '../api/tracker'
 import {
   accessKeyCommand,
+  accessKeyCommandFor,
   agentIdOf,
   canAnswer,
   canCancelRun,
@@ -15,6 +16,9 @@ import {
   medianWaitMs,
   mentionAt,
   parseMentions,
+  selfRegisterBody,
+  selfRegisterRequest,
+  SELF_REGISTER_PATH,
   type ActionableStanding,
 } from './agents'
 import { matchesFilter } from './issues'
@@ -63,6 +67,18 @@ describe('agent rules', () => {
     expect(agentIdOf('agent:01ABC')).toBe('01ABC')
     expect(agentIdOf('dev-alex')).toBeNull()
     expect(accessKeyCommand('astra')).toBe('apth access-keys create --space tracker --external astra --scope tracker:read --scope tracker:write')
+  })
+
+  test('self-registration help: a key command only for a valid handle; a JSON body with exactly the given name and subject', () => {
+    expect(accessKeyCommandFor('astra')).toBe(accessKeyCommand('astra'))
+    for (const handle of ['', 'a', 'Astra', '9lives', 'astra bot', 'a'.repeat(32)]) expect(accessKeyCommandFor(handle), handle).toBeNull()
+    const sub = 'auth0|"quoted"\\sub'
+    expect(JSON.parse(selfRegisterBody('Astra “β”', sub))).toEqual({ name: 'Astra “β”', ownerSub: sub })
+    const request = selfRegisterRequest('Astra', 'dev-alex')
+    const [head, body] = request.split('\n\n')
+    expect(head!.split('\n')[0]).toBe(`POST ${SELF_REGISTER_PATH}`)
+    expect(SELF_REGISTER_PATH).toBe('/api/tracker/v1/agents/register')
+    expect(JSON.parse(body!)).toEqual({ name: 'Astra', ownerSub: 'dev-alex' })
   })
 
   test('a non-terminal run whose lease has passed reads as stalled; terminal runs never do', () => {

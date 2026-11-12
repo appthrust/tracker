@@ -878,11 +878,11 @@ describe('tracker mock: agents fixture', () => {
     const active = (await call('GET', '/agents')).body.items as Agent[]
     expect(active.map((agent) => agent.handle)).toEqual(['astra', 'claude', 'opus-ui'])
     const all = await agentsByHandle()
-    expect([...all.values()].map((agent) => [agent.handle, agent.name, agent.owner.sub, agent.disabled, agent.activeRuns, agent.openRequests])).toEqual([
-      ['astra', 'Astra', 'dev-sam', false, 1, 1],
-      ['claude', 'Claude', 'dev-jordan', false, 0, 1],
-      ['legacy-bot', 'Legacy bot', 'dev-alex', true, 0, 0],
-      ['opus-ui', 'Opus UI', 'dev-alex', false, 1, 1],
+    expect([...all.values()].map((agent) => [agent.handle, agent.name, agent.owner.sub, agent.disabled, agent.registeredByKey, agent.activeRuns, agent.openRequests])).toEqual([
+      ['astra', 'Astra', 'dev-sam', false, null, 1, 1],
+      ['claude', 'Claude', 'dev-jordan', false, null, 0, 1],
+      ['legacy-bot', 'Legacy bot', 'dev-alex', true, null, 0, 0],
+      ['opus-ui', 'Opus UI', 'dev-alex', false, 'ak-md8mw', 1, 1],
     ])
     expect(all.get('astra')!.lastSeenAt).toEqual(expect.any(String))
   })
@@ -1147,7 +1147,7 @@ describe('tracker mock: delegation, runs and requests', () => {
     expect((await call('POST', '/agents', { handle: 'astra', name: 'X', ownerSub: 'dev-alex' })).status).toBe(409)
     expect((await call('POST', '/agents', { handle: 'scout', name: 'Scout', ownerSub: 'agent:x' })).body.issues[0].path).toBe('ownerSub')
     const created = await call('POST', '/agents', { handle: 'scout', name: 'Scout', description: 'Finds flaky tests.', ownerSub: 'dev-jordan' })
-    expect(created).toMatchObject({ status: 201, body: { handle: 'scout', owner: { sub: 'dev-jordan', name: 'Jordan Lee' }, activeRuns: 0, openRequests: 0, lastSeenAt: null } })
+    expect(created).toMatchObject({ status: 201, body: { handle: 'scout', owner: { sub: 'dev-jordan', name: 'Jordan Lee' }, registeredByKey: null, activeRuns: 0, openRequests: 0, lastSeenAt: null } })
     expect((await call('PATCH', `/agents/${created.body.id}`, { name: 'Scout 2', ownerSub: 'dev-sam' })).body).toMatchObject({ name: 'Scout 2', owner: { sub: 'dev-sam' } })
     const guide = await call('GET', '/agent-guide')
     expect(guide.headers.get('Content-Type')).toContain('text/markdown')

@@ -30,17 +30,18 @@ type AgentIdentity struct {
 }
 
 type Agent struct {
-	ID           string     `json:"id"`
-	Handle       string     `json:"handle"`
-	Name         string     `json:"name"`
-	Description  string     `json:"description"`
-	Owner        Person     `json:"owner"`
-	Disabled     bool       `json:"disabled"`
-	ActiveRuns   int        `json:"activeRuns"`
-	OpenRequests int        `json:"openRequests"`
-	LastSeenAt   *time.Time `json:"lastSeenAt"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID              string     `json:"id"`
+	Handle          string     `json:"handle"`
+	Name            string     `json:"name"`
+	Description     string     `json:"description"`
+	Owner           Person     `json:"owner"`
+	Disabled        bool       `json:"disabled"`
+	RegisteredByKey *string    `json:"registeredByKey"`
+	ActiveRuns      int        `json:"activeRuns"`
+	OpenRequests    int        `json:"openRequests"`
+	LastSeenAt      *time.Time `json:"lastSeenAt"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
 func (a Agent) Person() Person {

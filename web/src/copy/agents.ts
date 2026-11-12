@@ -190,6 +190,37 @@ export const agentMessages = defineDashboardMessages({
   'tracker.agents.copy': { defaultMessage: 'Copy command', translations: { ja: 'コマンドをコピー' } },
   'tracker.agents.copied': { defaultMessage: 'Command copied', translations: { ja: 'コマンドをコピーしました' } },
   'tracker.agents.showKey': { defaultMessage: 'Key command for {name}', translations: { ja: '{name} のキー発行コマンド' } },
+  'tracker.agents.selfRegistered': { defaultMessage: 'Self-registered · {key}', translations: { ja: '自己登録 · {key}' } },
+  'tracker.agents.selfRegisteredHint': {
+    defaultMessage: 'This agent registered itself with the Access Key {key} and named its responsible person, who has not confirmed it. Check the owner, and edit or disable the agent if it is wrong.',
+    translations: { ja: 'アクセスキー {key} で自分で登録したエージェントです。責任者はエージェントが名乗ったもので、本人は確認していません。違っていれば編集するか無効にしてください。' },
+  },
+  'tracker.agents.ownerClaimed': { defaultMessage: 'Owned by {name} (claimed by the agent, not confirmed)', translations: { ja: '責任者: {name}（エージェントの申告・未確認）' } },
+  'tracker.agents.selfRegister.toggle': { defaultMessage: 'Let an agent register itself', translations: { ja: 'エージェントに自分で登録させる' } },
+  'tracker.agents.selfRegister.lead': {
+    defaultMessage: 'Give an agent a key and it registers itself; no one registers it here first. You become its responsible person, and admins see that it registered itself.',
+    translations: { ja: 'キーを渡せば、エージェントが自分で登録します。ここで先に登録する必要はありません。責任者はあなたになり、管理者には自己登録と表示されます。' },
+  },
+  'tracker.agents.selfRegister.handle': { defaultMessage: 'Agent handle', translations: { ja: 'エージェントのハンドル' } },
+  'tracker.agents.selfRegister.handleHint': {
+    defaultMessage: 'Lowercase letters, digits and hyphens, starting with a letter. It becomes the agent’s @handle and cannot be changed later.',
+    translations: { ja: '英小文字・数字・ハイフン（先頭は英字）。エージェントの @ハンドル になり、あとから変更できません。' },
+  },
+  'tracker.agents.selfRegister.keyStep': { defaultMessage: 'A Project admin issues the key', translations: { ja: 'プロジェクト管理者がキーを発行する' } },
+  'tracker.agents.selfRegister.keyStepBody': { defaultMessage: 'Run this with the apth CLI and hand the key it shows to the agent.', translations: { ja: 'apth CLI で実行し、表示されたキーをエージェントに渡します。' } },
+  'tracker.agents.selfRegister.keyStepEmpty': { defaultMessage: 'Enter a handle to see the command.', translations: { ja: 'ハンドルを入力するとコマンドが表示されます。' } },
+  'tracker.agents.selfRegister.registerStep': { defaultMessage: 'The agent registers itself', translations: { ja: 'エージェントが自分で登録する' } },
+  'tracker.agents.selfRegister.registerStepBody': {
+    defaultMessage: 'With that key, the agent sends this as its first call. It may change the name.',
+    translations: { ja: 'エージェントはそのキーで、最初にこのリクエストを送ります。name は変えてかまいません。' },
+  },
+  'tracker.agents.selfRegister.ownerNote': {
+    defaultMessage: 'ownerSub is your own ID ({sub}). It is accepted only if you have already written in this workspace while signed in, such as an issue or a comment.',
+    translations: { ja: 'ownerSub はあなた自身の ID（{sub}）です。サインインしてこのワークスペースで課題やコメントを書いたことがないと受け付けられません。' },
+  },
+  'tracker.agents.selfRegister.nameExample': { defaultMessage: 'Agent name', translations: { ja: 'エージェント名' } },
+  'tracker.agents.selfRegister.copy': { defaultMessage: 'Copy request', translations: { ja: 'リクエストをコピー' } },
+  'tracker.agents.selfRegister.copied': { defaultMessage: 'Request copied', translations: { ja: 'リクエストをコピーしました' } },
 
   // Settings: completion policy
   'tracker.completion.title': { defaultMessage: 'Finishing agent work', translations: { ja: 'エージェントの作業の完了' } },

@@ -191,7 +191,7 @@ func TestAgentGuideAndOpenAPIShapes(t *testing.T) {
 		require.Contains(t, document.Components.Schemas, name)
 	}
 	for path, methods := range document.Paths {
-		if operation, ok := methods["post"]; ok && !strings.HasSuffix(path, "/attachments") {
+		if operation, ok := methods["post"]; ok && path != "/agents/register" && !strings.HasSuffix(path, "/attachments") {
 			parameters, err := json.Marshal(operation["parameters"])
 			require.NoError(t, err)
 			require.Contains(t, string(parameters), "Idempotency-Key", path)

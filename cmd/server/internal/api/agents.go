@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 	"github.com/appthrust/tracker/cmd/server/internal/store"
 	"strconv"
@@ -38,6 +39,22 @@ func (a *API) agentCreate(s *request) (any, int, error) {
 	}
 	item, err := s.tx.CreateAgent(input, *owner, s.actor)
 	return &item, 201, err
+}
+
+func (a *API) agentRegister(s *request) (any, int, error) {
+	if !s.actor.Key || s.actor.Kind != "agent" {
+		return nil, 0, httpx.Forbidden()
+	}
+	var input store.AgentRegister
+	if err := decode(s, &input); err != nil {
+		return nil, 0, err
+	}
+	item, created, err := s.tx.RegisterAgent(input, s.actor, s.keyName)
+	status := 200
+	if created {
+		status = 201
+	}
+	return &item, status, err
 }
 
 func (a *API) inbox(s *request) (any, int, error) {
