@@ -1,5 +1,5 @@
 // Attachments: pasted or dropped screenshots and small text/JSON files
-// (API.md: ≤ 2 MiB, ≤ 10 per issue, png/jpeg/webp/text/json). Images preview
+// (API.md: ≤ 10 MiB, ≤ 10 per issue, png/jpeg/webp/text/json). Images preview
 // inline; every file opens from its same-origin URL.
 import { FileText, ImagePlus, Trash2 } from 'lucide-react'
 import { useRef, type ClipboardEvent, type DragEvent } from 'react'

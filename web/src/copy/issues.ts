@@ -157,7 +157,7 @@ export const issueMessages = defineDashboardMessages({
   'tracker.attachment.uploading': { defaultMessage: 'Uploading…', translations: { ja: 'アップロード中…' } },
   'tracker.attachment.tooMany': { defaultMessage: 'An issue holds at most {max} files.', translations: { ja: '1 つの課題に添付できるのは {max} 件までです。' } },
   'tracker.attachment.badType': { defaultMessage: '{name}: only PNG, JPEG, WebP, text and JSON files.', translations: { ja: '{name}: PNG・JPEG・WebP・テキスト・JSON のみ添付できます。' } },
-  'tracker.attachment.tooLarge': { defaultMessage: '{name}: files must be at most 2 MiB.', translations: { ja: '{name}: 2 MiB 以下のファイルにしてください。' } },
+  'tracker.attachment.tooLarge': { defaultMessage: '{name}: files must be at most 10 MiB.', translations: { ja: '{name}: 10 MiB 以下のファイルにしてください。' } },
 
   'tracker.comment.label': { defaultMessage: 'Comment', translations: { ja: 'コメント' } },
   'tracker.comment.placeholder': { defaultMessage: 'Leave a comment… (paste screenshots)', translations: { ja: 'コメントを書く…（スクリーンショットを貼り付けできます）' } },

@@ -174,10 +174,10 @@ describe('issue rules', () => {
     expect(attachmentsOf([activity('1', null, file('a')), activity('2', null, file('b')), activity('3', file('a'), null)]).map((item) => item.id)).toEqual(['b'])
   })
 
-  test('attachment limits: type, 2 MiB and 10 per issue', () => {
-    expect(attachmentProblem({ size: 100, type: 'image/png' }, 0)).toBeUndefined()
+  test('attachment limits: type, 10 MiB and 10 per issue', () => {
+    expect(attachmentProblem({ size: 10 * 1024 * 1024, type: 'image/png' }, 0)).toBeUndefined()
     expect(attachmentProblem({ size: 100, type: 'image/gif' }, 0)).toBe('type')
-    expect(attachmentProblem({ size: 2 * 1024 * 1024 + 1, type: 'image/png' }, 0)).toBe('tooLarge')
+    expect(attachmentProblem({ size: 10 * 1024 * 1024 + 1, type: 'image/png' }, 0)).toBe('tooLarge')
     expect(attachmentProblem({ size: 100, type: 'image/png' }, 10)).toBe('tooMany')
   })
 

@@ -25,7 +25,7 @@ export const TITLE_MAX = 200
 export const REPORT_TEXT_MAX = 4096
 export const PROJECT_NAME_MAX = 60
 export const PROJECT_DESCRIPTION_MAX_BYTES = 4096
-export const ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024
+export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 export const ATTACHMENTS_PER_ISSUE = 10
 export const ATTACHMENT_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'text/plain', 'application/json']
 

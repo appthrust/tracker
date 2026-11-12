@@ -75,7 +75,7 @@ erDiagram
 | **Issue** | any signed-in user | `number` from a per-workspace sequence; soft-deleted by Admin only | `title` 1–200 chars; `description` ≤ 50 KiB Markdown; `type ∈ {epic, story, bug, feature, task}`; an epic has no parent, a story's parent is an epic, a work item's parent is any issue (`domain.ValidateHierarchy`); `priority ∈ {urgent, high, medium, low, none}`; `parent` must not create a cycle; `blocks` is symmetric-stored as `blocked_by`. `report` is present iff `type = bug`. |
 | **Report** (embedded in Issue, `jsonb`) | reporter | written on create, editable | `environment` (free label, suggestions: `appthrust.ink`, `craftsman`, `appthrust.dev`, `local`), `surface ∈ {dashboard, platform-api, apth, builder-console, console-app, cluster, other}`, `version` (what the reporter saw on `/releasez`, optional), `steps`, `expected`, `actual` (each ≤ 4 KiB). |
 | **Comment** | author; Admin may delete | append | ≤ 20 KiB Markdown; edits keep `edited_at`. |
-| **Attachment** | uploader | immutable | `bytea` ≤ 2 MiB, ≤ 10 per issue, `image/png|image/jpeg|image/webp|text/plain|application/json`; served only to signed-in users of the same workspace. |
+| **Attachment** | uploader | immutable | `bytea` ≤ 10 MiB, ≤ 10 per issue, `image/png|image/jpeg|image/webp|text/plain|application/json`; served only to signed-in users of the same workspace. |
 | **Activity** | server | append-only | one row per changed field (`field, from, to, actor, at`); comments appear in the same timeline by `created_at`. |
 | **View** | its creator; shared flag | CRUD | `filter` JSON validated against the filter schema; ≤ 50 per workspace. |
 
@@ -252,7 +252,8 @@ v0.1.0, as the other apps do).
 - **Teams/Projects/Cycles in v1** — every extra container multiplies filter,
   permission and UI surface; parent/child plus labels covers triage needs.
 - **Object storage for attachments** — no storage component in the catalog
-  today; `bytea` with a 2 MiB cap is sufficient for screenshots.
+  today; `bytea` with a 10 MiB cap holds full-resolution screenshots (an issue
+  is at most 100 MiB). Each upload and download is held in memory once.
 - **Custom fields instead of a fixed `report` shape** — generic schema engine
   for one use case; the fixed shape keeps filters and the form simple.
 
@@ -260,7 +261,7 @@ v0.1.0, as the other apps do).
 
 1. External (anonymous) bug intake: requires a public route outside the OIDC
    edge and spam controls; deferred until asked.
-2. Attachment limits (2 MiB / 10 per issue) — adjust after first weeks of use.
+2. Attachment limits (10 MiB / 10 per issue; 2 MiB until v0.1.16, raised because full-page and high-density screenshots did not fit).
 3. Name: slug `tracker`, display "Issues" (ja: 「課題」). Alternative
    `bugtracker` / 「不具合トラッカー」 if the tool stays defect-only.
 4. Whether to add the `tracker` icon to the Dashboard icon set (platform PR)

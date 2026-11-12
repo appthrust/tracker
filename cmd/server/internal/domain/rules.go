@@ -336,6 +336,11 @@ func ValidateView(view View) error {
 	}
 	return ValidateFilter(view.Filter)
 }
+
+// AttachmentMaxBytes bounds one attachment; the store's CHECK (migration 015)
+// and the SPA's ATTACHMENT_MAX_BYTES carry the same value.
+const AttachmentMaxBytes = 10 << 20
+
 func ValidateAttachment(filename, mediaType string, size int) error {
 	if !Text(filename, 1, 200) || strings.ContainsAny(filename, "\r\n\x00") {
 		return errors.New("Invalid attachment filename")
@@ -343,8 +348,8 @@ func ValidateAttachment(filename, mediaType string, size int) error {
 	if !slices.Contains([]string{"image/png", "image/jpeg", "image/webp", "text/plain", "application/json"}, mediaType) {
 		return errors.New("Unsupported attachment media type")
 	}
-	if size < 1 || size > 2<<20 {
-		return errors.New("Attachment must contain 1 byte to 2 MiB")
+	if size < 1 || size > AttachmentMaxBytes {
+		return errors.New("Attachment must contain 1 byte to 10 MiB")
 	}
 	return nil
 }

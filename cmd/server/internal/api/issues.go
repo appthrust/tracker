@@ -118,7 +118,7 @@ func (a *API) commentDelete(s *request) (any, int, error) {
 	return nil, 204, s.tx.DeleteComment(s.r.PathValue("id"), s.actor)
 }
 func (a *API) attachmentCreate(s *request) (any, int, error) {
-	s.r.Body = http.MaxBytesReader(s.w, s.r.Body, (2<<20)+(64<<10))
+	s.r.Body = http.MaxBytesReader(s.w, s.r.Body, domain.AttachmentMaxBytes+(64<<10))
 	reader, err := s.r.MultipartReader()
 	if err != nil {
 		return nil, 0, invalid("Expected a multipart file")
@@ -135,12 +135,12 @@ func (a *API) attachmentCreate(s *request) (any, int, error) {
 	if err != nil {
 		return nil, 0, invalid("Invalid attachment media type")
 	}
-	data, err := io.ReadAll(io.LimitReader(part, (2<<20)+1))
+	data, err := io.ReadAll(io.LimitReader(part, domain.AttachmentMaxBytes+1))
 	if err != nil {
 		return nil, 0, invalid("Could not read attachment")
 	}
-	if len(data) > 2<<20 {
-		return nil, 0, invalid("Attachment must contain 1 byte to 2 MiB")
+	if len(data) > domain.AttachmentMaxBytes {
+		return nil, 0, invalid("Attachment must contain 1 byte to 10 MiB")
 	}
 	if _, err := reader.NextPart(); err != io.EOF {
 		return nil, 0, invalid("Upload exactly one file")
