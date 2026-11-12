@@ -515,7 +515,8 @@ identifier of its own: it is the free-text `session` of a Run.
 | --- | --- | --- |
 | Read issues, timeline, sprints, feed | any | `tracker:read` |
 | Create issues, comment, attach, raise `question`/`approval` Requests, answer a `question` addressed to it — on any issue | any | `tracker:write` |
-| Edit an issue's fields (`PATCH /issues/{id}`) | any | `tracker:write`, and only as the issue's assignee or reporter |
+| Edit an issue's fields (`PATCH /issues/{id}`), including moving it among open statuses (`backlog`, `unstarted`, `started`) | any | `tracker:write`, on any issue (v0.1.15; before, only as assignee or reporter) |
+| Change the assignee; move an issue into or out of `completed` / `canceled` | any | only as the issue's assignee or reporter. These decide whose work an issue is and whether it is over, and reassigning cancels the previous agent's run |
 | Start and drive a run | n/a | `tracker:write`, assignee only |
 | Set a `completed` status | any | only when `agentCompletion = direct` |
 | Answer `approval` / `review` | addressee, or any person when unaddressed; Admin | never |

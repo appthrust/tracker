@@ -150,7 +150,28 @@ func TestExternalAgentRoutesAndLastSeen(t *testing.T) {
 	missing := rawCall(t, h, assertion(scopeRead), "POST", "/issues", "", []byte(`{"title":"No scope","type":"task"}`), 403)
 	require.Contains(t, string(missing), `"error":"insufficient_scope"`)
 	unrelated := call[domain.Issue](h, "admin", "POST", "/issues", map[string]string{"title": "Unrelated", "type": "task"}, 201)
-	rawCall(t, h, bearer, "PATCH", "/issues/"+unrelated.ID, "", []byte(`{"title":"Denied"}`), 403)
+	// An agent edits any issue and moves it among open statuses; reassigning,
+	// closing and reopening stay with people unless the issue is its own.
+	status := map[string]string{}
+	for _, s := range call[items[domain.Status]](h, "admin", "GET", "/statuses", nil, 200).Items {
+		if _, seen := status[s.Category]; !seen {
+			status[s.Category] = s.ID
+		}
+	}
+	edited := rawCall(t, h, bearer, "PATCH", "/issues/"+unrelated.ID, "", []byte(`{"title":"Edited by agent","priority":"high","statusId":"`+status["started"]+`"}`), 200)
+	require.Contains(t, string(edited), `"title":"Edited by agent"`)
+	require.Contains(t, string(edited), `"statusId":"`+status["started"]+`"`)
+	done := call[domain.Issue](h, "admin", "POST", "/issues", map[string]string{"title": "Done", "type": "task", "statusId": status["completed"]}, 201)
+	for name, attempt := range map[string]struct{ id, body string }{
+		"cancel":         {unrelated.ID, `{"statusId":"` + status["canceled"] + `"}`},
+		"reopen":         {done.ID, `{"statusId":"` + status["started"] + `"}`},
+		"take":           {unrelated.ID, `{"assigneeSub":"agent:` + agent.ID + `"}`},
+		"assign someone": {unrelated.ID, `{"assigneeSub":"owner"}`},
+	} {
+		refused := rawCall(t, h, bearer, "PATCH", "/issues/"+attempt.id, "", []byte(attempt.body), 403)
+		require.Contains(t, string(refused), `"error":"forbidden"`, name)
+	}
+	rawCall(t, h, bearer, "PATCH", "/issues/"+done.ID, "", []byte(`{"title":"Retitled while done"}`), 200)
 	rawCall(t, h, bearer, "POST", "/issues/"+unrelated.ID+"/comments", "", []byte(`{"body":"Allowed discussion"}`), 201)
 	for _, to := range []string{``, `,"to":null`} {
 		data := rawCall(t, h, bearer, "POST", "/issues/"+unrelated.ID+"/requests", "", []byte(`{"kind":"question","title":"Question"`+to+`}`), 201)

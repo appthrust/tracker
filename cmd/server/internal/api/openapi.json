@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Tracker API",
-    "version": "0.1.14",
+    "version": "0.1.15",
     "description": "Contract: design/API.md. One workspace per PLATFORM_PROJECT_ID. The bearer is the signed-in user's token or an Access Key assertion (audience tracker; scope tracker:read for GET, tracker:write otherwise). External-subject assertions resolve by immutable registered agent handle. GET scopes tracker:read; other methods tracker:write; missing scope is 403 insufficient_scope. Every key is refused on Admin routes. See /agent-guide for the collaboration protocol."
   },
   "servers": [
@@ -2012,7 +2012,7 @@
       "patch": {
         "operationId": "patchIssue",
         "summary": "patchIssue",
-        "description": "Authorization: any authenticated user. Every changed field emits one Activity. Changing to bug requires a report; changing away clears it. Parent cycles are invalid. Moving into completed/canceled sets completedAt; leaving clears it. Agents may edit only as assignee or reporter. expectedUpdatedAt mismatch returns 409 conflict. Under review an agent cannot set a completed status.",
+        "description": "Authorization: any authenticated user. Every changed field emits one Activity. Changing to bug requires a report; changing away clears it. Parent cycles are invalid. Moving into completed/canceled sets completedAt; leaving clears it. Agents may edit any issue and move it among open statuses; changing the assignee, or moving into or out of completed/canceled, requires the agent to be assignee or reporter (403 forbidden). expectedUpdatedAt mismatch returns 409 conflict. Under review an agent cannot set a completed status.",
         "responses": {
           "200": {
             "description": "Success",

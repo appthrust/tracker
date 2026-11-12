@@ -278,8 +278,18 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	if old.Assignee != nil {
 		owner = old.Assignee.Sub
 	}
-	if !domain.Can(domain.Actor{Person: actor, Kind: domain.ActorKind(actor.Sub)}, domain.EditIssue, domain.Target{OwnerSub: owner, ReporterSub: old.Reporter.Sub}) {
+	who := domain.Actor{Person: actor, Kind: domain.ActorKind(actor.Sub)}
+	if !domain.Can(who, domain.EditIssue, domain.Target{}) {
 		return old, httpx.Forbidden()
+	}
+	control := domain.Can(who, domain.ControlIssue, domain.Target{OwnerSub: owner, ReporterSub: old.Reporter.Sub})
+	if next := ""; input.AssigneeSub.Present && !control {
+		if assignee != nil {
+			next = assignee.Sub
+		}
+		if next != owner {
+			return old, httpx.Forbidden()
+		}
 	}
 	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(old.UpdatedAt) {
 		return old, httpx.Conflict("The issue has changed; read it again before editing")
@@ -380,6 +390,15 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 		if err := t.completionAllowed(actor, after.Category); err != nil {
 			return item, err
 		}
+		if item.StatusID != old.StatusID && !control {
+			before, err := t.Status(old.StatusID)
+			if err != nil {
+				return item, err
+			}
+			if closed(before.Category) || closed(after.Category) {
+				return item, httpx.Forbidden()
+			}
+		}
 		if item.StatusID != old.StatusID {
 			item.CompletedAt = domain.TransitionCompletedAt(after.Category, t.now())
 		}
@@ -463,6 +482,8 @@ func (t *Tx) PatchIssue(id string, input IssuePatch, actor domain.Person, assign
 	}
 	return t.Issue(item.ID)
 }
+
+func closed(category string) bool { return category == "completed" || category == "canceled" }
 func (t *Tx) DeleteIssue(id string, actor domain.Actor) error {
 	if !domain.Can(actor, domain.DeleteIssue, domain.Target{}) {
 		return httpx.Forbidden()

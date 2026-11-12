@@ -67,6 +67,7 @@ const (
 	Read             Action = "read"
 	Create           Action = "create"
 	EditIssue        Action = "edit_issue"
+	ControlIssue     Action = "control_issue"
 	ManageWorkspace  Action = "manage_workspace"
 	DeleteIssue      Action = "delete_issue"
 	EditComment      Action = "edit_comment"
@@ -122,11 +123,13 @@ func Can(actor Actor, action Action, target Target) bool {
 		return actor.Sub == target.OwnerSub || (!agent && (target.OwnerSub == "" || admin))
 	case WithdrawRequest:
 		return actor.Sub == target.OwnerSub
-	case EditIssue:
+	case ControlIssue:
+		// Reassigning, closing and reopening decide whose work an issue is and
+		// whether it is over. An agent decides that only for its own issues.
 		return !agent || actor.Sub == target.OwnerSub || actor.Sub == target.ReporterSub
 	case ManageSprint:
 		return !agent
-	case Read, Create, CreateProject, EditProject:
+	case Read, Create, EditIssue, CreateProject, EditProject:
 		return true
 	case ManageWorkspace, DeleteIssue, ArchiveProject, DeleteProject:
 		return admin
