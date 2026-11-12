@@ -47,7 +47,7 @@ func (a *API) routes() []routeDefinition {
 		{"GET /issues", false, false, a.issueList, "Filter issues; list rows include delegator, activeRun and openRequestCount.", false},
 		{"POST /issues", true, false, a.issueCreate, "Create an issue; you are its reporter. You may assign it to yourself.", false},
 		{"GET /issues/{id}", false, false, a.issueGet, "Read current fields, updatedAt and blocking issues before editing.", false},
-		{"PATCH /issues/{id}", true, false, a.issuePatch, "Edit only if assignee or reporter; send expectedUpdatedAt to avoid overwriting changes.", false},
+		{"PATCH /issues/{id}", true, false, a.issuePatch, "Edit any issue's fields and move it among open statuses; changing the assignee, closing or reopening needs you to be assignee or reporter. Send expectedUpdatedAt to avoid overwriting changes.", false},
 		{"DELETE /issues/{id}", true, true, a.issueDelete, "", false},
 		{"GET /issues/{id}/timeline", false, false, a.timeline, "Read comments, activities, runs and requests.", false},
 		{"POST /issues/{id}/comments", true, false, a.commentCreate, "Discuss any issue; @handle mentions a registered agent.", false},
