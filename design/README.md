@@ -227,13 +227,19 @@ link opens one issue, never someone else's tab strip.
 
 Rules (pure, `web/src/model/panel-tabs.ts`):
 
-- **Open** (click or `Enter` on a row/card, a link, the palette): the issue
+- **Open** (click or `Enter` on a row/card, a URL with `issue`): the issue
   becomes active; if it has no tab, one is appended to the right of the
   previously active tab. A 21st tab evicts the least recently active one.
+  The command palette and links inside an issue (parent, children, blockers)
+  still go to the issue's full page, as before.
 - **Browse** (`J`/`K`, arrows while the panel is open): the active tab's issue
-  is replaced in place. Walking a list does not leave a trail of tabs.
-- **Close a tab** (its ×, middle click, `Esc`): the tab to its right becomes
-  active, else the one to its left; closing the only tab closes the panel.
+  is replaced in place, so walking a list does not leave a trail of tabs. When
+  the issue walked onto already has a tab, that tab becomes active instead and
+  nothing is replaced: browsing never closes a tab.
+- **Close a tab** (its ×, middle click; `Esc` closes the active one): closing
+  the active tab activates the one to its right, else the one to its left;
+  closing the only tab closes the panel. Closing any other tab leaves the
+  active one alone.
 - **Close the panel** (the panel's ×): every tab closes.
 - A URL whose `issue` has no tab (deep link, back/forward to a closed issue)
   opens it as a tab. Tabs survive moving between list pages, the board, a

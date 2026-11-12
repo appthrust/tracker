@@ -1,7 +1,8 @@
 // `/`, `/board`, `/reported`, `/current-sprint`, `/sprints/<id>` and
 // `/views/<id>`: project scope switcher, filter bar, list or board, and the
 // side panel (`?issue=APT-12`). Keys: J/K (or ↓/↑) move, X selects, Enter
-// opens the panel, Esc closes it (then clears the selection). The filter,
+// opens the issue as a panel tab (J/K with the panel open browse within the
+// active tab), Esc closes the active tab (then clears the selection). The filter,
 // sort, grouping, project scope and open issue live in the URL so a link
 // reproduces the screen. On `/`, `/board` and `/reported` a single project
 // in the filter travels as `?project=` (paths.ts) and is the scope new issues
@@ -37,6 +38,7 @@ import { IssuePanel } from './issue-detail'
 import { GroupedIssueList, IssueList, type IssueGroup, type RowOptions } from './issue-list'
 import { NO_PROJECT, ProjectScopeSwitcher } from './projects'
 import { SaveViewDialog } from './save-view-dialog'
+import { usePanelTabs } from './use-panel-tabs'
 import { useReference } from './use-reference'
 
 export type IssuesPageKind =
@@ -191,8 +193,17 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
   }, [ordered])
   useEffect(() => () => setUi({ context: [], focusedId: null, selectedIds: [] }), [])
 
-  const open = useCallback((issue: { identifier: string }) => setSearch({ issue: issue.identifier }, false), [setSearch])
-  const close = useCallback(() => setSearch({ issue: undefined }, false), [setSearch])
+  const setIssue = useCallback(
+    (issue: string | undefined, replace: boolean) => {
+      const next: ListSearch = { ...search, issue }
+      if (!issue) delete next.issue
+      // The list or board behind the panel keeps its scroll while tabs open, change and close.
+      void navigate({ to: path, search: next, replace, resetScroll: false } as never)
+    },
+    [navigate, path, search]
+  )
+  const panel = usePanelTabs(search.issue, setIssue)
+  const { open, browse, close } = panel
   const focusedId = useUi((state) => state.focusedId)
 
   useEffect(() => {
@@ -209,7 +220,7 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
         const row = document.querySelector<HTMLElement>(`[data-issue-row="${CSS.escape(next.id)}"]`)
         row?.focus({ preventScroll: true })
         row?.scrollIntoView({ block: 'nearest' })
-        if (search.issue) setSearch({ issue: next.identifier })
+        if (search.issue) browse(next)
       } else if ((key === 'x' || key === 'X') && !event.shiftKey && index !== -1) {
         event.preventDefault()
         const id = ordered[index]!.id
@@ -222,14 +233,14 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
       } else if (key === 'Escape') {
         if (search.issue) {
           event.preventDefault()
-          close()
+          close(search.issue)
           if (focusedId) document.querySelector<HTMLElement>(`[data-issue-row="${CSS.escape(focusedId)}"]`)?.focus({ preventScroll: true })
         } else setUi({ selectedIds: [] })
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [ordered, focusedId, search.issue, setSearch, open, close])
+  }, [ordered, focusedId, search.issue, open, browse, close])
 
   const selectedCount = useUi((state) => state.selectedIds.length)
   const [saving, setSaving] = useState(false)
@@ -434,7 +445,7 @@ export function IssuesPage({ page, path, search, top }: { page: IssuesPageKind; 
           ) : null}
           {query.isError && query.data ? <ActionError error={query.error} className="m-4" /> : null}
         </div>
-        {search.issue ? <IssuePanel identifier={search.issue} onClose={close} /> : null}
+        {panel.active ? <IssuePanel identifier={panel.active} panel={panel} /> : null}
       </div>
       <SaveViewDialog open={saving} onOpenChange={setSaving} filter={filter} sort={sort} layout={layout} groupBy={groupBy} />
     </div>

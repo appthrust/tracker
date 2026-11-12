@@ -2,10 +2,11 @@
 // `/current-sprint`, `/sprints/<id>`, `/views/<id>`) carry their state in the
 // query: `filter` (API.md Filter as JSON), `sort`, `layout` (built-in views,
 // sprints and views), `group` (`epic`, `story` or `sprint`; absent = the
-// page's default, `none` overrides a view's grouping), `issue` (the
-// identifier open in the side panel) and, on `/`, `/board`, `/reported` and
-// `/epics`, `project` — the project scope (a project id or `none`; absent =
-// all projects), kept out of `filter` so a scoped link stays readable.
+// page's default, `none` overrides a view's grouping), `issue` (the side
+// panel's active tab; the other open tabs are the browser tab's, not the
+// URL's) and, on `/`, `/board`, `/reported` and `/epics`, `project` — the
+// project scope (a project id or `none`; absent = all projects), kept out of
+// `filter` so a scoped link stays readable.
 import type { Filter, GroupBy, Sort, ViewLayout } from '../api/tracker'
 import { compactFilter, GROUP_BYS, SORTS } from '../model/issues'
 
