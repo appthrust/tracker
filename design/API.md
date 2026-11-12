@@ -485,7 +485,7 @@ An **Actor** is a person or an agent. Everything a person can be on an issue
 
 | Entity | Owner (sole writer) | Lifecycle | Invariants |
 | --- | --- | --- | --- |
-| **Agent** | Admin | `active ⇄ disabled`; never deleted (history refers to it) | has an immutable `id` and an immutable, unique `handle` (see "Identifiers"); `name` and `description` are editable; exactly one `owner` Person, who is accountable for what it does; an Assertion whose `external` subject equals no active agent's handle is refused (403 `key_subject`). |
+| **Agent** | Admin; the agent itself, once, to come into existence ("Self-registration") | `active ⇄ disabled`; never deleted (history refers to it) | has an immutable `id` and an immutable, unique `handle` (see "Identifiers"); `name` and `description` are editable; exactly one `owner` Person, who is accountable for what it does; an Assertion whose `external` subject equals no active agent's handle is refused (403 `key_subject`) on every route except self-registration and `GET /agent-guide`. |
 | **Delegation** (fields on Issue) | whoever assigns | set when the assignee becomes an agent, cleared when it becomes a person or nobody | `delegator` is a Person: the person who assigned, or the agent's owner when an agent assigned (itself or another agent). The delegator is who the agent answers to on this issue. |
 | **Run** | the agent that started it; a person may cancel | `running ⇄ waiting → succeeded \| failed \| canceled` | only the issue's assignee starts a run; at most one non-terminal run per issue; holds a lease (`leaseExpiresAt`, 10 minutes, renewed by heartbeat, compared at microsecond precision); a run whose lease has passed is `stalled` (derived at read time). A stalled run blocks nothing and is never revived: heartbeat and finish are refused, and the next start on the issue closes it as `failed/lease_expired`. Changing the assignee away from the agent cancels its non-terminal run (`reassigned`) in the same transaction. Whatever ends a run without success (cancel, reassignment, expiry closure) withdraws its open requests. |
 | **Request** | requester creates and withdraws; addressee answers | `open → answered \| withdrawn` | `kind ∈ {question, approval, review}`; directed from one actor to one actor, or to "any person"; `approval` and `review` are answered only by people; a `review` exists only as the result of a finished run; only a run's own agent attaches a request to that run, and the run must belong to the same issue (otherwise anyone could force a run into `waiting`). |
@@ -521,6 +521,7 @@ identifier of its own: it is the free-text `session` of a Run.
 | Answer `approval` / `review` | addressee, or any person when unaddressed; Admin | never |
 | Cancel a run | any | its own |
 | Assign to an agent | any | itself, on issues it reported |
+| Register itself | n/a | `tracker:write`, with an external key whose handle is not registered |
 | Delete, settings, statuses, labels, shared views, sprint start/close/delete, manage agents | as today | never |
 | `GET /people` (Directory) | any | empty, `source: unavailable` (Directory accepts only user bearers) |
 
@@ -538,6 +539,7 @@ type Actor = Person & { kind: ActorKind; agent?: { id: string; handle: string; o
 type Agent = { id: string; handle: string /* immutable; also the external subject of its Access Keys */
   name: string; description: string /* ≤ 4096 bytes: what to delegate to it */
   owner: Person; disabled: boolean
+  registeredByKey: string | null /* Access Key name that self-registered it; null = registered by an Admin */
   activeRuns: number; openRequests: number; lastSeenAt: string | null; createdAt: string; updatedAt: string }
 
 type RunState = 'running' | 'waiting' | 'stalled' | 'succeeded' | 'failed' | 'canceled'
@@ -598,6 +600,7 @@ Changes to existing shapes:
 | `GET /agents?includeDisabled=` | → `{ items: Agent[] }` | any |
 | `POST /agents` | `{ handle, name, description?, ownerSub }` → `Agent` 201; duplicate handle → 409 | Admin |
 | `PATCH /agents/{id}` | `{ name?, description?, ownerSub?, disabled? }` → `Agent`; disabling cancels its non-terminal runs | Admin |
+| `POST /agents/register` | `{ name, description?, ownerSub }` → `Agent` 201; already registered and active → that `Agent` 200, body not applied; see "Self-registration" | external key |
 | `GET /inbox` | → `{ items: InboxItem[] }` for the caller, requests first | any |
 | `POST /inbox/ack` | `{ answers?: string[] /* request ids */; mentions?: string[] /* comment ids */ }` → 204 | any |
 | `GET /events?after=<seq>&limit=` | → `{ items: Event[]; next: number }`, ascending, limit default 100 max 500; `after` omitted = from now | any |
@@ -624,6 +627,40 @@ Agent actors are stored in the existing `*_sub` columns as `agent:<id>`, so no
 existing column changes type. Expired idempotency rows are deleted
 opportunistically by the write that inserts a new one.
 
+
+### Self-registration (v0.1.14)
+
+An agent brings itself into existence: the first call of a new external key
+is `POST /agents/register`. No Admin registers the handle beforehand.
+
+Why this is safe to allow: only a Project admin can mint an external-subject
+key (`apth access-keys create --external <handle>`). Holding such a key for
+this Project and the `tracker` audience is therefore the admission decision;
+requiring a Tracker Admin to type the same handle again added a second
+approval by the same class of person and nothing else.
+
+| Rule | Result when violated |
+| --- | --- |
+| The caller is an external-subject key with `tracker:write`. People (signed-in or user key) register agents with `POST /agents` | 403 `forbidden` |
+| The handle is the assertion's external subject, never a body field: an agent registers only itself. It must match the handle pattern | 400 `invalid` |
+| `ownerSub` is a person with a signed-in write in this workspace (`store.KnownName` is non-empty); the stored `owner.name` is that name. A key cannot ask Directory, so this is the only source of a real name, and it keeps the owner someone who uses this workspace | 400 `invalid`, path `ownerSub` |
+| `name` 1–200 chars, `description` ≤ 4096 bytes, as for `POST /agents` | 400 `invalid` |
+| The handle belongs to a disabled agent: an Admin's decision is not undone by the agent | 403 `key_subject` |
+| The handle is already registered and active | 200 with the existing `Agent`; nothing is written, so an agent may call this on every start |
+
+The owner is **claimed, not verified**: the agent names its owner and the
+owner did not consent in Tracker. `registeredByKey` records the Access Key name
+from the assertion, the Agents page marks such agents, and an Admin corrects
+the owner or disables the agent with `PATCH /agents/{id}`. `registeredByKey`
+never changes afterwards, including when an Admin edits the agent.
+
+An unregistered external key is refused everywhere else with 403
+`key_subject`, whose message names `POST /agents/register`. `GET /agent-guide`
+is the one read it may make, because the guide is where an agent learns to
+register. Registration is not an Event (the feed describes issues).
+
+Storage (migration `014_agent_self_registration.sql`):
+`tracker_agent.registered_key`, null for Admin-registered agents.
 ### UI
 
 - **Actor rendering**: an agent shows its own glyph and a tooltip "owned by
@@ -646,5 +683,10 @@ opportunistically by the write that inserts a new one.
   last seen, active runs, open requests and the median time a request waited
   for a person. (Runs by outcome needs a cross-issue run listing and a
   Dashboard link needs the Dashboard URL; neither exists, so neither is shown.)
+  Self-registered agents carry a mark naming the key that registered them, so
+  an Admin can check the claimed owner. "Let an agent register itself" shows
+  the key command and the `POST /agents/register` body with the viewer's own
+  subject as `ownerSub`, because a person has no other place to read their
+  subject.
 - **Settings**: completion policy.
 - Copy in Japanese and English (`web/src/copy/agents.ts`).

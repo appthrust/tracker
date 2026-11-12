@@ -250,7 +250,7 @@ func TestProjectsMigrationFromV010(t *testing.T) {
 		}
 		var versions int
 		require.NoError(t, tx.SQL.QueryRowContext(t.Context(), `SELECT count(*) FROM tracker_schema_migrations`).Scan(&versions))
-		require.Equal(t, 13, versions)
+		require.Equal(t, 14, versions)
 		var reporterIndex string
 		require.NoError(t, tx.SQL.QueryRowContext(t.Context(), `SELECT indexdef FROM pg_indexes WHERE schemaname=current_schema() AND indexname='tracker_issue_reporter'`).Scan(&reporterIndex))
 		require.Contains(t, reporterIndex, "USING btree (workspace_id, reporter_sub) WHERE (deleted_at IS NULL)")
