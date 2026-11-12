@@ -1545,7 +1545,7 @@ async function attach(issue: StoredIssue, request: Request): Promise<Response> {
   if (existing >= ATTACHMENTS_PER_ISSUE) return invalid('file', `at most ${ATTACHMENTS_PER_ISSUE} attachments per issue`)
   const mediaType = file.type.split(';')[0]!.trim()
   if (!ATTACHMENT_TYPES.includes(mediaType)) return invalid('file', `media type must be one of ${ATTACHMENT_TYPES.join(', ')}`)
-  if (file.size === 0 || file.size > ATTACHMENT_MAX_BYTES) return invalid('file', 'file must be 1 byte to 2 MiB')
+  if (file.size === 0 || file.size > ATTACHMENT_MAX_BYTES) return invalid('file', 'file must be 1 byte to 10 MiB')
   const id = nextId()
   const filename = (file instanceof File && file.name ? file.name : 'attachment').slice(0, 200)
   const stored: StoredAttachment = {

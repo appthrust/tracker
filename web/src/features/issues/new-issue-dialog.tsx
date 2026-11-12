@@ -1,25 +1,30 @@
-// "New issue" (C): project, title, Markdown description, type (epic, story or
-// a work item), parent (only what the hierarchy allows for that type),
-// status, priority, assignee, estimate, sprint and labels. The project starts
-// as the list/board scope (or the one the opener passes); an epic's "New
-// story" or a group's "+" passes the type and parent, a sprint section's or
-// sprint page's "+" the sprint. An epic takes no estimate or sprint.
-// Choosing "bug" asks for the two required report fields; the full report
-// form is `/report` (Shift+R). ⌘/Ctrl+Enter creates.
+// "New issue" (C): project, title, Markdown description, attachments, type
+// (epic, story or a work item), parent (only what the hierarchy allows for
+// that type), status, priority, assignee, estimate, sprint and labels. The
+// project starts as the list/board scope (or the one the opener passes); an
+// epic's "New story" or a group's "+" passes the type and parent, a sprint
+// section's or sprint page's "+" the sprint. An epic takes no estimate or
+// sprint. Choosing "bug" asks for the two required report fields; the full
+// report form is `/report` (Shift+R). Files chosen, pasted (a screenshot
+// pasted into the description too) or dropped anywhere in the dialog are
+// uploaded one by one right after the issue is created; if any fails, the
+// dialog stays open naming the issue and the files left out. ⌘/Ctrl+Enter
+// creates.
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { sprintsQuery, useCreateIssue } from '../../api/queries'
 import type { IssueSummary, IssueType, Priority, Size } from '../../api/tracker'
 import { useText } from '../../i18n'
-import { ISSUE_TYPES, PRIORITIES, reportProblems, TITLE_MAX, toReport, type ReportDraft } from '../../model/issues'
+import { ATTACHMENTS_PER_ISSUE, ISSUE_TYPES, PRIORITIES, reportProblems, TITLE_MAX, toReport, type ReportDraft } from '../../model/issues'
 import { SIZES } from '../../model/sprints'
 import { paths } from '../../routes/paths'
-import { ActionError, Button, Dialog, Field, HrefLink, Kbd, SelectInput, TextArea, TextInput } from '../../ui'
+import { ActionError, Button, buttonClasses, Dialog, Field, HrefLink, Kbd, Notice, SelectInput, TextArea, TextInput } from '../../ui'
 import { EMPTY_REPORT, ReportFields } from '../report/report-fields'
 import { MOD_KEY, setUi, uiStore, useUi, type NewIssueDefaults } from '../ui-state'
 import { ColorDot } from './visuals'
 import { hierarchyProblem, parentLabel, ParentField } from './hierarchy'
+import { ChooseFilesButton, limitsText, PendingPreviews, PendingRefusals, usePendingAttachments } from './pending-attachments'
 import { ProjectField } from './projects'
 import { assigneeValue, usePeopleOptions } from './properties'
 import { useReference } from './use-reference'
@@ -31,7 +36,7 @@ export function NewIssueDialog() {
 }
 
 function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requestedProject, type: initialType, parent: initialParent, sprintId: initialSprint } }: { defaults: NewIssueDefaults }) {
-  const { t } = useText()
+  const { t, locale } = useText()
   const navigate = useNavigate()
   const { statuses, labels, activeProjects } = useReference()
   const create = useCreateIssue()
@@ -55,6 +60,16 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
   })
   const [submitted, setSubmitted] = useState(false)
   const people = usePeopleOptions('', true, [])
+  const attachments = usePendingAttachments()
+  // The created issue when some files could not be attached to it.
+  const [result, setResult] = useState<{ identifier: string; failed: string[] } | null>(null)
+  // Set before the first await, so neither ⌘/Ctrl+Enter nor Escape can act mid create/upload.
+  const busy = useRef(false)
+  const pending = create.isPending || attachments.uploading
+  const openIssue = useRef<HTMLAnchorElement>(null)
+  useEffect(() => {
+    if (result) openIssue.current?.focus()
+  }, [result])
 
   const problems = type === 'bug' ? reportProblems(title, report) : !title.trim() ? { title: 'required' as const } : Array.from(title.trim()).length > TITLE_MAX ? { title: 'tooLong' as const } : {}
   const { title: titleProblem, ...reportFieldProblems } = problems
@@ -64,32 +79,60 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
   const sprintProblem = type !== 'epic' && sprintId && parent?.sprint?.id === sprintId ? t('tracker.sprint.problem.lineage') : undefined
   const close = () => setUi({ newIssue: null })
 
-  const submit = (event?: FormEvent) => {
+  const submit = async (event?: FormEvent) => {
     event?.preventDefault()
     setSubmitted(true)
-    if (Object.keys(problems).length > 0 || parentProblem || sprintProblem || create.isPending) return
-    const sub = assigneeValue(assignee || '__none')
-    create.mutate(
-      {
-        title: title.trim(),
-        description: description || undefined,
-        type,
-        priority,
-        statusId: statusId || undefined,
-        assigneeSub: sub ?? undefined,
-        labelIds: labelIds.length > 0 ? labelIds : undefined,
-        parentId: parent?.id,
-        projectId: projectId ?? undefined,
-        estimate: type !== 'epic' && estimate ? estimate : undefined,
-        sprintId: type !== 'epic' && sprintId ? sprintId : undefined,
-        report: type === 'bug' ? toReport(report) : undefined,
-      },
-      {
-        onSuccess: (issue) => {
-          close()
-          void navigate({ to: paths.issue(issue.identifier) } as never)
-        },
-      }
+    if (Object.keys(problems).length > 0 || parentProblem || sprintProblem || busy.current) return
+    busy.current = true
+    try {
+      const sub = assigneeValue(assignee || '__none')
+      const issue = await create
+        .mutateAsync({
+          title: title.trim(),
+          description: description || undefined,
+          type,
+          priority,
+          statusId: statusId || undefined,
+          assigneeSub: sub ?? undefined,
+          labelIds: labelIds.length > 0 ? labelIds : undefined,
+          parentId: parent?.id,
+          projectId: projectId ?? undefined,
+          estimate: type !== 'epic' && estimate ? estimate : undefined,
+          sprintId: type !== 'epic' && sprintId ? sprintId : undefined,
+          report: type === 'bug' ? toReport(report) : undefined,
+        })
+        .catch(() => undefined)
+      if (!issue) return
+      // The issue exists from here on: a failed file is reported, never retried by creating again.
+      const failed = await attachments.upload(issue.id)
+      if (failed.length > 0) return setResult({ identifier: issue.identifier, failed })
+      close()
+      void navigate({ to: paths.issue(issue.identifier) } as never)
+    } finally {
+      busy.current = false
+    }
+  }
+
+  if (result) {
+    return (
+      <Dialog
+        open
+        size="lg"
+        onOpenChange={(open) => {
+          if (!open) close()
+        }}
+        title={t('tracker.nav.newIssue')}
+      >
+        <Notice tone="warning" title={t('tracker.attachment.uploadFailedTitle', { identifier: result.identifier })}>
+          {t('tracker.report.uploadFailedBody', { files: result.failed.join(', ') })}
+        </Notice>
+        <div className="mt-4 flex items-center justify-end gap-2 border-t border-stone-100 pt-3">
+          <Button onClick={close}>{t('tracker.common.close')}</Button>
+          <HrefLink ref={openIssue} href={paths.issue(result.identifier)} onClick={close} className={buttonClasses('primary')}>
+            {t('tracker.palette.openIssue', { identifier: result.identifier })}
+          </HrefLink>
+        </div>
+      </Dialog>
     )
   }
 
@@ -98,19 +141,22 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
       open
       size="lg"
       onOpenChange={(open) => {
-        if (!open && !create.isPending) close()
+        if (!open && !busy.current) close()
       }}
       title={t('tracker.nav.newIssue')}
     >
       <form
         noValidate
-        onSubmit={submit}
+        onSubmit={(event) => void submit(event)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
             event.preventDefault()
-            submit()
+            void submit()
           }
         }}
+        onPaste={attachments.onPaste}
+        onDragOver={attachments.onDragOver}
+        onDrop={attachments.onDrop}
         className="space-y-4"
       >
         <div className="grid gap-3 sm:grid-cols-2">
@@ -132,6 +178,22 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
         <Field id="new-issue-description" label={t('tracker.issue.description')} hint={t('tracker.comment.hint')}>
           <TextArea id="new-issue-description" rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
         </Field>
+        <div role="group" aria-labelledby="new-issue-attachments" aria-describedby="new-issue-attachments-hint">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <span id="new-issue-attachments" className="text-sm font-medium text-stone-800">
+              {t('tracker.attachment.title')}
+            </span>
+            <span id="new-issue-attachments-hint" className="min-w-0 flex-1 basis-48 text-xs text-stone-500">
+              {limitsText(t, locale)}
+            </span>
+            <span className="text-xs text-stone-500 tabular-nums">
+              {attachments.files.length} / {ATTACHMENTS_PER_ISSUE}
+            </span>
+            <ChooseFilesButton pending={attachments} label={t('tracker.attachment.add')} disabled={create.isPending} />
+          </div>
+          <PendingPreviews pending={attachments} className="mt-2" />
+          <PendingRefusals pending={attachments} className="mt-1.5" />
+        </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <Field id="new-issue-type" label={t('tracker.property.type')}>
             <SelectInput
@@ -232,19 +294,29 @@ function NewIssueForm({ defaults: { statusId: initialStatus, projectId: requeste
             <ReportFields draft={report} onChange={setReport} problems={submitted ? reportFieldProblems : {}} compact />
             <p className="mt-2 text-xs text-stone-500">
               {t('tracker.newIssue.fullReport')}{' '}
-              <HrefLink href={paths.report} onClick={close} className="font-medium text-accent-strong underline">
+              <HrefLink
+                href={paths.report}
+                aria-disabled={pending || undefined}
+                onClick={(event) => {
+                  // Leaving mid create/upload would drop the files still to send and the failure result.
+                  if (busy.current) return event.preventDefault()
+                  close()
+                }}
+                className="font-medium text-accent-strong underline aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
+              >
                 {t('tracker.nav.report')}
               </HrefLink>
             </p>
           </div>
         ) : null}
         {create.error ? <ActionError error={create.error} /> : null}
-        <div className="flex items-center justify-end gap-2 border-t border-stone-100 pt-3">
-          <Button onClick={close} disabled={create.isPending}>
+        {/* Stays in view while the dialog scrolls, so a long form (or many previews) never hides Create. */}
+        <div className="sticky bottom-0 -mb-5 flex items-center justify-end gap-2 border-t border-stone-100 bg-white pt-3 pb-5">
+          <Button onClick={close} disabled={pending}>
             {t('tracker.common.cancel')}
           </Button>
-          <Button type="submit" tone="primary" loading={create.isPending}>
-            {t('tracker.newIssue.create')}
+          <Button type="submit" tone="primary" loading={pending}>
+            {attachments.progress ? t('tracker.attachment.uploadingProgress', attachments.progress) : t('tracker.newIssue.create')}
             <Kbd className="border-white/30 bg-white/15 text-white">{`${MOD_KEY}↵`}</Kbd>
           </Button>
         </div>

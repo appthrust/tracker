@@ -1,12 +1,12 @@
 // Attachments: pasted or dropped screenshots and small text/JSON files
-// (API.md: ≤ 2 MiB, ≤ 10 per issue, png/jpeg/webp/text/json). Images preview
+// (API.md: ≤ 10 MiB, ≤ 10 per issue, png/jpeg/webp/text/json). Images preview
 // inline; every file opens from its same-origin URL.
 import { FileText, ImagePlus, Trash2 } from 'lucide-react'
 import { useRef, type ClipboardEvent, type DragEvent } from 'react'
 import { useAttach, useDeleteAttachment } from '../../api/queries'
 import type { Attachment } from '../../api/tracker'
 import { useText, type Translate } from '../../i18n'
-import { ATTACHMENT_TYPES, ATTACHMENTS_PER_ISSUE, attachmentProblem, isImage } from '../../model/issues'
+import { ATTACHMENT_TYPES, ATTACHMENTS_PER_ISSUE, attachmentProblem, isImage, type AttachmentProblem } from '../../model/issues'
 import { Button, errorDetail, errorMessageId, showToast } from '../../ui'
 import { useReference } from './use-reference'
 
@@ -26,7 +26,7 @@ export function transferFiles(transfer: DataTransfer | null): File[] {
   return [...transfer.items].filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter((file): file is File => file !== null).map((file) => namedFile(file))
 }
 
-export function problemText(t: Translate, problem: 'tooLarge' | 'type' | 'tooMany', file: { name: string }) {
+export function problemText(t: Translate, problem: AttachmentProblem, file: { name: string }) {
   if (problem === 'tooMany') return t('tracker.attachment.tooMany', { max: ATTACHMENTS_PER_ISSUE })
   if (problem === 'type') return t('tracker.attachment.badType', { name: file.name })
   return t('tracker.attachment.tooLarge', { name: file.name })

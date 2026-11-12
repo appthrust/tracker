@@ -379,7 +379,7 @@ describe('tracker mock: comments, attachments, timeline', () => {
     gif.append('file', new File(['GIF89a'], 'a.gif', { type: 'image/gif' }))
     expect((await call('POST', `/issues/${issue.id}/attachments`, gif)).status).toBe(400)
     const big = new FormData()
-    big.append('file', new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' }))
+    big.append('file', new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' }))
     expect((await call('POST', `/issues/${issue.id}/attachments`, big)).status).toBe(400)
 
     await as('dev-sam')

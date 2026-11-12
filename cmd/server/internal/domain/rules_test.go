@@ -144,7 +144,7 @@ func TestIssueAndAttachmentLimits(t *testing.T) {
 		media string
 		size  int
 		valid bool
-	}{{"image/png", 2 << 20, true}, {"text/plain", 1, true}, {"application/json", 0, false}, {"image/png", (2 << 20) + 1, false}, {"text/html", 1, false}} {
+	}{{"image/png", AttachmentMaxBytes, true}, {"text/plain", 1, true}, {"application/json", 0, false}, {"image/png", AttachmentMaxBytes + 1, false}, {"text/html", 1, false}} {
 		require.Equal(t, tc.valid, ValidateAttachment("file", tc.media, tc.size) == nil)
 	}
 }

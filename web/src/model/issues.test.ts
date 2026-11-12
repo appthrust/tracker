@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Attachment, IssueRef, IssueSummary, Status, TimelineItem } from '../api/tracker'
-import { attachmentProblem, attachmentsOf, canBeType, canParent, compactFilter, compareIssues, groupIssues, levelOf, matchesFilter, orderStatuses, parentLevelOf, reportProblems, tallyProgress, toReport } from './issues'
+import { acceptAttachments, attachmentProblem, attachmentsOf, attachmentTypeNames, canBeType, canParent, compactFilter, compareIssues, groupIssues, levelOf, matchesFilter, orderStatuses, parentLevelOf, reportProblems, tallyProgress, toReport, uploadInOrder } from './issues'
 
 const statuses: Status[] = [
   { id: 'done', name: 'Done', category: 'completed', position: 0, color: 'green' },
@@ -174,11 +174,47 @@ describe('issue rules', () => {
     expect(attachmentsOf([activity('1', null, file('a')), activity('2', null, file('b')), activity('3', file('a'), null)]).map((item) => item.id)).toEqual(['b'])
   })
 
-  test('attachment limits: type, 2 MiB and 10 per issue', () => {
-    expect(attachmentProblem({ size: 100, type: 'image/png' }, 0)).toBeUndefined()
+  test('attachment limits: type, 10 MiB and 10 per issue', () => {
+    expect(attachmentProblem({ size: 10 * 1024 * 1024, type: 'image/png' }, 0)).toBeUndefined()
     expect(attachmentProblem({ size: 100, type: 'image/gif' }, 0)).toBe('type')
-    expect(attachmentProblem({ size: 2 * 1024 * 1024 + 1, type: 'image/png' }, 0)).toBe('tooLarge')
+    expect(attachmentProblem({ size: 10 * 1024 * 1024 + 1, type: 'image/png' }, 0)).toBe('tooLarge')
     expect(attachmentProblem({ size: 100, type: 'image/png' }, 10)).toBe('tooMany')
+  })
+
+  test('choosing files before the issue exists: each counts toward the limit only once accepted; refusals keep their reason', () => {
+    const png = (name: string, size = 100) => ({ name, size, type: 'image/png' })
+    const gif = { name: 'a.gif', size: 100, type: 'image/gif' }
+    const big = png('big.png', 11 * 1024 * 1024)
+    const { accepted, refused } = acceptAttachments([png('1'), gif, big, png('2')], 0)
+    expect(accepted.map((file) => file.name)).toEqual(['1', '2'])
+    expect(refused.map(({ file, problem }) => [file.name, problem])).toEqual([
+      ['a.gif', 'type'],
+      ['big.png', 'tooLarge'],
+    ])
+    const full = acceptAttachments([png('9'), png('10'), png('11'), gif], 8)
+    expect(full.accepted.map((file) => file.name)).toEqual(['9', '10'])
+    expect(full.refused.map(({ problem }) => problem)).toEqual(['tooMany', 'tooMany'])
+  })
+
+  test('accepted types are named by their file extensions', () => {
+    expect(attachmentTypeNames()).toEqual(['PNG', 'JPEG', 'WEBP', 'TXT', 'JSON'])
+  })
+
+  test('uploads go one at a time, in order; failures are returned and do not stop the rest', async () => {
+    const events: string[] = []
+    const failed = await uploadInOrder(
+      ['a', 'b', 'c'],
+      async (file) => {
+        events.push(`start ${file}`)
+        await Promise.resolve()
+        events.push(`end ${file}`)
+        if (file === 'b') throw new Error('400')
+      },
+      (index) => events.push(`file ${index}`)
+    )
+    expect(failed).toEqual(['b'])
+    expect(events).toEqual(['file 0', 'start a', 'end a', 'file 1', 'start b', 'end b', 'file 2', 'start c', 'end c'])
+    expect(await uploadInOrder([], () => Promise.reject(new Error('unused')))).toEqual([])
   })
 
   test('report form: title, environment and surface are required; blank optional texts are omitted', () => {

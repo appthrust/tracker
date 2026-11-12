@@ -192,6 +192,30 @@ func TestAttachmentRoundTrip(t *testing.T) {
 	call[any](h, "viewer", "DELETE", "/attachments/"+attachment.ID, nil, 204)
 	call[any](h, "viewer", "GET", "/attachments/"+attachment.ID, nil, 404)
 }
+func TestAttachmentSizeBoundary(t *testing.T) {
+	h := newHarness(t)
+	issue := call[domain.Issue](h, "viewer", "POST", "/issues", map[string]string{"title": "Screenshot", "type": "task"}, 201)
+	upload := func(size int) int {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		part, err := writer.CreatePart(textproto.MIMEHeader{"Content-Disposition": {`form-data; name="file"; filename="shot.png"`}, "Content-Type": {"image/png"}})
+		require.NoError(t, err)
+		_, err = part.Write(make([]byte, size))
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+		r, err := http.NewRequest("POST", h.server.URL+"/api/tracker/v1/issues/"+issue.ID+"/attachments", &body)
+		require.NoError(t, err)
+		r.Header.Set("Authorization", "Bearer "+token("viewer"))
+		r.Header.Set("Content-Type", writer.FormDataContentType())
+		response, err := h.server.Client().Do(r)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	// The stored row's CHECK and the handler agree on the bound.
+	require.Equal(t, 201, upload(domain.AttachmentMaxBytes))
+	require.Equal(t, 400, upload(domain.AttachmentMaxBytes+1))
+}
 func TestOpenAPIRouteInventory(t *testing.T) {
 	var document struct {
 		OpenAPI string                    `json:"openapi"`

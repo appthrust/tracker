@@ -3,8 +3,9 @@
 // epic › story › work item hierarchy and the list/board grouping built on it
 // (API.md "Epics and stories"), and the attachments an issue's timeline
 // carries (there is no attachment-list route; `attachment` activities hold
-// the Attachment in `to` when added and in `from` when removed). Sprint rules
-// live in ./sprints.
+// the Attachment in `to` when added and in `from` when removed) with the
+// limits files are checked against before upload. Sprint rules live in
+// ./sprints.
 import type { Attachment, Filter, GroupBy, IssueRef, IssueSummary, IssueType, Priority, Progress, Report, Sort, Status, StatusCategory, Surface, TimelineItem } from '../api/tracker'
 import { SIZES, sizePoints } from './sprints'
 
@@ -25,7 +26,7 @@ export const TITLE_MAX = 200
 export const REPORT_TEXT_MAX = 4096
 export const PROJECT_NAME_MAX = 60
 export const PROJECT_DESCRIPTION_MAX_BYTES = 4096
-export const ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024
+export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 export const ATTACHMENTS_PER_ISSUE = 10
 export const ATTACHMENT_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'text/plain', 'application/json']
 
@@ -226,12 +227,49 @@ export function isAttachment(value: unknown): value is Attachment {
 
 export const isImage = (mediaType: string) => mediaType.startsWith('image/')
 
+export type AttachmentProblem = 'tooLarge' | 'type' | 'tooMany'
+
 /** Why a file cannot be attached (API.md limits), else undefined. */
-export function attachmentProblem(file: { size: number; type: string }, existing: number): 'tooLarge' | 'type' | 'tooMany' | undefined {
+export function attachmentProblem(file: { size: number; type: string }, existing: number): AttachmentProblem | undefined {
   if (existing >= ATTACHMENTS_PER_ISSUE) return 'tooMany'
   if (!ATTACHMENT_TYPES.includes(file.type)) return 'type'
   if (file.size > ATTACHMENT_MAX_BYTES || file.size === 0) return 'tooLarge'
   return undefined
+}
+
+/** Splits files offered on top of `existing` chosen ones into what fits, in order, and what the server would refuse. */
+export function acceptAttachments<F extends { size: number; type: string }>(files: readonly F[], existing: number): { accepted: F[]; refused: { file: F; problem: AttachmentProblem }[] } {
+  const accepted: F[] = []
+  const refused: { file: F; problem: AttachmentProblem }[] = []
+  for (const file of files) {
+    const problem = attachmentProblem(file, existing + accepted.length)
+    if (problem) refused.push({ file, problem })
+    else accepted.push(file)
+  }
+  return { accepted, refused }
+}
+
+/** Short names of the accepted types, as people know the files: PNG, JPEG, WEBP, TXT, JSON. */
+export function attachmentTypeNames(types: readonly string[] = ATTACHMENT_TYPES): string[] {
+  // text/plain is a .txt file; every other subtype is its own extension.
+  return types.map((type) => {
+    const subtype = type.split('/')[1] ?? type
+    return (subtype === 'plain' ? 'txt' : subtype).toUpperCase()
+  })
+}
+
+/** Sends files one at a time, in order (`onFile` hears the index about to go); returns the ones that failed. */
+export async function uploadInOrder<F>(files: readonly F[], attach: (file: F) => Promise<unknown>, onFile?: (index: number) => void): Promise<F[]> {
+  const failed: F[] = []
+  for (const [index, file] of files.entries()) {
+    onFile?.(index)
+    try {
+      await attach(file)
+    } catch {
+      failed.push(file)
+    }
+  }
+  return failed
 }
 
 export type ReportDraft = { environment: string; surface: Surface | ''; version: string; steps: string; expected: string; actual: string }

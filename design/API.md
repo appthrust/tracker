@@ -97,7 +97,7 @@ Admin. `PATCH /views/{id}` accepts `{ name?, layout?, filter?, sort?, shared?, p
 | `POST /issues/{id}/comments` | `{ body }` → `Comment` 201 | any |
 | `PATCH /comments/{id}` | `{ body }` → `Comment` | author |
 | `DELETE /comments/{id}` | 204 | author or Admin |
-| `POST /issues/{id}/attachments` | multipart `file` → `Attachment` 201; ≤ 2 MiB, ≤ 10/issue, allowed media types only | any |
+| `POST /issues/{id}/attachments` | multipart `file` → `Attachment` 201; ≤ 10 MiB (2 MiB before v0.1.16), ≤ 10/issue, allowed media types only | any |
 | `GET /attachments/{id}` | bytes, `Content-Type`, `Content-Disposition: inline; filename=…`, `Cache-Control: private, max-age=31536000, immutable` | any |
 | `DELETE /attachments/{id}` | 204 | uploader or Admin |
 | `GET /views` | → `{ items: View[] }` = shared ∪ mine, by position | any |
