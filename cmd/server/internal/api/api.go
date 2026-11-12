@@ -29,11 +29,12 @@ type API struct {
 	mux       *http.ServeMux
 }
 type request struct {
-	r      *http.Request
-	w      http.ResponseWriter
-	tx     *store.Tx
-	actor  domain.Actor
-	bearer string
+	r       *http.Request
+	w       http.ResponseWriter
+	tx      *store.Tx
+	actor   domain.Actor
+	bearer  string
+	keyName string
 }
 type endpoint func(*request) (any, int, error)
 
@@ -41,7 +42,7 @@ func New(database *store.Store, auth *identity.Authenticator, upstream *platform
 	a := &API{store: database, identity: auth, platform: upstream, directory: people, workspace: workspace, mux: http.NewServeMux()}
 	a.mux.HandleFunc("GET /api/tracker/v1/openapi.json", a.openapi)
 	for _, route := range a.routes() {
-		a.route(route.pattern, route.mutation, route.roles, route.handler)
+		a.route(route.pattern, route.mutation, route.roles, route.unregistered, route.handler)
 	}
 	a.mux.HandleFunc("GET /api/tracker/v1/people/{id}/avatar", a.avatar)
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { httpx.WriteError(w, httpx.NotFound(), "tracker") })
@@ -60,7 +61,7 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	a.mux.ServeHTTP(w, r)
 }
-func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
+func (a *API) route(pattern string, mutation, roles, unregistered bool, fn endpoint) {
 	method, path, _ := bytes.Cut([]byte(pattern), []byte(" "))
 	a.mux.HandleFunc(string(method)+" /api/tracker/v1"+string(path), func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -81,6 +82,7 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			// The assertion is addressed to Tracker only: it is never forwarded
 			// to Directory. The person's name comes from Tracker's own record.
 			s.actor = actor
+			s.keyName = claims.Principal.KeyName
 			if mutation {
 				log.Printf("tracker access key mutation: %s %s key=%q subject=%q request_id=%q", r.Method, r.URL.Path, claims.Principal.KeyName, actor.Sub, r.Header.Get("X-Request-Id"))
 			}
@@ -124,10 +126,14 @@ func (a *API) route(pattern string, mutation, roles bool, fn endpoint) {
 			if key && s.actor.Kind == "agent" {
 				actor, err := tx.AgentBySubject(s.actor.Sub)
 				if err != nil {
-					return err
+					var response *httpx.Error
+					if !unregistered || !errors.As(err, &response) || response.Code != "key_subject" {
+						return err
+					}
+				} else {
+					actor.Scopes = s.actor.Scopes
+					s.actor = actor
 				}
-				actor.Scopes = s.actor.Scopes
-				s.actor = actor
 			} else if key {
 				name, err := tx.KnownName(s.actor.Sub)
 				if err != nil {

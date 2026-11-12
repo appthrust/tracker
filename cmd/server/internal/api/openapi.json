@@ -4729,6 +4729,105 @@
         ]
       }
     },
+    "/agents/register": {
+      "post": {
+        "operationId": "registerAgent",
+        "summary": "registerAgent",
+        "description": "External-subject key with tracker:write only. The immutable handle comes from the assertion. ownerSub must be a person with a signed-in write in this workspace; their recorded name is stored. Creates an agent with registeredByKey set to the assertion's Access Key name. An active registration returns 200 without applying the body; a disabled agent returns 403 key_subject. Idempotency-Key is ignored: every call checks the current registration and disabled state. Normal lastSeenAt observation still applies.",
+        "responses": {
+          "201": {
+            "description": "Agent registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Existing active agent; request body not applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request; unknown or non-person owner has issue path ownerSub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden caller, insufficient_scope, or disabled key_subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRegister"
+              }
+            }
+          }
+        }
+      }
+    },
     "/agents/{id}": {
       "patch": {
         "operationId": "patchAgent",
@@ -6267,7 +6366,7 @@
       "get": {
         "operationId": "getAgentGuide",
         "summary": "getAgentGuide",
-        "description": "Agent protocol generated from the handler route table.",
+        "description": "Agent protocol generated from the handler route table. External keys with tracker:read may read it even before registration or when their agent is disabled.",
         "responses": {
           "200": {
             "description": "Success",
@@ -8588,6 +8687,17 @@
           "disabled": {
             "type": "boolean"
           },
+          "registeredByKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Immutable Access Key name that self-registered this agent; null when registered by an Admin."
+          },
           "activeRuns": {
             "type": "integer",
             "minimum": 0,
@@ -8625,6 +8735,7 @@
           "description",
           "owner",
           "disabled",
+          "registeredByKey",
           "activeRuns",
           "openRequests",
           "lastSeenAt",
@@ -8658,6 +8769,31 @@
         },
         "required": [
           "handle",
+          "name",
+          "ownerSub"
+        ],
+        "additionalProperties": false
+      },
+      "AgentRegister": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "description": "At most 4096 UTF-8 bytes"
+          },
+          "ownerSub": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Person subject with a signed-in write in this workspace."
+          }
+        },
+        "required": [
           "name",
           "ownerSub"
         ],

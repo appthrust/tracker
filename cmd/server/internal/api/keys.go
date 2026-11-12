@@ -18,7 +18,8 @@ const (
 //
 // The Project claim is the tenant boundary. All keys remain Viewers and never
 // reach Platform role lookup or Directory. External subjects are resolved to
-// active registered agents inside the request transaction.
+// active registered agents inside the request transaction, except on routes
+// explicitly admitting keys before registration.
 func keyActor(principal accesskey.Principal, project string, mutation bool) (domain.Actor, error) {
 	if principal.Project != project {
 		return domain.Actor{}, httpx.Fail(401, "unauthenticated", "A valid bearer token is required")
