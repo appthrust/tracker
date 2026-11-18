@@ -156,13 +156,14 @@ type attachmentDownload struct {
 	Data       []byte
 }
 
-func (d attachmentDownload) write(w http.ResponseWriter) {
+func (d attachmentDownload) write(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", d.Attachment.MediaType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": d.Attachment.Filename}))
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Length", strconv.Itoa(len(d.Data)))
-	_, _ = io.Copy(w, bytes.NewReader(d.Data))
+	_, err := io.Copy(w, bytes.NewReader(d.Data))
+	return err
 }
 func (a *API) attachmentGet(s *request) (any, int, error) {
 	item, data, err := s.tx.Attachment(s.r.PathValue("id"), true)

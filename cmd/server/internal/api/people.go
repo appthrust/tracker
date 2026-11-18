@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/appthrust/appserver-go/appserver/requestlog"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 )
 
@@ -16,6 +17,7 @@ func (a *API) people(s *request) (any, int, error) {
 	}
 	list, err := a.directory.Search(s.r.Context(), s.bearer, q)
 	if err != nil {
+		requestlog.SetOutcome(s.r, "degraded", "directory_search_unavailable")
 		return peopleResponse{Items: []domain.Person{}, Source: "unavailable"}, 200, nil
 	}
 	return peopleResponse{Items: list, Source: "directory"}, 200, nil

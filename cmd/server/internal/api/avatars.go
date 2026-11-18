@@ -13,6 +13,7 @@ import (
 
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/appserver-go/appserver/link"
+	"github.com/appthrust/appserver-go/appserver/requestlog"
 )
 
 // Avatars use Directory's data and authority, not a Tracker transaction.
@@ -73,5 +74,7 @@ func (a *API) avatar(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	_, _ = w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		requestlog.SetOutcome(r, "incomplete", "avatar_write_failed")
+	}
 }

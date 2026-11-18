@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -87,4 +89,42 @@ func TestPendingSurfaceAndRelease(t *testing.T) {
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 		require.Equal(t, status, w.Code, path)
 	}
+}
+
+func TestRequestLogForUnavailableRelease(t *testing.T) {
+	for _, key := range []string{"TRACKER_RELEASE_VERSION", "TRACKER_SOURCE_REVISION", "TRACKER_ARTIFACT_DIGEST", "PLATFORM_OIDC_ISSUER", "PLATFORM_OIDC_ISSUER_CA_PEM"} {
+		t.Setenv(key, "")
+	}
+	mux, err := newHandler(t.TempDir(), "http://127.0.0.1:1", "pj-test", nil, nil)
+	require.NoError(t, err)
+
+	output, err := os.CreateTemp(t.TempDir(), "stderr")
+	require.NoError(t, err)
+	defer output.Close()
+	// Wrap captures stderr at construction; restore it before serving the request.
+	stderr := os.Stderr
+	os.Stderr = output
+	server := newServer(":0", mux)
+	os.Stderr = stderr
+
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/releasez?private=query-marker", nil))
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "UI release status unavailable\n", w.Body.String())
+
+	line, err := os.ReadFile(output.Name())
+	require.NoError(t, err)
+	require.Equal(t, 1, bytes.Count(line, []byte{'\n'}))
+	require.NotContains(t, string(line), "query-marker")
+	var entry struct {
+		Msg, Service, Path, Outcome, Reason string
+		Status                              int
+	}
+	require.NoError(t, json.Unmarshal(line, &entry))
+	require.Equal(t, "request", entry.Msg)
+	require.Equal(t, "tracker", entry.Service)
+	require.Equal(t, "/releasez", entry.Path)
+	require.Equal(t, w.Code, entry.Status)
+	require.Equal(t, "unavailable", entry.Outcome)
+	require.Equal(t, "release_identity_unavailable", entry.Reason)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/appthrust/appserver-go/appserver/httpx"
 	"github.com/appthrust/appserver-go/appserver/identity"
 	"github.com/appthrust/appserver-go/appserver/platformclient"
+	"github.com/appthrust/appserver-go/appserver/requestlog"
 	"github.com/appthrust/tracker/cmd/server/internal/directory"
 	"github.com/appthrust/tracker/cmd/server/internal/domain"
 	"github.com/appthrust/tracker/cmd/server/internal/store"
@@ -156,7 +157,9 @@ func (a *API) route(pattern string, mutation, roles, unregistered bool, fn endpo
 			return
 		}
 		if download, ok := body.(attachmentDownload); ok {
-			download.write(w)
+			if err := download.write(w); err != nil {
+				requestlog.SetOutcome(r, "incomplete", "attachment_write_failed")
+			}
 			return
 		}
 		if text, ok := body.(markdown); ok {
@@ -166,6 +169,9 @@ func (a *API) route(pattern string, mutation, roles, unregistered bool, fn endpo
 			return
 		}
 		if replay, ok := body.(store.Replay); ok {
+			if replay.Status >= http.StatusInternalServerError {
+				requestlog.SetOutcome(r, "error", "idempotent_response_failed")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(replay.Status)
 			_, _ = w.Write(replay.Body)
